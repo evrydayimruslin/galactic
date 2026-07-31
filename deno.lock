@@ -5,6 +5,7 @@
     "npm:@supabase/supabase-js@2.103.2": "2.103.2",
     "npm:esbuild-wasm@0.24.2": "0.24.2",
     "npm:typescript@5.9.3": "5.9.3",
+    "npm:yaml@*": "2.8.3",
     "npm:yaml@2.8.3": "2.8.3"
   },
   "npm": {

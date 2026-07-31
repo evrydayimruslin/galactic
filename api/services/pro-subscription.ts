@@ -1,8 +1,8 @@
 import { getEnv } from "../lib/env.ts";
 import { getSupabaseEnv } from "./user-supabase-configs.ts";
 
-export const PRO_SUBSCRIPTION_REQUIRED_CODE = "PRO_SUBSCRIPTION_REQUIRED";
-export const PRO_SUBSCRIPTION_UNAVAILABLE_CODE =
+const PRO_SUBSCRIPTION_REQUIRED_CODE = "PRO_SUBSCRIPTION_REQUIRED";
+const PRO_SUBSCRIPTION_UNAVAILABLE_CODE =
   "PRO_SUBSCRIPTION_CHECK_UNAVAILABLE";
 
 export class ProSubscriptionRequiredError extends Error {
@@ -11,7 +11,7 @@ export class ProSubscriptionRequiredError extends Error {
 
   constructor() {
     super(
-      "An active Galactic Pro subscription ($20/month) is required to use API keys, upload Agents, or run Agents.",
+      "An active Galactic membership ($20/month) is required to deploy or run Agents or use persistent API keys.",
     );
     this.name = "ProSubscriptionRequiredError";
   }

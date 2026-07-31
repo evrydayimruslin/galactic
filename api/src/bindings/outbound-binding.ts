@@ -12,10 +12,12 @@
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { guardedFetch } from "./outbound-policy.ts";
+import { assertBindingEffectAuthority } from "./function-authority.ts";
 
 interface OutboundBindingProps {
   appId: string;
   userId: string;
+  allowHttp?: boolean;
   // Default-deny destination allowlist (the app's manifest network
   // allowed_destinations). [] = no outbound reachable.
   allowedDestinations: string[];
@@ -24,6 +26,7 @@ interface OutboundBindingProps {
 export class OutboundBinding
   extends WorkerEntrypoint<unknown, OutboundBindingProps> {
   override fetch(request: Request): Promise<Response> {
+    assertBindingEffectAuthority(this.ctx.props.allowHttp, "network.http");
     return guardedFetch(request, fetch, {
       allowlist: this.ctx.props.allowedDestinations ?? [],
       // Only the host + reason are logged — never the full URL, which can carry

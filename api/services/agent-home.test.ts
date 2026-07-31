@@ -221,6 +221,55 @@ Deno.test("agent home: derives an initial ready Agent without conflating health"
   assertEquals(credential?.settingScope, "per_user");
 });
 
+Deno.test("agent home: a qualified callable deployment can activate without a routine", () => {
+  const home = buildAgentHomeResponse(input({
+    deploymentState: "setup_required",
+    routine: null,
+    manifest: {
+      name: "Callable Agent",
+      version: "1.0.0",
+      type: "mcp",
+      entry: { functions: "index.ts" },
+      functions: {
+        inspect: {
+          description: "Inspect on demand.",
+          annotations: { readOnlyHint: true },
+        },
+      },
+      permissions: [],
+    },
+    effectivePermissions: [],
+    functions: [{
+      name: "inspect",
+      description: "Inspect on demand.",
+      annotations: { readOnlyHint: true },
+      usesInference: false,
+    }],
+    dependencies: [],
+    callTargets: new Map(),
+    grants: [],
+    settings: [],
+    disclosure: { destinations: [], general_settings: [] },
+    budgetUsage: null,
+  }));
+
+  assertEquals(home.state.lifecycle, "needs_setup");
+  assertEquals(home.state.blockers, []);
+  assertEquals(home.setup.ready, true);
+  assertEquals(home.actions.canActivate, true);
+  assertEquals(
+    home.setup.requirements.find((item) => item.id === "routine:primary")
+      ?.blocking,
+    false,
+  );
+  assertEquals(
+    home.setup.requirements.find((item) =>
+      item.id === "reporting:galactic_inbox"
+    )?.blocking,
+    false,
+  );
+});
+
 Deno.test("agent home: an active Agent remains active when new setup blockers appear", () => {
   const base = input();
   const home = buildAgentHomeResponse(input({
@@ -483,6 +532,70 @@ Deno.test("agent home: chooses the newest tested staged release and surfaces int
       item.code === "executed_release_unverified"
     ),
   );
+});
+
+Deno.test("agent home: projects bounded V2 qualification evidence for the owner", () => {
+  const hash = "e".repeat(64);
+  const home = buildAgentHomeResponse(input({
+    release: {
+      versions: ["1.0.0", "1.1.0"],
+      currentVersion: "1.0.0",
+      versionMetadata: [{
+        version: "1.1.0",
+        size_bytes: 12,
+        created_at: "2026-07-14T19:00:00.000Z",
+        source_hash: hash,
+        test_attestation: {
+          schema_version: 2,
+          attestation_id: crypto.randomUUID(),
+          mode: "deno_execution",
+          source_hash: hash,
+          tested_at: "2026-07-14T18:59:00.000Z",
+          token_expires_at: "2026-07-14T19:15:00.000Z",
+          verified_at: "2026-07-14T19:00:00.000Z",
+          qualification: {
+            profile: "basic",
+            document_digest: "a".repeat(64),
+            release_digest: "b".repeat(64),
+            report_digest: "c".repeat(64),
+            compiler_revision: "galactic-compiler/v1alpha1.1",
+            runtime_revision: "dynamic-worker/test",
+            policy_revision: "basic-conformance/2",
+            cases: {
+              declared: 2,
+              required: 2,
+              passed: 2,
+              optional_failed: 0,
+            },
+            functions: { declared: 3, exercised: 1 },
+            effects: { declared: 4, exercised: 2, untested: 2 },
+          },
+        },
+      }],
+      promotedAt: null,
+      executedVersion: "1.0.0",
+      integrity: "verified",
+      candidateAuthorityChanges: [],
+      candidateManifestAvailable: true,
+      candidatePreflightReady: true,
+    },
+  }));
+
+  assertEquals(home.release.candidate?.qualification, {
+    profile: "basic",
+    status: "passed",
+    summary:
+      "Galactic basic test passed · all 2 required cases passed · 1 of 3 functions exercised",
+    releaseDigest: "b".repeat(64),
+    cases: {
+      declared: 2,
+      required: 2,
+      passed: 2,
+      optionalFailed: 0,
+    },
+    functions: { declared: 3, exercised: 1 },
+    effects: { declared: 4, exercised: 2, untested: 2 },
+  });
 });
 
 Deno.test("agent home: does not present an older tested release as a staged candidate", () => {

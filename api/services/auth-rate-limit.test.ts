@@ -3,8 +3,36 @@ import {
   applyAuthRateLimitHeaders,
   buildAuthRateLimitResponse,
   enforceAuthRouteRateLimit,
+  getAuthRateLimitClientIp,
   resolveAuthRateLimitKey,
 } from "./auth-rate-limit.ts";
+
+Deno.test("auth route rate limit: prefers Cloudflare client IP over caller-controlled forwarding headers", () => {
+  const request = new Request("https://example.com/auth/session", {
+    headers: {
+      "cf-connecting-ip": "192.0.2.50",
+      "x-forwarded-for": "203.0.113.10, 10.0.0.1",
+      "x-real-ip": "198.51.100.25",
+    },
+  });
+
+  assertEquals(getAuthRateLimitClientIp(request), "192.0.2.50");
+});
+
+Deno.test("auth route rate limit: falls back through forwarded client IP headers", () => {
+  const forwardedRequest = new Request("https://example.com/auth/session", {
+    headers: {
+      "x-forwarded-for": "203.0.113.10, 10.0.0.1",
+      "x-real-ip": "198.51.100.25",
+    },
+  });
+  const realIpRequest = new Request("https://example.com/auth/session", {
+    headers: { "x-real-ip": "198.51.100.25" },
+  });
+
+  assertEquals(getAuthRateLimitClientIp(forwardedRequest), "203.0.113.10");
+  assertEquals(getAuthRateLimitClientIp(realIpRequest), "198.51.100.25");
+});
 
 Deno.test("auth route rate limit: resolves desktop poll keys from session id", () => {
   const request = new Request("https://example.com/auth/desktop-poll?session_id=123e4567-e89b-12d3-a456-426614174000", {

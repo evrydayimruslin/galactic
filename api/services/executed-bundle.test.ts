@@ -14,7 +14,9 @@ import {
   handleExecutedBundleVerdict,
   isExecutedBundleViolation,
   loadLiveExecutedBundle,
+  loadReleaseExecutedBundle,
   putLiveExecutedBundle,
+  putReleaseExecutedBundle,
   verifyExecutedBundle,
 } from "./executed-bundle.ts";
 
@@ -36,7 +38,9 @@ function installKv(): { restore: () => void; store: Map<string, Entry> } {
       getWithMetadata: (k: string) => {
         const e = store.get(k);
         return Promise.resolve(
-          e ? { value: e.value, metadata: e.metadata ?? null } : { value: null, metadata: null },
+          e
+            ? { value: e.value, metadata: e.metadata ?? null }
+            : { value: null, metadata: null },
         );
       },
       // deno-lint-ignore no-explicit-any
@@ -51,20 +55,36 @@ function installKv(): { restore: () => void; store: Map<string, Entry> } {
     },
   };
   __resetVerdictCacheForTest();
-  return { restore: () => { g.__env = prev; }, store };
+  return {
+    restore: () => {
+      g.__env = prev;
+    },
+    store,
+  };
 }
 
 async function verifyLive(appId: string, expectedVersion?: string) {
   const { code, attestation } = await loadLiveExecutedBundle(appId);
-  return verifyExecutedBundle({ appId, esmCode: code ?? "", attestation, expectedVersion });
+  return verifyExecutedBundle({
+    appId,
+    esmCode: code ?? "",
+    attestation,
+    expectedVersion,
+  });
 }
 
 const KEY = (appId: string) => `esm:${appId}:latest`;
+const RELEASE_KEY = (appId: string, digest: string) =>
+  `esm:${appId}:release:${digest}`;
 
 Deno.test("executed bundle: put then load+verify the same bytes → ok", async () => {
   const kv = installKv();
   try {
-    await putLiveExecutedBundle({ appId: "app_1", version: "1.0.0", esmCode: "export const x=1;" });
+    await putLiveExecutedBundle({
+      appId: "app_1",
+      version: "1.0.0",
+      esmCode: "export const x=1;",
+    });
     assertEquals((await verifyLive("app_1")).status, "ok");
   } finally {
     kv.restore();
@@ -74,12 +94,88 @@ Deno.test("executed bundle: put then load+verify the same bytes → ok", async (
 Deno.test("executed bundle: bundle + attestation are stored atomically (KV metadata)", async () => {
   const kv = installKv();
   try {
-    await putLiveExecutedBundle({ appId: "app_1", version: "1.0.0", esmCode: "GOOD" });
+    await putLiveExecutedBundle({
+      appId: "app_1",
+      version: "1.0.0",
+      esmCode: "GOOD",
+    });
     const entry = kv.store.get(KEY("app_1"))!;
     assertEquals(entry.value, "GOOD");
-    assert(entry.metadata, "attestation rides in KV metadata, not a separate key");
+    assert(
+      entry.metadata,
+      "attestation rides in KV metadata, not a separate key",
+    );
     // No separate sidecar key exists.
     assert(!kv.store.has("esm:app_1:latest:trust"));
+  } finally {
+    kv.restore();
+  }
+});
+
+Deno.test("executed bundle: canonical release is signed and bound to its digest", async () => {
+  const kv = installKv();
+  const releaseDigest = "a".repeat(64);
+  try {
+    const key = await putReleaseExecutedBundle({
+      appId: "app_release",
+      version: "1.2.3",
+      releaseDigest,
+      esmCode: "CANONICAL",
+    });
+    assertEquals(key, RELEASE_KEY("app_release", releaseDigest));
+    const loaded = await loadReleaseExecutedBundle(
+      "app_release",
+      releaseDigest,
+    );
+    assertEquals(loaded.code, "CANONICAL");
+    assertEquals(
+      (await verifyExecutedBundle({
+        appId: "app_release",
+        esmCode: loaded.code!,
+        attestation: loaded.attestation,
+        expectedVersion: "1.2.3",
+        expectedReleaseDigest: releaseDigest,
+      })).status,
+      "ok",
+    );
+  } finally {
+    kv.restore();
+  }
+});
+
+Deno.test("executed bundle: canonical release rejects missing or wrong release identity", async () => {
+  const kv = installKv();
+  const releaseDigest = "b".repeat(64);
+  try {
+    await putLiveExecutedBundle({
+      appId: "app_release",
+      version: "1.2.3",
+      esmCode: "LEGACY-SIGNED",
+    });
+    const legacy = kv.store.get(KEY("app_release"))!;
+    kv.store.set(RELEASE_KEY("app_release", releaseDigest), legacy);
+    const loaded = await loadReleaseExecutedBundle(
+      "app_release",
+      releaseDigest,
+    );
+    const verdict = await verifyExecutedBundle({
+      appId: "app_release",
+      esmCode: loaded.code!,
+      attestation: loaded.attestation,
+      expectedVersion: "1.2.3",
+      expectedReleaseDigest: releaseDigest,
+    });
+    assertEquals(verdict.status, "release_mismatch");
+    assert(isExecutedBundleViolation(verdict.status));
+    assertEquals(
+      handleExecutedBundleVerdict(
+        "app_release",
+        verdict,
+        "off",
+        true,
+      ),
+      true,
+    );
   } finally {
     kv.restore();
   }
@@ -104,7 +200,11 @@ Deno.test("executed bundle: ephemeral pointers can be deleted after gx.test", as
 Deno.test("executed bundle: a cached good verdict cannot mask swapped bytes", async () => {
   const kv = installKv();
   try {
-    await putLiveExecutedBundle({ appId: "app_1", version: "1.0.0", esmCode: "GOOD" });
+    await putLiveExecutedBundle({
+      appId: "app_1",
+      version: "1.0.0",
+      esmCode: "GOOD",
+    });
     assertEquals((await verifyLive("app_1")).status, "ok");
     const att = kv.store.get(KEY("app_1"))!.metadata;
     // Raw KV swap of the bytes WITHOUT a fresh attestation — the RUG-2
@@ -122,8 +222,14 @@ Deno.test("executed bundle: a cached good verdict cannot mask swapped bytes", as
 Deno.test("executed bundle: a tampered attestation → bad_signature", async () => {
   const kv = installKv();
   try {
-    await putLiveExecutedBundle({ appId: "app_1", version: "1.0.0", esmCode: "GOOD" });
-    const att = { ...(kv.store.get(KEY("app_1"))!.metadata as BundleAttestation) };
+    await putLiveExecutedBundle({
+      appId: "app_1",
+      version: "1.0.0",
+      esmCode: "GOOD",
+    });
+    const att = {
+      ...(kv.store.get(KEY("app_1"))!.metadata as BundleAttestation),
+    };
     att.bundle_hash = "0".repeat(64); // re-point attested hash, keep old sig
     kv.store.set(KEY("app_1"), { value: "GOOD", metadata: att });
     const r = await verifyLive("app_1");
@@ -149,8 +255,16 @@ Deno.test("executed bundle: no attestation (legacy) → no_attestation (grandfat
 Deno.test("executed bundle: a legitimate repoint re-attests the new bytes", async () => {
   const kv = installKv();
   try {
-    await putLiveExecutedBundle({ appId: "app_1", version: "1.0.0", esmCode: "V1" });
-    await putLiveExecutedBundle({ appId: "app_1", version: "2.0.0", esmCode: "V2" });
+    await putLiveExecutedBundle({
+      appId: "app_1",
+      version: "1.0.0",
+      esmCode: "V1",
+    });
+    await putLiveExecutedBundle({
+      appId: "app_1",
+      version: "2.0.0",
+      esmCode: "V2",
+    });
     assertEquals((await verifyLive("app_1")).status, "ok");
   } finally {
     kv.restore();
@@ -164,10 +278,17 @@ Deno.test("executed bundle: version skew is DETECTED but warn-only (not a hard b
     // version is 2.0.0 — a rollback/replay OR an in-flight deploy skew. It is
     // detected (status version_mismatch) but must NOT block, because the KV/DB
     // updates are non-atomic and would spuriously fail legitimate deploys.
-    await putLiveExecutedBundle({ appId: "app_1", version: "1.0.0", esmCode: "OLD" });
+    await putLiveExecutedBundle({
+      appId: "app_1",
+      version: "1.0.0",
+      esmCode: "OLD",
+    });
     const r = await verifyLive("app_1", "2.0.0");
     assertEquals(r.status, "version_mismatch");
-    assert(!isExecutedBundleViolation(r.status), "version_mismatch must NOT hard-block");
+    assert(
+      !isExecutedBundleViolation(r.status),
+      "version_mismatch must NOT hard-block",
+    );
     // Same bytes verify OK when current_version matches.
     __resetVerdictCacheForTest();
     assertEquals((await verifyLive("app_1", "1.0.0")).status, "ok");
@@ -179,7 +300,11 @@ Deno.test("executed bundle: version skew is DETECTED but warn-only (not a hard b
 Deno.test("executed bundle: attestation signed with a different secret → bad_signature", async () => {
   const kv = installKv();
   try {
-    await putLiveExecutedBundle({ appId: "app_1", version: "1.0.0", esmCode: "GOOD" });
+    await putLiveExecutedBundle({
+      appId: "app_1",
+      version: "1.0.0",
+      esmCode: "GOOD",
+    });
     // deno-lint-ignore no-explicit-any
     (globalThis as any).__env.TRUST_SIGNING_SECRET = "a-different-secret";
     __resetVerdictCacheForTest();
@@ -192,7 +317,11 @@ Deno.test("executed bundle: attestation signed with a different secret → bad_s
 Deno.test("executed bundle: cross-app attestation replay → bad_signature (app_id bound)", async () => {
   const kv = installKv();
   try {
-    await putLiveExecutedBundle({ appId: "app_a", version: "1.0.0", esmCode: "SAME" });
+    await putLiveExecutedBundle({
+      appId: "app_a",
+      version: "1.0.0",
+      esmCode: "SAME",
+    });
     const attA = kv.store.get(KEY("app_a"))!.metadata;
     // Plant app_a's bundle+attestation under app_b's key.
     kv.store.set(KEY("app_b"), { value: "SAME", metadata: attA });

@@ -57,6 +57,8 @@ import { withAuthRouteRateLimit } from "../services/auth-rate-limit.ts";
 import {
   RequestValidationError,
   validateEmbedBridgeExchangeRequest,
+  validateMagicLinkAuthRequest,
+  validateMagicLinkVerifyRequest,
   validatePageShareExchangeRequest,
   validatePasswordAuthRequest,
   validateRefreshRequest,
@@ -183,7 +185,7 @@ async function exchangeRefreshToken(refreshToken: string): Promise<{
   return await tokenResponse.json();
 }
 
-interface SupabasePasswordAuthResponse {
+interface SupabaseAuthResponse {
   access_token?: string;
   expires_in?: number;
   refresh_token?: string;
@@ -245,9 +247,9 @@ async function readSupabaseAuthPayload(
   }
 }
 
-async function buildLaunchPasswordSessionResponse(
+async function buildLaunchSessionResponse(
   request: Request,
-  tokens: SupabasePasswordAuthResponse,
+  tokens: SupabaseAuthResponse,
 ): Promise<Response> {
   if (!tokens.access_token) {
     return error("Supabase did not return a session", 502);
@@ -334,6 +336,31 @@ function allowedLaunchWebOrigins(): Set<string> {
     }
   }
   return origins;
+}
+
+function rejectDisallowedLaunchSessionOrigin(
+  request: Request,
+  action: "refresh" | "sign out",
+): Response | null {
+  // Browsers attach Origin to cross-origin credentialed POSTs. Non-browser
+  // clients may omit it, while browser callers must match the launch-web
+  // allowlist before a SameSite=None refresh cookie can be used or cleared.
+  const requestOrigin = request.headers.get("Origin");
+  if (!requestOrigin) return null;
+
+  let normalizedOrigin: string | null = null;
+  try {
+    normalizedOrigin = new URL(requestOrigin).origin;
+  } catch {
+    normalizedOrigin = null;
+  }
+  if (
+    normalizedOrigin &&
+    allowedLaunchWebOrigins().has(normalizedOrigin)
+  ) {
+    return null;
+  }
+  return error(`Origin is not allowed to ${action} launch sessions`, 403);
 }
 
 function isSafeLaunchPath(value: string): boolean {
@@ -462,6 +489,117 @@ export async function handleAuth(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
 
+  // Start passwordless email authentication. Supabase owns account creation,
+  // email delivery, and token expiry. The response stays generic so callers
+  // cannot use this endpoint to discover whether an address already exists.
+  if (path === "/auth/launch/magic-link" && request.method === "POST") {
+    return withAuthRouteRateLimit(request, "auth:magic_link", async () => {
+      try {
+        const payload = await validateMagicLinkAuthRequest(request);
+        const confirmationUrl = buildLaunchEmailConfirmationUrl(
+          request,
+          payload.nextPath,
+        );
+        if (!confirmationUrl) {
+          return error(
+            "Email sign-in is not configured for this site",
+            503,
+          );
+        }
+
+        const authUrl = new URL(`${getEnv("SUPABASE_URL")}/auth/v1/otp`);
+        authUrl.searchParams.set("redirect_to", confirmationUrl);
+        const authResponse = await fetch(authUrl, {
+          method: "POST",
+          headers: getSupabaseAuthHeaders(),
+          body: JSON.stringify({
+            email: payload.email,
+            create_user: true,
+          }),
+        });
+
+        if (!authResponse.ok) {
+          const authPayload = await readSupabaseAuthPayload(authResponse);
+          if (authResponse.status === 429) {
+            return error(
+              "Please wait before requesting another sign-in link.",
+              429,
+            );
+          }
+          console.error(
+            "[auth] Supabase magic-link request failed:",
+            authResponse.status,
+            authPayload,
+          );
+          return error("Unable to send a sign-in link. Please try again.", 502);
+        }
+
+        return json({
+          audience: "launch_web",
+          email: payload.email,
+          link_sent: true,
+        });
+      } catch (err) {
+        if (err instanceof RequestValidationError) {
+          return error(err.message, err.status);
+        }
+        console.error("[auth] Magic-link request failed:", err);
+        return error("Email sign-in is temporarily unavailable", 502);
+      }
+    });
+  }
+
+  // Verify a one-time email token only after an explicit user action on the
+  // launch confirmation page. Keeping verification behind POST prevents email
+  // security scanners from consuming the link during their automatic GET.
+  if (path === "/auth/launch/verify" && request.method === "POST") {
+    return withAuthRouteRateLimit(
+      request,
+      "auth:magic_link_verify",
+      async () => {
+        try {
+          const payload = await validateMagicLinkVerifyRequest(request);
+          const authResponse = await fetch(
+            `${getEnv("SUPABASE_URL")}/auth/v1/verify`,
+            {
+              method: "POST",
+              headers: getSupabaseAuthHeaders(),
+              body: JSON.stringify({
+                token_hash: payload.tokenHash,
+                type: "email",
+              }),
+            },
+          );
+          const authPayload = await readSupabaseAuthPayload(authResponse);
+
+          if (!authResponse.ok) {
+            if (authResponse.status === 429) {
+              return error(
+                "Too many verification attempts. Request a new sign-in link.",
+                429,
+              );
+            }
+            return error(
+              "This sign-in link is invalid or expired. Request a new one.",
+              401,
+            );
+          }
+
+          return await buildLaunchSessionResponse(
+            request,
+            (authPayload || {}) as SupabaseAuthResponse,
+          );
+        } catch (err) {
+          if (err instanceof RequestValidationError) {
+            return error(err.message, err.status);
+          }
+          console.error("[auth] Magic-link verification failed:", err);
+          return error("Failed to complete email sign-in", 500);
+        }
+      },
+    );
+  }
+
   // Email/password auth for the launch web app. Supabase remains the source of
   // truth for password policy, account confirmation, password hashing, and
   // credential verification; Galactic only validates the transport and turns
@@ -511,9 +649,9 @@ export async function handleAuth(request: Request): Promise<Response> {
           );
         }
 
-        const tokens = (authPayload || {}) as SupabasePasswordAuthResponse;
+        const tokens = (authPayload || {}) as SupabaseAuthResponse;
         if (tokens.access_token) {
-          return await buildLaunchPasswordSessionResponse(request, tokens);
+          return await buildLaunchSessionResponse(request, tokens);
         }
 
         if (payload.mode === "sign_up") {
@@ -567,7 +705,7 @@ export async function handleAuth(request: Request): Promise<Response> {
             return error("Invalid or expired confirmation session", 401);
           }
 
-          return await buildLaunchPasswordSessionResponse(request, {
+          return await buildLaunchSessionResponse(request, {
             access_token: accessToken,
             expires_in: expiresIn,
             refresh_token: refreshToken || undefined,
@@ -951,23 +1089,11 @@ export async function handleAuth(request: Request): Promise<Response> {
   // without redoing the full OAuth redirect.
   if (path === "/auth/launch/refresh" && request.method === "POST") {
     return withAuthRouteRateLimit(request, "auth:launch_refresh", async () => {
-      // Defense-in-depth CSRF check: browsers always send Origin on
-      // cross-origin POSTs, and only the launch web origins may rotate.
-      const requestOrigin = request.headers.get("Origin");
-      if (requestOrigin) {
-        let normalizedOrigin: string | null = null;
-        try {
-          normalizedOrigin = new URL(requestOrigin).origin;
-        } catch {
-          normalizedOrigin = null;
-        }
-        if (
-          !normalizedOrigin ||
-          !allowedLaunchWebOrigins().has(normalizedOrigin)
-        ) {
-          return error("Origin is not allowed to refresh launch sessions", 403);
-        }
-      }
+      const originError = rejectDisallowedLaunchSessionOrigin(
+        request,
+        "refresh",
+      );
+      if (originError) return originError;
 
       const refreshToken = getLaunchRefreshTokenFromRequest(request);
       if (!refreshToken) {
@@ -1206,6 +1332,12 @@ export async function handleAuth(request: Request): Promise<Response> {
 
     return withAuthRouteRateLimit(request, "auth:signout", async () => {
       try {
+        const originError = rejectDisallowedLaunchSessionOrigin(
+          request,
+          "sign out",
+        );
+        if (originError) return originError;
+
         await validateSignoutRequest(request);
         const accessToken = extractBearerToken(request) ||
           getAuthAccessTokenFromRequest(request);

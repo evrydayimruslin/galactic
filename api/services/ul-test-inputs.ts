@@ -1,7 +1,11 @@
 import {
-  resolveD1TestFixtureConfig,
   type D1TestFixtureConfig,
+  resolveD1TestFixtureConfig,
 } from "./d1-test-fixtures.ts";
+import {
+  type HttpTestFixtureConfig,
+  resolveHttpTestFixtureConfig,
+} from "./http-test-fixtures.ts";
 
 export interface UlTestFile {
   path: string;
@@ -15,6 +19,7 @@ export interface UlTestInvocationResolution {
   testArgs: Record<string, unknown>;
   fixtureEnvVars: Record<string, string>;
   d1Fixtures: D1TestFixtureConfig | null;
+  httpFixtures: HttpTestFixtureConfig | null;
 }
 
 const ENTRY_FILE_NAMES = ["index.ts", "index.tsx", "index.js", "index.jsx"];
@@ -54,10 +59,12 @@ interface ParsedUlTestFixtureEntry {
   args: Record<string, unknown>;
   envVars: Record<string, string>;
   d1Fixtures: D1TestFixtureConfig | null;
+  httpFixtures: HttpTestFixtureConfig | null;
 }
 
 function isExtendedFixtureEntry(value: Record<string, unknown>): boolean {
-  return "args" in value || "env_vars" in value || "d1_fixtures" in value;
+  return "args" in value || "env_vars" in value || "d1_fixtures" in value ||
+    "http_fixtures" in value;
 }
 
 function parseFixture(
@@ -80,12 +87,16 @@ function parseFixture(
   }
 
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("test_fixture.json must be an object keyed by function name");
+    throw new Error(
+      "test_fixture.json must be an object keyed by function name",
+    );
   }
 
   const fixture: Record<string, ParsedUlTestFixtureEntry> = {};
   for (const [functionName, entryValue] of Object.entries(parsed)) {
-    if (!entryValue || typeof entryValue !== "object" || Array.isArray(entryValue)) {
+    if (
+      !entryValue || typeof entryValue !== "object" || Array.isArray(entryValue)
+    ) {
       throw new Error(
         `test_fixture.json entry for "${functionName}" must be an object`,
       );
@@ -104,6 +115,7 @@ function parseFixture(
         args: args as Record<string, unknown>,
         envVars: resolveUlTestEnvVars(entry.env_vars),
         d1Fixtures: resolveD1TestFixtureConfig(entry.d1_fixtures),
+        httpFixtures: resolveHttpTestFixtureConfig(entry.http_fixtures),
       };
       continue;
     }
@@ -112,6 +124,7 @@ function parseFixture(
       args: entry,
       envVars: {},
       d1Fixtures: null,
+      httpFixtures: null,
     };
   }
 
@@ -166,6 +179,7 @@ export function resolveUlTestInvocation(
     testArgs,
     fixtureEnvVars: fixture[functionName]?.envVars || {},
     d1Fixtures: fixture[functionName]?.d1Fixtures || null,
+    httpFixtures: fixture[functionName]?.httpFixtures || null,
   };
 }
 
@@ -192,4 +206,10 @@ export function resolveUlTestD1Fixtures(
   d1Fixtures: unknown,
 ): D1TestFixtureConfig | null {
   return resolveD1TestFixtureConfig(d1Fixtures);
+}
+
+export function resolveUlTestHttpFixtures(
+  httpFixtures: unknown,
+): HttpTestFixtureConfig | null {
+  return resolveHttpTestFixtureConfig(httpFixtures);
 }

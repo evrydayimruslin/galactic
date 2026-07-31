@@ -49,6 +49,10 @@ import type {
   LaunchByokPrimaryRequest,
   LaunchByokSummaryResponse,
   LaunchByokUpsertRequest,
+  LaunchCandidateDeployRequest,
+  LaunchCandidateDeployResponse,
+  LaunchCandidateDetailResponse,
+  LaunchCandidateListResponse,
   LaunchDiscoveryRequest,
   LaunchDiscoveryResponse,
   LaunchFunctionRunRequest,
@@ -78,6 +82,9 @@ import type {
   LaunchAgentSearchRequest,
   LaunchAgentSearchResponse,
   LaunchSubscriptionResponse,
+  LaunchSubscriptionCheckoutAttemptResponse,
+  LaunchSubscriptionCheckoutRequest,
+  LaunchSubscriptionCheckoutResponse,
   LaunchSubscriptionRedirectResponse,
   LaunchTrustCard,
   LaunchWalletDetailKind,
@@ -196,7 +203,7 @@ const configuredLaunchApiBaseUrl =
 export function launchApiOrigin(): string {
   return configuredLaunchApiBaseUrl ||
     (typeof window === "undefined"
-      ? "https://api.galactic.dev"
+      ? "https://api.connectgalactic.com"
       : window.location.origin);
 }
 
@@ -843,16 +850,66 @@ export class LaunchApiClient {
 
   createSubscriptionCheckout(
     returnUrl = `${window.location.origin}/account`,
-  ): Promise<LaunchSubscriptionRedirectResponse> {
+    idempotencyKey: string = crypto.randomUUID(),
+  ): Promise<LaunchSubscriptionCheckoutResponse> {
+    const request: LaunchSubscriptionCheckoutRequest = {
+      idempotencyKey,
+      plan: "pro",
+      returnUrl,
+    };
     return this.fetchJson("/api/launch/subscription/checkout", {
       method: "POST",
-      body: JSON.stringify({ plan: "pro", returnUrl }),
+      body: JSON.stringify(request),
     });
+  }
+
+  subscriptionCheckoutAttempt(
+    attemptId: string,
+  ): Promise<LaunchSubscriptionCheckoutAttemptResponse> {
+    return this.fetchJson(
+      `/api/launch/subscription/checkout-attempts/${
+        encodeURIComponent(attemptId)
+      }`,
+    );
+  }
+
+  cancelSubscriptionCheckoutAttempt(
+    attemptId: string,
+  ): Promise<LaunchSubscriptionCheckoutAttemptResponse> {
+    return this.fetchJson(
+      `/api/launch/subscription/checkout-attempts/${
+        encodeURIComponent(attemptId)
+      }/cancel`,
+      { method: "POST" },
+    );
+  }
+
+  candidates(): Promise<LaunchCandidateListResponse> {
+    return this.fetchJson("/api/launch/candidates");
+  }
+
+  candidate(candidateId: string): Promise<LaunchCandidateDetailResponse> {
+    return this.fetchJson(
+      `/api/launch/candidates/${encodeURIComponent(candidateId)}`,
+    );
+  }
+
+  deployCandidate(
+    candidateId: string,
+    request: LaunchCandidateDeployRequest,
+  ): Promise<LaunchCandidateDeployResponse> {
+    return this.fetchJson(
+      `/api/launch/candidates/${encodeURIComponent(candidateId)}/deploy`,
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+      },
+    );
   }
 
   createSubscriptionPortal(
     returnUrl = `${window.location.origin}/account`,
-  ): Promise<LaunchSubscriptionRedirectResponse> {
+  ): Promise<Pick<LaunchSubscriptionRedirectResponse, "url" | "generatedAt">> {
     return this.fetchJson("/api/launch/subscription/portal", {
       method: "POST",
       body: JSON.stringify({ returnUrl }),

@@ -3,6 +3,7 @@ import type {
   HealthWindows,
   VersionMetadata,
   VersionTrustMetadata,
+  VersionTrustSignature,
 } from "../../shared/types/index.ts";
 import type { AppManifest } from "../../shared/contracts/manifest.ts";
 import {
@@ -31,6 +32,7 @@ import {
   type BytePreservingSourceContent,
   sourceFileBytes,
 } from "./source-file-content.ts";
+import { compareCanonicalStrings } from "./canonical-order.ts";
 
 export interface TrustArtifactFile {
   name: string;
@@ -124,24 +126,125 @@ export interface TrustCard {
 }
 
 const encoder = new TextEncoder();
-
-function canonicalize(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(canonicalize);
-  }
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.keys(value as Record<string, unknown>).sort().map((key) => [
-        key,
-        canonicalize((value as Record<string, unknown>)[key]),
-      ]),
-    );
-  }
-  return value;
-}
+const VERSION_TRUST_V2_DOMAIN = "galactic.version-trust/v2";
+const SHA256_HEX = /^[a-f0-9]{64}$/;
 
 export function canonicalJson(value: unknown): string {
-  return JSON.stringify(canonicalize(value));
+  const ancestors = new Set<object>();
+
+  const assertWellFormedString = (candidate: string): void => {
+    for (let index = 0; index < candidate.length; index++) {
+      const codeUnit = candidate.charCodeAt(index);
+      if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+        const next = candidate.charCodeAt(index + 1);
+        if (!(next >= 0xdc00 && next <= 0xdfff)) {
+          throw new TypeError(
+            "Canonical JSON strings must not contain lone Unicode surrogates",
+          );
+        }
+        index++;
+      } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+        throw new TypeError(
+          "Canonical JSON strings must not contain lone Unicode surrogates",
+        );
+      }
+    }
+  };
+
+  const serialize = (candidate: unknown): string | undefined => {
+    if (
+      candidate &&
+      typeof candidate === "object" &&
+      typeof (candidate as { toJSON?: unknown }).toJSON === "function"
+    ) {
+      candidate = (candidate as { toJSON(): unknown }).toJSON();
+    }
+
+    if (candidate === null || typeof candidate === "boolean") {
+      return JSON.stringify(candidate);
+    }
+    if (typeof candidate === "string") {
+      assertWellFormedString(candidate);
+      return JSON.stringify(candidate);
+    }
+    if (typeof candidate === "number") {
+      if (!Number.isFinite(candidate)) {
+        throw new TypeError(
+          "Canonical JSON numbers must be finite",
+        );
+      }
+      return JSON.stringify(candidate);
+    }
+    if (
+      candidate === undefined ||
+      typeof candidate === "function" ||
+      typeof candidate === "symbol"
+    ) {
+      return undefined;
+    }
+    if (typeof candidate === "bigint") {
+      throw new TypeError("BigInt cannot be serialized as canonical JSON");
+    }
+    if (!candidate || typeof candidate !== "object") {
+      return undefined;
+    }
+    if (ancestors.has(candidate)) {
+      throw new TypeError("Converting circular structure to canonical JSON");
+    }
+
+    ancestors.add(candidate);
+    try {
+      if (Array.isArray(candidate)) {
+        return `[${
+          candidate.map((entry) => serialize(entry) ?? "null").join(
+            ",",
+          )
+        }]`;
+      }
+
+      const record = candidate as Record<string, unknown>;
+      const members = Object.keys(record)
+        .sort(compareCanonicalStrings)
+        .flatMap((key) => {
+          assertWellFormedString(key);
+          const serialized = serialize(record[key]);
+          return serialized === undefined
+            ? []
+            : [`${JSON.stringify(key)}:${serialized}`];
+        });
+      return `{${members.join(",")}}`;
+    } finally {
+      ancestors.delete(candidate);
+    }
+  };
+
+  const serialized = serialize(value);
+  if (serialized === undefined) {
+    throw new TypeError("Value cannot be serialized as canonical JSON");
+  }
+  return serialized;
+}
+
+// Pre-v2 VersionTrust records used JSON.stringify over recursively reconstructed
+// objects. JavaScript reorders integer-index keys during reconstruction, so
+// that historical encoding is not RFC 8785. Keep it only as a verification
+// fallback; every newly signed digest uses canonicalJson above.
+function legacyVersionTrustJson(value: unknown): string {
+  const canonicalizeLegacy = (candidate: unknown): unknown => {
+    if (Array.isArray(candidate)) {
+      return candidate.map(canonicalizeLegacy);
+    }
+    if (candidate && typeof candidate === "object") {
+      return Object.fromEntries(
+        Object.keys(candidate as Record<string, unknown>).sort().map((key) => [
+          key,
+          canonicalizeLegacy((candidate as Record<string, unknown>)[key]),
+        ]),
+      );
+    }
+    return candidate;
+  };
+  return JSON.stringify(canonicalizeLegacy(value));
 }
 
 function bytesFromContent(content: Uint8Array | string): Uint8Array {
@@ -214,6 +317,70 @@ function timingSafeEqualHex(a: string, b: string): boolean {
   return diff === 0;
 }
 
+type VersionTrustV2ProtectedHeader = Required<
+  Pick<
+    VersionTrustSignature,
+    "envelope_version" | "algorithm" | "signer" | "signed_at" | "key_hint"
+  >
+>;
+
+function isCanonicalIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) &&
+    new Date(timestamp).toISOString() === value;
+}
+
+function versionTrustV2ProtectedHeader(
+  signature: VersionTrustSignature,
+): VersionTrustV2ProtectedHeader | null {
+  const keys = Object.keys(signature).sort();
+  const expectedKeys = [
+    "algorithm",
+    "envelope_version",
+    "key_hint",
+    "signature",
+    "signed_at",
+    "signer",
+  ];
+  if (
+    keys.length !== expectedKeys.length ||
+    !expectedKeys.every((key, index) => keys[index] === key) ||
+    signature.envelope_version !== 2 ||
+    signature.algorithm !== "HMAC-SHA256" ||
+    typeof signature.signer !== "string" ||
+    signature.signer.length === 0 ||
+    signature.signer.length > 128 ||
+    signature.signer !== signature.signer.trim() ||
+    !isCanonicalIsoTimestamp(signature.signed_at) ||
+    typeof signature.key_hint !== "string" ||
+    signature.key_hint.length === 0 ||
+    signature.key_hint.length > 128 ||
+    signature.key_hint !== signature.key_hint.trim() ||
+    !SHA256_HEX.test(signature.signature)
+  ) {
+    return null;
+  }
+  return {
+    envelope_version: 2,
+    algorithm: signature.algorithm,
+    signer: signature.signer,
+    signed_at: signature.signed_at,
+    key_hint: signature.key_hint,
+  };
+}
+
+function versionTrustV2SigningPayload(
+  unsigned: Omit<VersionTrustMetadata, "signature">,
+  protectedHeader: VersionTrustV2ProtectedHeader,
+): string {
+  return canonicalJson({
+    domain: VERSION_TRUST_V2_DOMAIN,
+    protected: protectedHeader,
+    payload: unsigned,
+  });
+}
+
 // Recompute the HMAC over the stored metadata (minus its signature) and confirm
 // it matches the embedded signature — i.e. the artifact_hashes / description_hash
 // / manifest_hash the platform published for this version were signed by THIS
@@ -227,8 +394,32 @@ export async function verifyVersionTrustSignature(
   if (metadata.signature.algorithm !== "HMAC-SHA256") return false;
   const { signature, ...unsigned } = metadata;
   try {
-    const expected = await hmacSha256Hex(canonicalJson(unsigned));
-    return timingSafeEqualHex(expected, signature.signature);
+    if (signature.envelope_version === 2) {
+      const protectedHeader = versionTrustV2ProtectedHeader(signature);
+      if (!protectedHeader) return false;
+      const expected = await hmacSha256Hex(
+        versionTrustV2SigningPayload(unsigned, protectedHeader),
+      );
+      return timingSafeEqualHex(expected, signature.signature);
+    } else {
+      // Historical envelopes signed only the VersionTrust payload. Preserve
+      // verification compatibility, but callers must not treat their mutable
+      // signer/time/key header as authenticated.
+      if (Object.prototype.hasOwnProperty.call(signature, "envelope_version")) {
+        return false;
+      }
+      if (!SHA256_HEX.test(signature.signature)) return false;
+      for (
+        const signedPayload of [
+          canonicalJson(unsigned),
+          legacyVersionTrustJson(unsigned),
+        ]
+      ) {
+        const expected = await hmacSha256Hex(signedPayload);
+        if (timingSafeEqualHex(expected, signature.signature)) return true;
+      }
+      return false;
+    }
   } catch {
     // Fail-closed secret resolution (non-dev without TRUST_SIGNING_SECRET) =>
     // cannot verify => not valid.
@@ -456,6 +647,9 @@ export async function buildVersionTrustMetadata(input: {
   runtime: string;
   manifest: AppManifest | string | null | undefined;
   files: TrustArtifactFile[];
+  /** Exact retained runtime executable (for example the bundled Deno ESM). */
+  executable?: Uint8Array | string;
+  testAttestation?: VersionMetadata["test_attestation"];
   storageKey?: string;
 }): Promise<VersionTrustMetadata> {
   const manifest = parseAppManifest(input.manifest);
@@ -472,6 +666,16 @@ export async function buildVersionTrustMetadata(input: {
     artifactHashes[file.name] = await sha256Hex(file.content);
   }
   const artifactHash = await sha256Hex(canonicalJson(artifactHashes));
+  const executableHash = input.executable !== undefined
+    ? await sha256Hex(input.executable)
+    : undefined;
+  // The durable digest marks qualification V2 specifically. A legacy V1 proof
+  // may remain adjacent to an otherwise valid signed release record, but the V1
+  // proof itself is NOT covered by that signature and cannot claim or authorize
+  // the stronger release-bound qualification protocol.
+  const testAttestationDigest = input.testAttestation?.schema_version === 2
+    ? await sha256Hex(canonicalJson(input.testAttestation))
+    : undefined;
   const secrets = getSecretKeys(manifest);
 
   const unsigned = {
@@ -483,21 +687,31 @@ export async function buildVersionTrustMetadata(input: {
     description_hash: descriptionHash,
     artifact_hash: artifactHash,
     artifact_hashes: artifactHashes,
+    ...(executableHash ? { executable_hash: executableHash } : {}),
+    ...(testAttestationDigest
+      ? { test_attestation_digest: testAttestationDigest }
+      : {}),
     storage_key: input.storageKey,
     permissions: getManifestPermissions(manifest).sort(),
     entrypoints: getManifestEntrypoints(manifest).sort(),
     required_secrets: secrets.requiredSecrets,
     per_user_secrets: secrets.perUserSecrets,
   };
+  const protectedHeader: VersionTrustV2ProtectedHeader = {
+    envelope_version: 2,
+    algorithm: "HMAC-SHA256",
+    signer: "light-platform",
+    signed_at: new Date().toISOString(),
+    key_hint: "platform",
+  };
 
   return {
     ...unsigned,
     signature: {
-      algorithm: "HMAC-SHA256",
-      signer: "light-platform",
-      signed_at: new Date().toISOString(),
-      signature: await hmacSha256Hex(canonicalJson(unsigned)),
-      key_hint: "platform",
+      ...protectedHeader,
+      signature: await hmacSha256Hex(
+        versionTrustV2SigningPayload(unsigned, protectedHeader),
+      ),
     },
   };
 }
@@ -534,9 +748,33 @@ export function buildVersionMetadataEntry(
 export async function computeUploadSourceHash(
   files: Array<{ path: string } & BytePreservingSourceContent>,
 ): Promise<string> {
+  return await computeSourceHashWithOrder(
+    files,
+    (left, right) => left.localeCompare(right),
+  );
+}
+
+/**
+ * Locale-independent source identity for galactic.yaml / gxt2 releases.
+ * Legacy V1 attestations and gxb1 staged bundles intentionally retain their
+ * original locale-aware algorithm so existing stored identities remain valid.
+ */
+export async function computeCanonicalUploadSourceHash(
+  files: Array<{ path: string } & BytePreservingSourceContent>,
+): Promise<string> {
+  return await computeSourceHashWithOrder(
+    files,
+    (left, right) => left === right ? 0 : left < right ? -1 : 1,
+  );
+}
+
+async function computeSourceHashWithOrder(
+  files: Array<{ path: string } & BytePreservingSourceContent>,
+  compare: (left: string, right: string) => number,
+): Promise<string> {
   const perFile: Array<[string, string]> = [];
   const seen = new Set<string>();
-  for (const f of [...files].sort((a, b) => a.path.localeCompare(b.path))) {
+  for (const f of [...files].sort((a, b) => compare(a.path, b.path))) {
     if (seen.has(f.path)) {
       throw new Error(`Duplicate source file path: ${f.path}`);
     }
@@ -584,26 +822,84 @@ export function getLatestVersionTrust(
   return null;
 }
 
-/**
- * The app's effective declared permissions (signed version metadata preferred,
- * else the live manifest). SINGLE SOURCE used by BOTH the trust-card disclosure
- * and the runtime data-access gate (db-inspect support_read) so what is disclosed
- * and what is enforced can never drift.
- */
-export function resolveAppPermissions(
-  app: Pick<App, "current_version" | "version_metadata" | "manifest">,
-): string[] {
-  const trust = getLatestVersionTrust(app);
-  return trust?.permissions.length
-    ? trust.permissions
-    : getManifestPermissions(app.manifest).sort();
+export interface VersionTrustSubject {
+  appId: string;
+  version: string;
+  runtime: string;
 }
 
-/** The permission a developer declares to unlock the disclosed support data-read. */
-export const SUPPORT_DATA_READ_PERMISSION = "data:support_read";
+export interface VerifiedVersionTrust {
+  trust: VersionTrustMetadata;
+  subject: VersionTrustSubject;
+  /** True only for envelope v2, whose signer/time/key header is HMAC-bound. */
+  signatureMetadataTrusted: boolean;
+}
 
-export function buildAppTrustCard(
+/**
+ * Verify both the platform HMAC and the exact release subject. The raw HMAC
+ * verifier intentionally remains subject-agnostic for historical tooling; any
+ * trust-sensitive product or authorization surface must use this function.
+ */
+export async function verifyVersionTrustForSubject(
+  metadata: VersionTrustMetadata | null | undefined,
+  subject: VersionTrustSubject,
+): Promise<boolean> {
+  return Boolean(
+    metadata &&
+      subject.appId &&
+      subject.version &&
+      subject.runtime &&
+      metadata.app_id === subject.appId &&
+      metadata.version === subject.version &&
+      metadata.runtime === subject.runtime &&
+      await verifyVersionTrustSignature(metadata),
+  );
+}
+
+export async function verifyCurrentVersionTrust(
   app: Pick<
+    App,
+    "id" | "current_version" | "runtime" | "version_metadata" | "manifest"
+  >,
+): Promise<VerifiedVersionTrust | null> {
+  const version = app.current_version || "";
+  const runtime = app.runtime || "deno";
+  if (!app.id || !version) return null;
+  const trust = getLatestVersionTrust(app);
+  const subject = { appId: app.id, version, runtime };
+  if (!await verifyVersionTrustForSubject(trust, subject)) return null;
+  // A valid envelope signs the expected manifest digest, not whatever mutable
+  // projection currently sits on the app row. Verify that projection before a
+  // trust card or authorization path consumes manifest-derived declarations.
+  if (trust!.manifest_hash) {
+    const manifest = parseAppManifest(app.manifest);
+    if (
+      !manifest ||
+      await sha256Hex(canonicalJson(manifest)) !== trust!.manifest_hash
+    ) {
+      return null;
+    }
+  }
+  return {
+    trust: trust!,
+    subject,
+    signatureMetadataTrusted: trust!.signature.envelope_version === 2,
+  };
+}
+
+export async function hasVerifiedCurrentVersionPermission(
+  app: Pick<
+    App,
+    "id" | "current_version" | "runtime" | "version_metadata" | "manifest"
+  >,
+  permission: string,
+): Promise<boolean> {
+  const verified = await verifyCurrentVersionTrust(app);
+  return Boolean(verified?.trust.permissions.includes(permission));
+}
+
+type TrustCardApp =
+  & Pick<
     App,
     | "current_version"
     | "runtime"
@@ -612,20 +908,72 @@ export function buildAppTrustCard(
     | "visibility"
     | "download_access"
     | "env_schema"
+  >
+  & { id?: string };
+
+function verifiedTrustForApp(
+  app: Pick<
+    TrustCardApp,
+    "id" | "current_version" | "runtime" | "version_metadata"
   >,
-  options: {
-    reliability?: unknown;
-    publisher_verified?: boolean;
-    health?: HealthWindows;
-    // Precomputed runtime-integrity verdict (resolveExecutedIntegrity). Omitted
-    // on cheap/batch surfaces, which leave it "unknown".
-    executed_integrity?: ExecutedIntegrity;
-  } = {},
+  verified: VerifiedVersionTrust | null | undefined,
+): VersionTrustMetadata | null {
+  if (!verified || !app.id || !app.current_version) return null;
+  const runtime = app.runtime || "deno";
+  return verified.subject.appId === app.id &&
+      verified.subject.version === app.current_version &&
+      verified.subject.runtime === runtime &&
+      verified.trust.app_id === app.id &&
+      verified.trust.version === app.current_version &&
+      verified.trust.runtime === runtime
+    ? verified.trust
+    : null;
+}
+
+/**
+ * The app's disclosed permissions. Signed version metadata is used only after a
+ * caller has completed exact-subject cryptographic verification; otherwise the
+ * live manifest remains an explicitly unsigned disclosure fallback.
+ */
+export function resolveAppPermissions(
+  app: Pick<
+    TrustCardApp,
+    "id" | "current_version" | "runtime" | "version_metadata" | "manifest"
+  >,
+  verified?: VerifiedVersionTrust | null,
+): string[] {
+  const trust = verifiedTrustForApp(app, verified);
+  return trust
+    ? [...trust.permissions]
+    : getManifestPermissions(app.manifest).sort();
+}
+
+/** The permission a developer declares to unlock the disclosed support data-read. */
+export const SUPPORT_DATA_READ_PERMISSION = "data:support_read";
+
+export interface TrustCardBuildOptions {
+  reliability?: unknown;
+  publisher_verified?: boolean;
+  health?: HealthWindows;
+  // Precomputed runtime-integrity verdict (resolveExecutedIntegrity). Omitted
+  // on cheap/batch surfaces, which leave it "unknown".
+  executed_integrity?: ExecutedIntegrity;
+  /**
+   * Internal result of verifyCurrentVersionTrust. Raw database metadata must
+   * never be passed here as though it had already been verified.
+   */
+  verifiedTrust?: VerifiedVersionTrust | null;
+}
+
+export function buildAppTrustCard(
+  app: TrustCardApp,
+  options: TrustCardBuildOptions = {},
 ): TrustCard {
-  const trust = getLatestVersionTrust(
-    app as Pick<App, "current_version" | "version_metadata">,
+  const trust = verifiedTrustForApp(app, options.verifiedTrust);
+  const permissions = resolveAppPermissions(app, options.verifiedTrust);
+  const signatureMetadataTrusted = Boolean(
+    trust && options.verifiedTrust?.signatureMetadataTrusted,
   );
-  const permissions = resolveAppPermissions(app);
   const parsedManifest = parseAppManifest(app.manifest);
   const compute = normalizeManifestComputeConfig(parsedManifest?.compute);
   const envSchema = resolveAppEnvSchema(app);
@@ -640,10 +988,10 @@ export function buildAppTrustCard(
 
   return {
     schema_version: 1,
-    signed_manifest: !!trust?.signature && !!trust.manifest_hash,
+    signed_manifest: Boolean(trust?.manifest_hash),
     executed_integrity: options.executed_integrity ?? "unknown",
-    signer: trust?.signature.signer || null,
-    signed_at: trust?.signature.signed_at || null,
+    signer: signatureMetadataTrusted ? trust!.signature.signer : null,
+    signed_at: signatureMetadataTrusted ? trust!.signature.signed_at : null,
     version: app.current_version || trust?.version || null,
     runtime: app.runtime || "deno",
     manifest_hash: trust?.manifest_hash || null,
@@ -673,12 +1021,8 @@ export function buildAppTrustCard(
       tools: compute?.tools ?? [],
       explicit_secrets: compute?.secrets ?? [],
     },
-    required_secrets: trust?.required_secrets.length
-      ? trust.required_secrets
-      : requiredSecrets,
-    per_user_secrets: trust?.per_user_secrets.length
-      ? trust.per_user_secrets
-      : perUserSecrets,
+    required_secrets: trust ? trust.required_secrets : requiredSecrets,
+    per_user_secrets: trust ? trust.per_user_secrets : perUserSecrets,
     access: {
       visibility: app.visibility,
       download_access: app.download_access,
@@ -686,8 +1030,8 @@ export function buildAppTrustCard(
     open_code: app.download_access === "public",
     publisher_verified: options.publisher_verified ?? false,
     health: options.health ?? emptyHealth(),
-    // Derived from the SAME permission set the runtime gate enforces (see
-    // resolveAppPermissions), so what's disclosed here == what's actually allowed.
+    // This is a disclosure. The runtime support-read gate independently requires
+    // a verified, subject-bound current-version trust record.
     developer_can_read_user_data: permissions.includes(
       SUPPORT_DATA_READ_PERMISSION,
     ),
@@ -700,6 +1044,15 @@ export function buildAppTrustCard(
       backing_log: "mcp_call_logs.id",
     },
   };
+}
+
+/** Build a trust card after verifying the current release's exact HMAC subject. */
+export async function buildVerifiedAppTrustCard(
+  app: TrustCardApp & Pick<App, "id">,
+  options: Omit<TrustCardBuildOptions, "verifiedTrust"> = {},
+): Promise<TrustCard> {
+  const verifiedTrust = await verifyCurrentVersionTrust(app);
+  return buildAppTrustCard(app, { ...options, verifiedTrust });
 }
 
 function namesFromFunctions(manifest: AppManifest | null): string[] {

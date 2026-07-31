@@ -52,10 +52,12 @@ export type AgentStudioHandoffCredentialResult =
   | AgentStudioHandoffCredentialIssued
   | AgentStudioHandoffCredentialUnavailable;
 
+export const AGENT_STUDIO_HANDOFF_TTL_SECONDS = 3_600 as const;
+
 export interface AgentStudioHandoffCredentialRequest {
   description: string;
   intent: AuthenticatedAgentStudioHandoffIntent;
-  requestedTtlSeconds: 1_800;
+  requestedTtlSeconds: typeof AGENT_STUDIO_HANDOFF_TTL_SECONDS;
   targetAgentId: string | null;
 }
 
@@ -77,8 +79,8 @@ export interface AgentStudioHandoffCopy {
   thirdBeatTitle: string;
 }
 
-export const AGENT_STUDIO_HANDOFF_INTENTS:
-  readonly AgentStudioHandoffIntent[] = [
+export const AGENT_STUDIO_HANDOFF_INTENTS: readonly AgentStudioHandoffIntent[] =
+  [
     "agent",
     "interface",
     "function",
@@ -96,14 +98,15 @@ export const AGENT_STUDIO_HANDOFF_COPY: Readonly<
     cardTitle: "New Agent",
     fieldLabel: "Required · what should this Agent do?",
     headline: "Build a new Agent",
-    hint: "The key can create one Agent and is issued only when you copy.",
+    hint:
+      "The key can submit one Agent candidate and is issued only when you copy.",
     optional: false,
     placeholder:
       "Answer reservation email for a small seaside hotel, and hold anything it cannot answer honestly.",
     subhead:
-      "Galactic runs Agents but never writes them. Tell your coding agent what this one should own, and it will build it and publish it into your fleet.",
+      "Galactic runs Agents but never writes them. Tell your coding agent what this one should own, and it will build a tested candidate for your review. Membership then unlocks your manual Deploy step.",
     tabLabel: "New Agent",
-    thirdBeatTitle: "The Agent runs on Galactic",
+    thirdBeatTitle: "The tested Agent candidate waits in Galactic",
   },
   interface: {
     backLabel: "Back to Interfaces",
@@ -111,15 +114,14 @@ export const AGENT_STUDIO_HANDOFF_COPY: Readonly<
     cardTitle: "New interface",
     fieldLabel: "Required · what should this screen do?",
     headline: "Add an interface",
-    hint:
-      "A key scoped to this exact Agent is issued only when you copy.",
+    hint: "A key scoped to this exact Agent is issued only when you copy.",
     optional: false,
     placeholder:
       "A queue of drafts I can approve on my phone, oldest first, with the guest’s message beside each one.",
     subhead:
       "Galactic runs this Agent but never rewrites it. Say what the screen should do, and the coding agent that built it will add one.",
     tabLabel: "New interface",
-    thirdBeatTitle: "The interface runs on Galactic",
+    thirdBeatTitle: "The interface candidate waits in Galactic",
   },
   function: {
     backLabel: "Back to Capabilities",
@@ -135,7 +137,7 @@ export const AGENT_STUDIO_HANDOFF_COPY: Readonly<
     subhead:
       "Functions are the actions this Agent is able to take. Each one is written in code, so this change is a release. The coding agent will propose a consequence group for review without claiming Galactic enforces it yet.",
     tabLabel: "New function",
-    thirdBeatTitle: "The capability runs on Galactic",
+    thirdBeatTitle: "The capability candidate waits in Galactic",
   },
   routine: {
     backLabel: "Back to Routines",
@@ -143,15 +145,14 @@ export const AGENT_STUDIO_HANDOFF_COPY: Readonly<
     cardTitle: "New routine",
     fieldLabel: "Required · when should it wake, and what should it do?",
     headline: "Start a routine",
-    hint:
-      "A key scoped to this exact Agent is issued only when you copy.",
+    hint: "A key scoped to this exact Agent is issued only when you copy.",
     optional: false,
     placeholder:
       "Check the inbox every 15 minutes between 7am and 9pm, and never send anything on a Sunday.",
     subhead:
       "Schedules live in the code too. Describe the rhythm you want—including when it should stay asleep—and the coding agent will set it.",
     tabLabel: "New routine",
-    thirdBeatTitle: "The routine runs on Galactic",
+    thirdBeatTitle: "The routine candidate waits in Galactic",
   },
   connect: {
     backLabel: "Back",
@@ -160,13 +161,14 @@ export const AGENT_STUDIO_HANDOFF_COPY: Readonly<
     fieldLabel: "Optional · anything you want it to do first?",
     headline: "Connect your coding agent to Galactic",
     hint:
-      "A workspace key is issued only when you copy and expires in 30 minutes.",
+      "A workspace key is issued only when you copy and expires in 60 minutes.",
     optional: true,
-    placeholder: "Show me everything email-ops is allowed to do right now.",
+    placeholder:
+      "Show me the Galactic build workflow and which safe tools this connection exposes.",
     subhead:
-      "Each prompt opens a 30-minute session in which your coding agent can inspect and stage Agent changes. A durable once-per-machine connection is not available yet.",
+      "Each prompt opens a 60-minute inspection-only session for learning Galactic's build workflow. A purpose-bound Agent handoff is required to stage or submit source; a durable once-per-machine connection is not available yet.",
     tabLabel: "Connect AI",
-    thirdBeatTitle: "The release you approve runs on Galactic",
+    thirdBeatTitle: "Open a purpose-bound handoff when you are ready",
   },
   "signed-out": {
     backLabel: "Back",
@@ -180,9 +182,9 @@ export const AGENT_STUDIO_HANDOFF_COPY: Readonly<
     placeholder:
       "Add a page to email-ops where the front desk can see what is waiting.",
     subhead:
-      "The prompt carries a key that can inspect and stage Agent changes, so Galactic will only write it once it knows who you are. Start describing what you want—it will still be here after you sign in.",
+      "The prompt carries a purpose-bound key, so Galactic will only write it once it knows who you are. Start describing what you want—it will still be here after you sign in.",
     tabLabel: "Connect AI · signed out",
-    thirdBeatTitle: "It asks, builds, and it runs on Galactic",
+    thirdBeatTitle: "Review the tested candidate",
   },
 };
 
@@ -196,7 +198,6 @@ const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const HANDOFF_BEARER_TOKEN_PATTERN = /^gx_[0-9a-f]{32}$/;
 
-const HANDOFF_CREDENTIAL_TTL_SECONDS = 1_800;
 const HANDOFF_CREDENTIAL_MAX_CLOCK_SKEW_MS = 30_000;
 const HANDOFF_CREDENTIAL_RENEWAL_FLOOR_MS = 2 * 60_000;
 
@@ -220,8 +221,12 @@ export function isAgentStudioHandoffPlatformMcpUrl(value: string): boolean {
     const loopbackHost = url.hostname === "localhost" ||
       url.hostname === "127.0.0.1" ||
       url.hostname === "[::1]";
+    const hostedPlatform =
+      url.hostname === "api.connectgalactic.com" ||
+      url.hostname === "ultralight-api-staging.rgn4jz429m.workers.dev";
     return (url.protocol === "https:" ||
-        (url.protocol === "http:" && loopbackHost)) &&
+      (url.protocol === "http:" && loopbackHost)) &&
+      (hostedPlatform || loopbackHost) &&
       url.pathname === "/mcp/platform" &&
       !url.username &&
       !url.password &&
@@ -273,7 +278,7 @@ export function credentialRequestFor(
     return {
       description: description.trim(),
       intent,
-      requestedTtlSeconds: HANDOFF_CREDENTIAL_TTL_SECONDS,
+      requestedTtlSeconds: AGENT_STUDIO_HANDOFF_TTL_SECONDS,
       targetAgentId: target.id,
     };
   }
@@ -281,7 +286,7 @@ export function credentialRequestFor(
   return {
     description: description.trim(),
     intent,
-    requestedTtlSeconds: HANDOFF_CREDENTIAL_TTL_SECONDS,
+    requestedTtlSeconds: AGENT_STUDIO_HANDOFF_TTL_SECONDS,
     targetAgentId: null,
   };
 }
@@ -312,7 +317,7 @@ export function validateHandoffCredential(
   }
   if (
     expiresAt - now >
-      HANDOFF_CREDENTIAL_TTL_SECONDS * 1_000 +
+      AGENT_STUDIO_HANDOFF_TTL_SECONDS * 1_000 +
         HANDOFF_CREDENTIAL_MAX_CLOCK_SKEW_MS
   ) {
     throw new Error(
@@ -455,7 +460,7 @@ function buildAgentStudioHandoffPromptContent(
   const secretRule =
     "Treat the bearer token in this prompt as a secret. Never echo it back, log it, or commit it.";
   const expiryRule = `The bearer token expires ${
-    expiresAt ? `at ${expiresAt}` : "30 minutes after issuance"
+    expiresAt ? `at ${expiresAt}` : "60 minutes after issuance"
   }. An MCP server entry saved by the client does not expire automatically, but it cannot authenticate after the token expires. Replace or remove that entry; never treat it as a standing machine credential.`;
 
   if (intent === "agent") {
@@ -469,11 +474,11 @@ function buildAgentStudioHandoffPromptContent(
       connect,
       "",
       "Ask what it may reach, what it must bring to me, and what it must never do alone.",
-      'Inspect my private Agent library with gx.discover({ scope: "library" }) so this does not duplicate an Agent I already have.',
+      'Call gx.discover({ scope: "tools" }) to confirm the bounded build tools available to this handoff. Do not attempt to enumerate my account or existing Agents.',
       "Declare every function in the smallest consequence group that works.",
       "",
-      "When I approve the plan, stage the complete source with gx.stage({ files }), test that immutable source with gx.test({ bundle_id }), then publish the exact tested bundle with gx.upload({ bundle_id, test_attestation }).",
-      "Publish release 1.0.0 privately and paused. Stop before activation, visibility changes, or expanded authority.",
+      "When I approve the plan, stage the complete source with gx.stage({ files }), test that immutable source with gx.test({ bundle_id }), then submit the exact tested bundle as a candidate with gx.upload({ bundle_id, test_attestation }).",
+      "Submit release 1.0.0 for owner review. Nothing is deployed by this handoff; stop before payment, manual Deploy, setup, activation, visibility changes, or expanded authority.",
       "",
       expiryRule,
       secretRule,
@@ -482,17 +487,17 @@ function buildAgentStudioHandoffPromptContent(
 
   if (intent === "connect") {
     return [
-      "Open a temporary Galactic handoff session so you can inspect and stage changes to my Agents.",
+      "Open a temporary, inspection-only Galactic machine connection.",
       "",
       connect,
       "",
-      'Call gx.discover({ scope: "library" }), list the Agents you can see, and wait for me.',
+      'Call gx.discover({ scope: "tools" }), summarize the bounded scaffold and lint workflow available through this connection, and wait for me.',
       "",
       "If I asked for something specific:",
       desired,
       "",
-      "Do not change any Agent until you have inspected the exact target and asked what is missing.",
-      "Always stage, test, and publish the same immutable bundle. Stop for my approval before promotion, activation, visibility changes, or expanded authority.",
+      "Do not enumerate account data or Agents. Do not stage, test, submit, deploy, publish, run, or mutate anything.",
+      "If I ask to build or change an Agent, tell me to open the corresponding purpose-bound Agent handoff.",
       expiryRule,
       "Ask me for a new handoff prompt if the token expires.",
       "",
@@ -523,8 +528,8 @@ function buildAgentStudioHandoffPromptContent(
     ...extensionInstruction(intent),
     "",
     `Resolve this exact UUID, then call gx.project({ app_id: "${target.id}", view: "coding_capsule" }). Download only the source needed for this change.`,
-    `Stage the resolved source with gx.stage({ files }), test that immutable bundle with gx.test({ bundle_id }), then publish the exact tested bundle to this same Agent with gx.upload({ app_id: "${target.id}", bundle_id, test_attestation }).`,
-    "If the source changes after testing, stage and test a new bundle. Stop for my approval before promotion, activation, visibility changes, or expanded authority.",
+    `Stage the resolved source with gx.stage({ files }), test that immutable bundle with gx.test({ bundle_id }), then submit the exact tested bundle as a candidate for this same Agent with gx.upload({ app_id: "${target.id}", bundle_id, test_attestation }).`,
+    "If the source changes after testing, stage and test a new bundle. Nothing is deployed by this handoff; stop for owner review, payment, manual Deploy, setup, activation, visibility changes, or expanded authority.",
     "",
     expiryRule,
     secretRule,
@@ -533,7 +538,7 @@ function buildAgentStudioHandoffPromptContent(
 
 export function buildSignedOutHandoffPreview(
   description: string,
-  platformMcpUrl = "https://api.galactic.dev/mcp/platform",
+  platformMcpUrl = "https://api.connectgalactic.com/mcp/platform",
   continuationIntent: AuthenticatedAgentStudioHandoffIntent = "interface",
 ): string {
   const request = continuationIntent === "agent"
@@ -552,8 +557,8 @@ export function buildSignedOutHandoffPreview(
     : ["", "  exact existing Agent id: ————————————————————————"];
   const closing = continuationIntent === "connect"
     ? [
-      "List the Agents this temporary session can see, then wait for me.",
-      "Do not change any Agent until I name the exact target.",
+      "Inspect the builder tools, scaffold, and lint guidance this temporary connection exposes, then wait for me.",
+      "Do not enumerate Agents or account data, and do not stage, test, submit, deploy, or change anything.",
     ]
     : continuationIntent === "agent"
     ? [

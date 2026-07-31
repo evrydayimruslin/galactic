@@ -1,17 +1,27 @@
-import { assertEquals, assertThrows } from "https://deno.land/std@0.210.0/assert/mod.ts";
+import {
+  assertEquals,
+  assertRejects,
+  assertThrows,
+} from "https://deno.land/std@0.210.0/assert/mod.ts";
 
 import {
   extractUlTestExports,
   resolveUlTestD1Fixtures,
   resolveUlTestEnvVars,
+  resolveUlTestHttpFixtures,
   resolveUlTestInvocation,
 } from "./ul-test-inputs.ts";
 import {
+  blockUlTestEffect,
   createUlTestAiResponse,
+  createUlTestAppDataService,
   createUlTestEmbedResponse,
   createUlTestMemoryAdapter,
   createUlTestNotifyResponse,
+  createUlTestRunsResponse,
+  UL_TEST_BLOCKED_EFFECTS,
 } from "./ul-test-runtime.ts";
+import { TestRuntimeStateStore } from "./test-state-store.ts";
 
 Deno.test("ul test inputs: extracts exported functions from entry code", () => {
   const exports = extractUlTestExports(`
@@ -41,6 +51,7 @@ Deno.test("ul test inputs: uses single test fixture entry when function name is 
   assertEquals(resolution.testArgs, { query: "coffee" });
   assertEquals(resolution.fixtureEnvVars, {});
   assertEquals(resolution.d1Fixtures, null);
+  assertEquals(resolution.httpFixtures, null);
 });
 
 Deno.test("ul test inputs: explicit test args override test fixture defaults", () => {
@@ -64,7 +75,7 @@ Deno.test("ul test inputs: explicit test args override test fixture defaults", (
   assertEquals(resolution.testArgs, { query: "manual" });
 });
 
-Deno.test("ul test inputs: supports extended fixture envelopes with env vars and D1 fixtures", () => {
+Deno.test("ul test inputs: supports extended fixture envelopes with env, D1, and HTTP fixtures", () => {
   const resolution = resolveUlTestInvocation([
     {
       path: "index.ts",
@@ -85,6 +96,21 @@ Deno.test("ul test inputs: supports extended fixture envelopes with env vars and
               },
             ],
           },
+          http_fixtures: [
+            {
+              id: "search-api",
+              kind: "raw",
+              request: {
+                method: "get",
+                url: "HTTPS://API.EXAMPLE.COM:443/v1/search?q=fixture",
+              },
+              response: {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+                body_text: '{"results":[]}',
+              },
+            },
+          ],
         },
       }),
     },
@@ -102,6 +128,21 @@ Deno.test("ul test inputs: supports extended fixture envelopes with env vars and
       },
     ],
   });
+  assertEquals(resolution.httpFixtures, [
+    {
+      id: "search-api",
+      kind: "raw",
+      request: {
+        method: "GET",
+        url: "https://api.example.com/v1/search?q=fixture",
+      },
+      response: {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        body_text: '{"results":[]}',
+      },
+    },
+  ]);
 });
 
 Deno.test("ul test inputs: rejects env vars with non-string values", () => {
@@ -136,6 +177,48 @@ Deno.test("ul test inputs: validates explicit D1 fixture config", () => {
   );
 });
 
+Deno.test("ul test inputs: validates and normalizes explicit HTTP fixtures", () => {
+  assertEquals(
+    resolveUlTestHttpFixtures([
+      {
+        id: "crm-lookup",
+        kind: "credential",
+        credential_key: "CRM_TOKEN",
+        request: {
+          method: "post",
+          url: "HTTPS://CRM.EXAMPLE.COM:443/v1/lookup",
+          body_sha256:
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        },
+        response: {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+          body_text: '{"customer":null}',
+        },
+      },
+    ]),
+    [
+      {
+        id: "crm-lookup",
+        kind: "credential",
+        credential_key: "CRM_TOKEN",
+        request: {
+          method: "POST",
+          url: "https://crm.example.com/v1/lookup",
+          body_sha256:
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        },
+        response: {
+          status: 200,
+          headers: { "content-type": "application/json" },
+          body_text: '{"customer":null}',
+        },
+      },
+    ],
+  );
+  assertEquals(resolveUlTestHttpFixtures(undefined), null);
+});
+
 Deno.test("ul test runtime: host stubs are deterministic and side-effect free", () => {
   const ai = createUlTestAiResponse();
   assertEquals(JSON.parse(ai.content), {
@@ -153,6 +236,7 @@ Deno.test("ul test runtime: host stubs are deterministic and side-effect free", 
     created: false,
     reason: "test_mode",
   });
+  assertEquals(createUlTestRunsResponse(), { runs: [] });
 });
 
 Deno.test("ul test runtime: memory is invocation-local and starts empty", async () => {
@@ -163,4 +247,35 @@ Deno.test("ul test runtime: memory is invocation-local and starts empty", async 
 
   const nextInvocation = createUlTestMemoryAdapter();
   assertEquals(await nextInvocation.recall("mission"), null);
+});
+
+Deno.test("ul test runtime: legacy app data adapter is in-memory and isolated", async () => {
+  const first = createUlTestAppDataService();
+  const stored = { status: "ready", nested: { count: 1 } };
+  await first.store("state/current", stored);
+  stored.nested.count = 99;
+
+  assertEquals(await first.load("state/current"), {
+    status: "ready",
+    nested: { count: 1 },
+  });
+  assertEquals(await first.list("state/"), ["state/current"]);
+
+  const nextInvocation = createUlTestAppDataService();
+  assertEquals(await nextInvocation.load("state/current"), null);
+});
+
+Deno.test("ul test runtime: every external-effect core latches before failing", async () => {
+  const state = new TestRuntimeStateStore();
+  for (const effect of Object.values(UL_TEST_BLOCKED_EFFECTS)) {
+    await assertRejects(
+      () => blockUlTestEffect(state, effect),
+      Error,
+      "gx.test blocked",
+    );
+  }
+  assertEquals(
+    state.blockedEffects(),
+    Object.values(UL_TEST_BLOCKED_EFFECTS).sort(),
+  );
 });

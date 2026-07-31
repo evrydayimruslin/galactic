@@ -74,10 +74,7 @@ import {
   publishReadinessErrorPayload,
   type PublishReadinessOptions,
 } from "../services/tier-enforcement.ts";
-import {
-  getVersionStorageBytes,
-  recordUploadStorage,
-} from "../services/storage-quota.ts";
+import { recordUploadStorage } from "../services/storage-quota.ts";
 import { validateGpuPricingConfig } from "../services/gpu/pricing-config.ts";
 import {
   getGpuSupportDisabledMessage,
@@ -88,6 +85,10 @@ import { getEnv } from "../lib/env.ts";
 import { revokeAgentComputeBeforeDeletion } from "../services/compute-agent-deletion.ts";
 import { withSensitiveRouteRateLimit } from "../services/sensitive-route-rate-limit.ts";
 import { RequestValidationError } from "../services/request-validation.ts";
+import {
+  isProSubscriptionError,
+  requireActiveProSubscription,
+} from "../services/pro-subscription.ts";
 import {
   assertOwnedSupabaseConfig,
   validateAppSupabaseConfigRequest,
@@ -114,6 +115,7 @@ import {
   diffManifests,
 } from "../services/trust.ts";
 import { putLiveExecutedBundle } from "../services/executed-bundle.ts";
+import { findPersistedTestAttestation } from "../services/test-attestation.ts";
 import {
   buildPerUserSettingsStatus,
   type UserAppSecretStatusRow as SharedUserAppSecretStatusRow,
@@ -130,6 +132,20 @@ const appsLogger = createServerLogger("APPS");
 const docsLogger = createServerLogger("DOCS");
 const publishLogger = createServerLogger("PUBLISH");
 const rebuildLogger = createServerLogger("REBUILD");
+
+async function legacyDeploymentMembershipError(
+  userId: string,
+): Promise<Response | null> {
+  try {
+    await requireActiveProSubscription(userId, { enabled: true });
+    return null;
+  } catch (err) {
+    if (isProSubscriptionError(err)) {
+      return json({ error: err.message, code: err.code }, err.status);
+    }
+    throw err;
+  }
+}
 const callLogLogger = createServerLogger("CALL-LOG");
 
 async function publisherPublishReadinessResponse(
@@ -208,24 +224,16 @@ async function readJsonObject(
   return isObjectRecord(body) ? body : {};
 }
 
-async function resolveStoredVersionStorageBytes(
-  app: App,
-  version: string,
-  storageKey: string,
-  r2Service: R2Service,
-): Promise<number> {
-  const metadataBytes = getVersionStorageBytes(app.version_metadata, version);
-  if (metadataBytes !== null) {
-    return metadataBytes;
-  }
-
-  const files = await r2Service.listFiles(storageKey);
-  let totalBytes = 0;
-  for (const fileKey of files) {
-    const content = await r2Service.fetchFile(fileKey);
-    totalBytes += content.byteLength;
-  }
-  return totalBytes;
+function hasImmutableQualifiedRelease(app: App): boolean {
+  const currentVersion = app.current_version;
+  if (!currentVersion) return false;
+  const authoritative = [...(app.version_metadata || [])].reverse().find(
+    (entry) => entry?.version === currentVersion,
+  );
+  return findPersistedTestAttestation(
+    authoritative ? [authoritative] : [],
+    currentVersion,
+  )?.attestation.schema_version === 2;
 }
 
 async function resolveStoredVersionExports(
@@ -384,6 +392,9 @@ export async function handleApps(request: Request): Promise<Response> {
       isSandboxActorToken(presentedToken))
   ) {
     try {
+      // Authentication establishes the exact credential type before any route
+      // entitlement check. Otherwise a lapsed actor could be caught below and
+      // silently downgraded to anonymous access on public routes.
       const caller = await authenticate(request);
       if (
         caller.authSource === "routine_actor" ||
@@ -2025,8 +2036,6 @@ async function handleUpdateApp(
         "long_description",
       ];
       const filteredUpdates: Record<string, unknown> = {};
-      let liveVersionStorageBytes: number | null = null;
-      let requestedLiveVersion: string | null = null;
 
       for (const field of allowedFields) {
         if (field in updates) {
@@ -2046,62 +2055,10 @@ async function handleUpdateApp(
       }
 
       if ("current_version" in updates) {
-        if (
-          typeof updates.current_version !== "string" ||
-          updates.current_version.trim().length === 0
-        ) {
-          return error("current_version must be a non-empty string", 400);
-        }
-
-        requestedLiveVersion = updates.current_version.trim();
-        if (requestedLiveVersion !== app.current_version) {
-          if (!app.versions?.includes(requestedLiveVersion)) {
-            return error(`Version "${requestedLiveVersion}" not found`, 404);
-          }
-
-          if (app.visibility !== "private") {
-            const readinessError = await publisherPublishReadinessResponse(
-              user.id,
-              {
-                visibility: app.visibility,
-                appConnectGateExempt: app.connect_gate_exempt,
-              },
-            );
-            if (readinessError) return readinessError;
-          }
-
-          const r2Service = createR2Service();
-          const versionStorageKey = `apps/${appId}/${requestedLiveVersion}/`;
-          let manifestJson: string | null = null;
-          try {
-            manifestJson = await r2Service.fetchTextFile(
-              `${versionStorageKey}manifest.json`,
-            );
-            const manifest = JSON.parse(manifestJson);
-            filteredUpdates.manifest = manifestJson;
-            filteredUpdates.env_schema = resolveManifestEnvSchema(manifest);
-          } catch {
-            manifestJson = null;
-          }
-
-          const versionExports = await resolveStoredVersionExports(
-            versionStorageKey,
-            r2Service,
-            manifestJson,
-          );
-          if (versionExports) {
-            filteredUpdates.exports = versionExports;
-          }
-
-          liveVersionStorageBytes = await resolveStoredVersionStorageBytes(
-            app,
-            requestedLiveVersion,
-            versionStorageKey,
-            r2Service,
-          );
-          filteredUpdates.current_version = requestedLiveVersion;
-          filteredUpdates.storage_key = versionStorageKey;
-        }
+        return error(
+          "Live versions cannot be changed through app settings. Review a frozen, tested candidate and use Deploy.",
+          409,
+        );
       }
 
       if (Object.keys(filteredUpdates).length === 0) {
@@ -2110,6 +2067,23 @@ async function handleUpdateApp(
 
       // Gate visibility changes by tier and the configured publisher balance rule.
       if ("visibility" in filteredUpdates) {
+        if (filteredUpdates.visibility !== "private") {
+          const membershipError = await legacyDeploymentMembershipError(
+            user.id,
+          );
+          if (membershipError) return membershipError;
+          if (
+            app.deployment_state !== undefined &&
+            app.deployment_state !== null &&
+            app.deployment_state !== "legacy" &&
+            app.deployment_state !== "ready"
+          ) {
+            return error(
+              "Finish Agent setup and activation before publishing.",
+              409,
+            );
+          }
+        }
         const userTier = await getUserTier(user.id);
         const visibilityErr = checkVisibilityAllowed(
           userTier,
@@ -2339,15 +2313,6 @@ async function handleUpdateApp(
       ) {
         scheduleCaptureTask(renderAgentOgCard(updatedApp, { reason: "edit" }));
       }
-      if (requestedLiveVersion && liveVersionStorageBytes !== null) {
-        await recordUploadStorage(
-          user.id,
-          appId,
-          requestedLiveVersion,
-          liveVersionStorageBytes,
-        );
-      }
-
       return json(updatedApp);
     });
   } catch (err) {
@@ -3617,6 +3582,15 @@ async function handlePublishDraft(
       return error("Unauthorized", 403);
     }
 
+    if (hasImmutableQualifiedRelease(app)) {
+      return error(
+        "This Agent has immutable qualified releases. Submit and deploy a new tested candidate instead of publishing mutable draft bytes.",
+        409,
+      );
+    }
+    const membershipError = await legacyDeploymentMembershipError(user.id);
+    if (membershipError) return membershipError;
+
     if (!app.draft_storage_key) {
       return error("No draft to publish", 400);
     }
@@ -4148,6 +4122,14 @@ async function handleRebuild(
     const app = await appsService.findById(appId);
     if (!app) return error("App not found", 404);
     if (app.owner_id !== user.id) return error("Not authorized", 403);
+    if (hasImmutableQualifiedRelease(app)) {
+      return error(
+        "Qualified release bytes are immutable. Submit and deploy a newly tested candidate instead of rebuilding this release in place.",
+        409,
+      );
+    }
+    const membershipError = await legacyDeploymentMembershipError(user.id);
+    if (membershipError) return membershipError;
 
     const storageKey = app.storage_key;
     if (!storageKey) return error("App has no stored code", 400);

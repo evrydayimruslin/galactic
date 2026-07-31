@@ -51,6 +51,85 @@ Deno.test("connected upload admission enforces file count, extension, and UTF-8 
   );
 });
 
+Deno.test("connected upload admission rejects credential files and secret content without echoing values", () => {
+  assertThrows(
+    () =>
+      validateConnectedUploadFileSet([{
+        path: ".env.local",
+        content: "OPENAI_API_KEY=not-retained",
+      }]),
+    Error,
+    "sensitive-source-file",
+  );
+  assertThrows(
+    () =>
+      validateConnectedUploadFileSet([{
+        path: "config/service-account-prod.json",
+        content: "{}",
+      }]),
+    Error,
+    "sensitive-source-file",
+  );
+  assertThrows(
+    () =>
+      validateConnectedUploadFileSet([{
+        path: "oauth/nested/credentials.json",
+        content: "{}",
+      }]),
+    Error,
+    "sensitive-source-file",
+  );
+
+  const secret = "sk-" + "a".repeat(40);
+  const error = assertThrows(
+    () =>
+      validateConnectedUploadFileSet([{
+        path: "index.ts",
+        content: `export const token = "${secret}";`,
+      }]),
+    Error,
+    "secret-api-key",
+  );
+  assertEquals(error.message.includes(secret), false);
+
+  const clientSecret = "GOCSPX-" + "s".repeat(32);
+  const structuredError = assertThrows(
+    () =>
+      validateConnectedUploadFileSet([{
+        path: "oauth-config.json",
+        content: JSON.stringify({
+          installed: {
+            client_id: "example.apps.googleusercontent.com",
+            client_secret: clientSecret,
+          },
+        }),
+      }]),
+    Error,
+    "secret-structured-credential",
+  );
+  assertEquals(structuredError.message.includes(clientSecret), false);
+
+  assertEquals(
+    validateConnectedUploadFileSet([{
+      path: ".env.example",
+      content: "OPENAI_API_KEY=replace-me",
+    }]).totalBytes,
+    new TextEncoder().encode("OPENAI_API_KEY=replace-me").byteLength,
+  );
+  const placeholderConfig = JSON.stringify({
+    api_key: "your-api-key-here",
+    client_secret: "replace-me",
+    private_key: "example-placeholder",
+  });
+  assertEquals(
+    validateConnectedUploadFileSet([{
+      path: "oauth-config.example.json",
+      content: placeholderConfig,
+    }]).totalBytes,
+    new TextEncoder().encode(placeholderConfig).byteLength,
+  );
+});
+
 Deno.test("connected upload admission bounds and accounts retained staged versions", () => {
   assertEquals(MAX_CONNECTED_NON_LIVE_VERSIONS, 3);
   const live = {

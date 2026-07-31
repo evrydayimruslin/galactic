@@ -6,17 +6,18 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react";
 
 import {
-  authenticateLaunchWithPassword,
   buildLaunchSignInUrl,
   recordLaunchAuthDiagnostic,
+  requestLaunchMagicLink,
 } from "../lib/auth";
 import { Wordmark } from "./launch-chrome";
 
-type SignInModalView = "sign_in" | "sign_up" | "check_email";
+type SignInModalView = "email" | "check_email";
 type AuthenticationMethod = "email" | "google" | null;
 
 const SignInModalContext = createContext<() => void>(() => {});
@@ -29,32 +30,92 @@ export function SignInModalProvider(
   { children }: { children: ReactNode },
 ): ReactElement {
   const [open, setOpen] = useState(false);
-  const openModal = useCallback(() => setOpen(true), []);
-  const closeModal = useCallback(() => setOpen(false), []);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const openModal = useCallback(() => {
+    returnFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    setOpen(true);
+  }, []);
+  const closeModal = useCallback(() => {
+    setOpen(false);
+    window.requestAnimationFrame(() => returnFocusRef.current?.focus());
+  }, []);
 
   return (
     <SignInModalContext.Provider value={openModal}>
-      {children}
+      <div
+        aria-hidden={open ? "true" : undefined}
+        className="signin-app-content"
+        inert={open}
+      >
+        {children}
+      </div>
       {open ? <SignInModal onClose={closeModal} /> : null}
     </SignInModalContext.Provider>
   );
 }
 
-function SignInModal({ onClose }: { onClose: () => void }): ReactElement {
-  const [view, setView] = useState<SignInModalView>("sign_in");
-  const [authenticating, setAuthenticating] =
-    useState<AuthenticationMethod>(null);
+export function SignInModal(
+  { onClose }: { onClose: () => void },
+): ReactElement {
+  const [view, setView] = useState<SignInModalView>("email");
+  const [authenticating, setAuthenticating] = useState<AuthenticationMethod>(
+    null,
+  );
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const emailRef = useRef<HTMLInputElement>(null);
+  const confirmationHeadingRef = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const focusFrame = window.requestAnimationFrame(() => {
+      (emailRef.current ?? dialogRef.current)?.focus();
+    });
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab" || !dialogRef.current) return;
+      const focusable = focusableElements(dialogRef.current);
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialogRef.current.focus();
+        return;
+      }
+      const first = focusable[0]!;
+      const last = focusable[focusable.length - 1]!;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      window.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
   }, [onClose]);
+
+  useEffect(() => {
+    const focusFrame = window.requestAnimationFrame(() => {
+      if (view === "check_email") {
+        confirmationHeadingRef.current?.focus();
+      } else {
+        emailRef.current?.focus();
+      }
+    });
+    return () => window.cancelAnimationFrame(focusFrame);
+  }, [view]);
 
   const handleGoogle = () => {
     if (authenticating) return;
@@ -74,18 +135,9 @@ function SignInModal({ onClose }: { onClose: () => void }): ReactElement {
     setAuthenticating("email");
     setError("");
     try {
-      const response = await authenticateLaunchWithPassword(
-        view,
-        email.trim(),
-        password,
-      );
-      if (response.confirmation_required) {
-        setPassword("");
-        setView("check_email");
-        setAuthenticating(null);
-        return;
-      }
-      onClose();
+      await requestLaunchMagicLink(email.trim());
+      setView("check_email");
+      setAuthenticating(null);
     } catch (err) {
       setAuthenticating(null);
       setError(
@@ -96,13 +148,11 @@ function SignInModal({ onClose }: { onClose: () => void }): ReactElement {
     }
   };
 
-  const switchView = (next: "sign_in" | "sign_up") => {
-    setView(next);
-    setPassword("");
+  const editEmail = () => {
+    setView("email");
     setError("");
   };
 
-  const isSignUp = view === "sign_up";
   const isBusy = authenticating !== null;
 
   return (
@@ -114,14 +164,13 @@ function SignInModal({ onClose }: { onClose: () => void }): ReactElement {
       role="presentation"
     >
       <div
-        aria-label={view === "sign_up"
-          ? "Create account"
-          : view === "check_email"
-          ? "Check your inbox"
-          : "Sign in"}
+        aria-describedby="signin-description"
+        aria-labelledby="signin-heading"
         aria-modal="true"
         className="signin-modal"
+        ref={dialogRef}
         role="dialog"
+        tabIndex={-1}
       >
         <div className="signin-handle" aria-hidden="true">
           <span />
@@ -138,104 +187,51 @@ function SignInModal({ onClose }: { onClose: () => void }): ReactElement {
           <Wordmark />
           {view === "check_email"
             ? (
-              <div className="signin-confirmation">
+              <div
+                aria-atomic="true"
+                aria-live="polite"
+                className="signin-confirmation"
+                role="status"
+              >
                 <div className="signin-mail-icon" aria-hidden="true">
                   <MailIcon />
                 </div>
                 <div>
-                  <h2 className="signin-heading">Check your inbox</h2>
+                  <h2
+                    className="signin-heading"
+                    id="signin-heading"
+                    ref={confirmationHeadingRef}
+                    tabIndex={-1}
+                  >
+                    Check your inbox
+                  </h2>
+                  <p id="signin-description">
+                    We sent a one-time sign-in link to{" "}
+                    <strong>{email}</strong>. It expires in one hour.
+                  </p>
                   <p>
-                    We sent a confirmation link to <strong>{email}</strong>.
-                    Open it to finish creating your account.
+                    Open the email, then press the confirmation button to
+                    continue to Galactic.
                   </p>
                 </div>
                 <button
                   className="signin-secondary"
-                  onClick={() => switchView("sign_in")}
+                  onClick={editEmail}
                   type="button"
                 >
-                  Back to sign in
+                  Use another email
                 </button>
               </div>
             )
             : (
               <>
                 <div className="signin-intro">
-                  <h2 className="signin-heading">
-                    {isSignUp ? "Create your account" : "Welcome back"}
+                  <h2 className="signin-heading" id="signin-heading">
+                    Sign in to Galactic
                   </h2>
-                  <p>
-                    {isSignUp
-                      ? "Create an account to build and deploy Agents."
-                      : "Sign in to continue to Galactic."}
+                  <p id="signin-description">
+                    Continue with Google or receive a one-time link by email.
                   </p>
-                </div>
-
-                <form className="signin-form" onSubmit={handleEmail}>
-                  <label htmlFor="signin-email">Email</label>
-                  <input
-                    autoComplete="email"
-                    autoFocus
-                    disabled={isBusy}
-                    id="signin-email"
-                    inputMode="email"
-                    onChange={(event) => setEmail(event.target.value)}
-                    placeholder="you@example.com"
-                    required
-                    type="email"
-                    value={email}
-                  />
-                  <div className="signin-password-label">
-                    <label htmlFor="signin-password">Password</label>
-                  </div>
-                  <input
-                    autoComplete={isSignUp ? "new-password" : "current-password"}
-                    disabled={isBusy}
-                    id="signin-password"
-                    minLength={isSignUp ? 8 : undefined}
-                    onChange={(event) => setPassword(event.target.value)}
-                    placeholder={isSignUp
-                      ? "At least 8 characters"
-                      : "Enter your password"}
-                    required
-                    type="password"
-                    value={password}
-                  />
-                  {isSignUp
-                    ? (
-                      <p className="signin-password-help">
-                        Use 8+ characters with uppercase, lowercase, a number,
-                        and a symbol.
-                      </p>
-                    )
-                    : null}
-                  {error
-                    ? (
-                      <p className="signin-error" role="alert">
-                        {error}
-                      </p>
-                    )
-                    : null}
-                  <button
-                    className="signin-submit"
-                    disabled={isBusy}
-                    type="submit"
-                  >
-                    {authenticating === "email"
-                      ? (
-                        <>
-                          <span className="signin-spinner" aria-hidden="true" />
-                          {isSignUp ? "Creating account…" : "Signing in…"}
-                        </>
-                      )
-                      : isSignUp
-                      ? "Create account"
-                      : "Sign in"}
-                  </button>
-                </form>
-
-                <div className="signin-divider">
-                  <span>or</span>
                 </div>
 
                 <button
@@ -262,34 +258,67 @@ function SignInModal({ onClose }: { onClose: () => void }): ReactElement {
                     )}
                 </button>
 
-                <p className="signin-switch">
-                  {isSignUp
-                    ? "Already have an account?"
-                    : "New to Galactic?"}{" "}
-                  <button
-                    disabled={isBusy}
-                    onClick={() =>
-                      switchView(isSignUp ? "sign_in" : "sign_up")}
-                    type="button"
-                  >
-                    {isSignUp ? "Sign in" : "Create an account"}
-                  </button>
-                </p>
+                <div className="signin-divider">
+                  <span>or</span>
+                </div>
 
-                {isSignUp
-                  ? (
-                    <p className="signin-note">
-                      By creating an account, you agree to our{" "}
-                      <a href="/terms">Terms</a> and{" "}
-                      <a href="/privacy">Privacy Policy</a>.
-                    </p>
-                  )
-                  : null}
+                <form className="signin-form" onSubmit={handleEmail}>
+                  <label htmlFor="signin-email">Email</label>
+                  <input
+                    autoComplete="email"
+                    autoFocus
+                    disabled={isBusy}
+                    id="signin-email"
+                    inputMode="email"
+                    onChange={(event) => setEmail(event.target.value)}
+                    placeholder="you@example.com"
+                    ref={emailRef}
+                    required
+                    type="email"
+                    value={email}
+                  />
+                  {error
+                    ? (
+                      <p className="signin-error" role="alert">
+                        {error}
+                      </p>
+                    )
+                    : null}
+                  <button
+                    className="signin-submit"
+                    disabled={isBusy}
+                    type="submit"
+                  >
+                    {authenticating === "email"
+                      ? (
+                        <>
+                          <span className="signin-spinner" aria-hidden="true" />
+                          Sending link…
+                        </>
+                      )
+                      : "Email me a sign-in link"}
+                  </button>
+                </form>
+
+                <p className="signin-note">
+                  By continuing, you agree to our <a href="/terms">Terms</a> and
+                  {" "}
+                  <a href="/privacy">Privacy Policy</a>.
+                </p>
               </>
             )}
         </div>
       </div>
     </div>
+  );
+}
+
+function focusableElements(container: HTMLElement): HTMLElement[] {
+  return Array.from(container.querySelectorAll<HTMLElement>(
+    'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )).filter((element) =>
+    !element.hasAttribute("hidden") &&
+    element.getAttribute("aria-hidden") !== "true"
   );
 }
 

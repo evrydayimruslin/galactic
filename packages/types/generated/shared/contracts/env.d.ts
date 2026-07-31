@@ -35,6 +35,8 @@ export interface EnvCredential {
 export interface ResolvedCredential {
     value: string;
     credential?: EnvCredential;
+    /** True only when this value is excluded from the tenant isolate. */
+    vaulted?: boolean;
 }
 export declare const ENV_VAR_LIMITS: EnvVarLimits;
 export declare function validateEnvVarKey(key: string): {

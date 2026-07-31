@@ -5,7 +5,10 @@
 
 import { assert } from "https://deno.land/std@0.210.0/assert/assert.ts";
 import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
-import { evaluateOutbound, guardedFetch } from "../src/bindings/outbound-policy.ts";
+import {
+  evaluateOutbound,
+  guardedFetch,
+} from "../src/bindings/outbound-policy.ts";
 
 function allowed(url: string): boolean {
   return evaluateOutbound(url).allowed;
@@ -124,7 +127,11 @@ Deno.test("egress: IPv6 transition forms embedding a private IPv4 are blocked", 
       "https://[::ffff:0:7f00:1]", // SIIT/translatable 127.0.0.1
     ]
   ) {
-    assertEquals(allowed(url), false, `expected blocked IPv6 transition: ${url}`);
+    assertEquals(
+      allowed(url),
+      false,
+      `expected blocked IPv6 transition: ${url}`,
+    );
   }
 });
 
@@ -173,7 +180,9 @@ Deno.test("guardedFetch: a redirect to a private/metadata target is blocked at t
       calls++;
       // First (allowed) hop 302s to the cloud metadata endpoint.
       if (req.url === "https://api.example.com/start") {
-        return Promise.resolve(redirectTo("http://169.254.169.254/latest/meta-data/"));
+        return Promise.resolve(
+          redirectTo("http://169.254.169.254/latest/meta-data/"),
+        );
       }
       return Promise.resolve(new Response("SHOULD NOT REACH", { status: 200 }));
     },
@@ -243,8 +252,14 @@ Deno.test("egress allowlist: [] blocks everything, even public hosts (default-de
 
 Deno.test("egress allowlist: only declared hosts are reachable (exfil to attacker blocked)", () => {
   const allow = ["api.openai.com", "*.example.com", "imap.gmail.com:993"];
-  assertEquals(evaluateOutbound("https://api.openai.com/v1", allow).allowed, true);
-  assertEquals(evaluateOutbound("https://data.example.com/x", allow).allowed, true);
+  assertEquals(
+    evaluateOutbound("https://api.openai.com/v1", allow).allowed,
+    true,
+  );
+  assertEquals(
+    evaluateOutbound("https://data.example.com/x", allow).allowed,
+    true,
+  );
   // The exfiltration path — an undeclared attacker host — is now blocked.
   assertEquals(
     evaluateOutbound("https://attacker.tld/collect", allow).allowed,
@@ -271,7 +286,29 @@ Deno.test("egress allowlist: a port-bearing entry requires an exact port match",
   // "imap.gmail.com:993" is for the net.* socket path; a port-less fetch to the
   // same host does NOT match it.
   assertEquals(
-    evaluateOutbound("https://imap.gmail.com/x", ["imap.gmail.com:993"]).allowed,
+    evaluateOutbound("https://imap.gmail.com/x", ["imap.gmail.com:993"])
+      .allowed,
+    false,
+  );
+});
+
+Deno.test("egress allowlist: explicit default HTTP ports match normalized URLs", () => {
+  assertEquals(
+    evaluateOutbound("https://api.example.com/x", [
+      "api.example.com:443",
+    ]).allowed,
+    true,
+  );
+  assertEquals(
+    evaluateOutbound("http://api.example.com/x", [
+      "api.example.com:80",
+    ]).allowed,
+    true,
+  );
+  assertEquals(
+    evaluateOutbound("https://api.example.com/x", [
+      "api.example.com:80",
+    ]).allowed,
     false,
   );
 });

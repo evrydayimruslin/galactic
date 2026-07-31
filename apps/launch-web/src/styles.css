@@ -421,6 +421,10 @@ button {
 /* Sign-in modal (rendered by SignInModalProvider). Without these rules the
    modal renders as an unstyled in-flow block below the fold — i.e. clicking
    "Sign in" appears to do nothing. */
+.signin-app-content {
+  display: contents;
+}
+
 .signin-backdrop {
   position: fixed;
   inset: 0;
@@ -657,6 +661,43 @@ button {
   background: var(--ul-hover);
 }
 
+/* The passwordless account step sits inside the Porcelain/Obsidian product
+   surface. Keep its geometry and type aligned with the auth funnel rather
+   than falling back to the older rounded marketing dialog. */
+.nebula-public-page .signin-modal,
+.nebula-public-page .signin-form input,
+.nebula-public-page .signin-submit,
+.nebula-public-page .signin-google,
+.nebula-public-page .signin-secondary,
+.nebula-public-page .signin-close {
+  border-radius: 0;
+}
+
+.nebula-public-page .signin-modal {
+  border-color: var(--ul-border-strong);
+  background: var(--ul-bg);
+  box-shadow:
+    -6px -6px 14px rgba(255, 255, 255, .5),
+    12px 14px 34px rgba(93, 78, 60, .2);
+}
+
+.nebula-public-page .signin-heading {
+  color: var(--ul-text);
+  font-family: "Fraunces", Georgia, serif;
+}
+
+.nebula-public-page .signin-form label,
+.nebula-public-page .signin-note,
+.nebula-public-page .signin-secondary {
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.nebula-public-page .signin-form input,
+.nebula-public-page .signin-submit,
+.nebula-public-page .signin-google {
+  font-family: "Space Grotesk", sans-serif;
+}
+
 .signin-switch {
   margin: -4px 0 0;
   color: var(--ul-secondary);
@@ -727,6 +768,66 @@ button {
 .signin-spinner.dark {
   border-color: var(--ul-border-strong);
   border-top-color: var(--ul-text);
+}
+
+.auth-confirm-page {
+  display: grid;
+  min-height: 100vh;
+  padding: 24px;
+  background: var(--ul-bg);
+  place-items: center;
+}
+
+.auth-confirm-panel {
+  display: flex;
+  width: min(100%, 440px);
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+  padding: 34px;
+  border: 1px solid var(--ul-border);
+  border-radius: 18px;
+  background: var(--ul-surface);
+  box-shadow: var(--ul-shadow);
+  text-align: center;
+}
+
+.auth-confirm-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.auth-confirm-copy h1 {
+  margin: 0;
+  color: var(--ul-text);
+  font-family: var(--ul-font);
+  font-size: 26px;
+  font-weight: 500;
+  line-height: 1.15;
+}
+
+.auth-confirm-copy p:not(.section-label) {
+  margin: 0;
+  color: var(--ul-secondary);
+  font-family: var(--ul-sans);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.auth-confirm-panel .signin-submit {
+  width: 100%;
+}
+
+.auth-confirm-error {
+  margin: -5px 0 0;
+  text-align: center;
+}
+
+.auth-confirm-home {
+  color: var(--ul-secondary);
+  font-family: var(--ul-sans);
+  font-size: 13px;
+  text-underline-offset: 3px;
 }
 
 @keyframes signin-spin {

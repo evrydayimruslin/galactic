@@ -1,10 +1,4 @@
-import {
-  type ReactElement,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { type ReactElement, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   LaunchAgentHomeAction,
@@ -17,10 +11,7 @@ import type {
   LaunchAgentHomeResponse,
   LaunchAgentHomeRun,
 } from "../../../../shared/contracts/launch.ts";
-import {
-  launchApi,
-  LaunchApiRequestError,
-} from "../lib/api";
+import { launchApi, LaunchApiRequestError } from "../lib/api";
 import { Button, Card, Mono, Pill } from "./launch-chrome";
 
 interface AgentHomeOverviewProps {
@@ -100,7 +91,9 @@ function responsibilityDraft(
   };
 }
 
-function budgetDraft(budget: LaunchAgentHomeBudget | null | undefined): BudgetDraft {
+function budgetDraft(
+  budget: LaunchAgentHomeBudget | null | undefined,
+): BudgetDraft {
   return {
     perRun: budget ? String(budget.ceilings.perRun) : "",
     daily: budget ? String(budget.ceilings.daily) : "",
@@ -165,7 +158,9 @@ function runTone(status: LaunchAgentHomeRun["status"]) {
 }
 
 function formatNumber(value: number): string {
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 }).format(value);
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 }).format(
+    value,
+  );
 }
 
 function formatDuration(value: number | null): string {
@@ -192,8 +187,12 @@ function relativeTime(value: string | null): string {
   const delta = Math.round((timestamp - Date.now()) / 1000);
   const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
   if (Math.abs(delta) < 60) return formatter.format(delta, "second");
-  if (Math.abs(delta) < 3600) return formatter.format(Math.round(delta / 60), "minute");
-  if (Math.abs(delta) < 86400) return formatter.format(Math.round(delta / 3600), "hour");
+  if (Math.abs(delta) < 3600) {
+    return formatter.format(Math.round(delta / 60), "minute");
+  }
+  if (Math.abs(delta) < 86400) {
+    return formatter.format(Math.round(delta / 3600), "hour");
+  }
   return formatter.format(Math.round(delta / 86400), "day");
 }
 
@@ -202,7 +201,7 @@ function TimeValue({ value }: { value: string | null }): ReactElement {
   return (
     <time dateTime={value} title={absoluteTime(value)}>
       {relativeTime(value)}
-      <span className="sr-only"> ({absoluteTime(value)})</span>
+      <span className="sr-only">({absoluteTime(value)})</span>
     </time>
   );
 }
@@ -229,17 +228,21 @@ function isStaleRevision(err: unknown): boolean {
     (code === "stale_revision" || code === "revision_conflict" ||
       code === "agent_home_revision_conflict" ||
       err.status === 412 ||
-      (err.status === 409 && /revision|changed elsewhere|stale/iu.test(err.message)));
+      (err.status === 409 &&
+        /revision|changed elsewhere|stale/iu.test(err.message)));
 }
 
 function currentHomeFromError(err: unknown): LaunchAgentHomeResponse | null {
-  if (!(err instanceof LaunchApiRequestError) || !err.responseBody ||
-    typeof err.responseBody !== "object") return null;
+  if (
+    !(err instanceof LaunchApiRequestError) || !err.responseBody ||
+    typeof err.responseBody !== "object"
+  ) return null;
   const current = (err.responseBody as { current?: unknown }).current;
   if (!current || typeof current !== "object") return null;
   const candidate = current as Partial<LaunchAgentHomeResponse>;
   return typeof candidate.revision === "string" &&
-      typeof candidate.generatedAt === "string" && candidate.agent !== undefined &&
+      typeof candidate.generatedAt === "string" &&
+      candidate.agent !== undefined &&
       candidate.state !== undefined
     ? current as LaunchAgentHomeResponse
     : null;
@@ -264,8 +267,10 @@ function retainActionIdempotencyKey(err: unknown): boolean {
 function recoverableActionFromError(
   err: unknown,
 ): Omit<LaunchAgentHomeActionRequest, "expectedRevision"> | null {
-  if (!(err instanceof LaunchApiRequestError) || !err.responseBody ||
-    typeof err.responseBody !== "object") return null;
+  if (
+    !(err instanceof LaunchApiRequestError) || !err.responseBody ||
+    typeof err.responseBody !== "object"
+  ) return null;
   const recovery = (err.responseBody as { recovery?: unknown }).recovery;
   if (!recovery || typeof recovery !== "object") return null;
   const candidate = recovery as {
@@ -294,13 +299,18 @@ function recoverableActionFromError(
     version?: unknown;
   };
   const capabilityIds = Array.isArray(payload.capabilityIds) &&
-      payload.capabilityIds.every((id) => typeof id === "string" && id.length > 0)
+      payload.capabilityIds.every((id) =>
+        typeof id === "string" && id.length > 0
+      )
     ? payload.capabilityIds as string[]
     : [];
-  const version = typeof payload.version === "string" && payload.version.length > 0
-    ? payload.version
-    : null;
-  if (action === "approve_capabilities" && capabilityIds.length === 0) return null;
+  const version =
+    typeof payload.version === "string" && payload.version.length > 0
+      ? payload.version
+      : null;
+  if (action === "approve_capabilities" && capabilityIds.length === 0) {
+    return null;
+  }
   if (action === "promote_candidate" && !version) return null;
   return {
     action,
@@ -345,17 +355,23 @@ export function AgentHomeOverview({
     responsibilityDraft(home ?? null)
   );
   const [budget, setBudget] = useState(() => budgetDraft(home?.budget));
-  const [settingValues, setSettingValues] = useState<Record<string, string>>({});
-  const [removeConfirmation, setRemoveConfirmation] = useState<string | null>(null);
+  const [settingValues, setSettingValues] = useState<Record<string, string>>(
+    {},
+  );
+  const [removeConfirmation, setRemoveConfirmation] = useState<string | null>(
+    null,
+  );
   const [promotionConfirmation, setPromotionConfirmation] = useState(false);
   const [busy, setBusy] = useState<MutationKey | null>(null);
   const [emergencyPausing, setEmergencyPausing] = useState(false);
   const mutationInFlightRef = useRef(false);
   const actionAttemptsRef = useRef(new Map<string, string>());
-  const [notice, setNotice] = useState<{
-    tone: "success" | "error" | "conflict";
-    message: string;
-  } | null>(null);
+  const [notice, setNotice] = useState<
+    {
+      tone: "success" | "error" | "conflict";
+      message: string;
+    } | null
+  >(null);
   const [awaitingConflictRefresh, setAwaitingConflictRefresh] = useState(false);
 
   // Adopt a revalidated snapshot without destroying a draft the owner was
@@ -452,7 +468,9 @@ export function AgentHomeOverview({
     options: { reset?: ResetSection; clearedSetting?: string; success: string },
   ) => {
     const current = snapshotRef.current;
-    if (!current || mutationInFlightRef.current || awaitingConflictRefresh) return;
+    if (!current || mutationInFlightRef.current || awaitingConflictRefresh) {
+      return;
+    }
     mutationInFlightRef.current = true;
     setBusy(key);
     setNotice(null);
@@ -525,7 +543,9 @@ export function AgentHomeOverview({
             )
             : null}
           <div className="agent-home-actions">
-            <Button onClick={reload} size="sm" variant="secondary">Retry</Button>
+            <Button onClick={reload} size="sm" variant="secondary">
+              Retry
+            </Button>
             <Button
               disabled={emergencyPausing}
               onClick={() => void emergencyPause()}
@@ -618,11 +638,13 @@ export function AgentHomeOverview({
     const intervalSeconds = minutes * 60;
     if (
       cadence?.kind === "interval" &&
-      (!Number.isFinite(minutes) || minutes < 1 || !Number.isSafeInteger(intervalSeconds))
+      (!Number.isFinite(minutes) || minutes < 1 ||
+        !Number.isSafeInteger(intervalSeconds))
     ) {
       setNotice({
         tone: "error",
-        message: "Cadence must be a whole number of seconds and at least one minute.",
+        message:
+          "Cadence must be a whole number of seconds and at least one minute.",
       });
       return;
     }
@@ -647,7 +669,8 @@ export function AgentHomeOverview({
     };
     if (
       Object.values(values).some((value) => !Number.isFinite(value)) ||
-      values.maxLightPerRun < 0 || values.maxLightPerDay < values.maxLightPerRun ||
+      values.maxLightPerRun < 0 ||
+      values.maxLightPerDay < values.maxLightPerRun ||
       values.maxLightPerMonth < values.maxLightPerDay ||
       !Number.isSafeInteger(values.maxCallsPerRun) || values.maxCallsPerRun < 1
     ) {
@@ -669,12 +692,18 @@ export function AgentHomeOverview({
     );
   };
 
-  const updateSetting = (requirement: LaunchAgentHomeRequirement, remove = false) => {
+  const updateSetting = (
+    requirement: LaunchAgentHomeRequirement,
+    remove = false,
+  ) => {
     const key = requirement.settingKey;
     if (!key) return;
     const value = settingValues[key] ?? "";
     if (!remove && value.length === 0) {
-      setNotice({ tone: "error", message: `Enter a value for ${requirement.label}.` });
+      setNotice({
+        tone: "error",
+        message: `Enter a value for ${requirement.label}.`,
+      });
       return;
     }
     void mutate(
@@ -688,7 +717,9 @@ export function AgentHomeOverview({
         clearedSetting: key,
         success: remove
           ? `${requirement.label} removed.`
-          : `${requirement.label} ${requirement.configured ? "replaced" : "connected"}.`,
+          : `${requirement.label} ${
+            requirement.configured ? "replaced" : "connected"
+          }.`,
       },
     );
   };
@@ -700,7 +731,8 @@ export function AgentHomeOverview({
     if (unsavedRoutine && action !== "promote_candidate") {
       setNotice({
         tone: "error",
-        message: "Save mission, cadence, and budget changes before changing runtime state.",
+        message:
+          "Save mission, cadence, and budget changes before changing runtime state.",
       });
       return;
     }
@@ -816,11 +848,12 @@ export function AgentHomeOverview({
               <Pill tone={lifecycleTone(snapshot.state.lifecycle)}>
                 Lifecycle: {statusLabel(snapshot.state.lifecycle)}
               </Pill>
-              <Pill tone={snapshot.state.execution === "running"
-                ? "green"
-                : snapshot.state.execution === "queued"
-                ? "amber"
-                : "default"}
+              <Pill
+                tone={snapshot.state.execution === "running"
+                  ? "green"
+                  : snapshot.state.execution === "queued"
+                  ? "amber"
+                  : "default"}
               >
                 Execution: {snapshot.state.execution}
               </Pill>
@@ -834,7 +867,8 @@ export function AgentHomeOverview({
               ? (
                 <Button
                   disabled={mutationDisabled || unsavedRoutine}
-                  onClick={() => runAction("activate", { success: "Agent activated." })}
+                  onClick={() =>
+                    runAction("activate", { success: "Agent activated." })}
                   size="sm"
                 >
                   {busy === "action:activate" ? "Activating…" : "Activate"}
@@ -842,7 +876,8 @@ export function AgentHomeOverview({
               )
               : null}
             <Button
-              disabled={!snapshot.actions.canRunNow || mutationDisabled || unsavedRoutine}
+              disabled={!snapshot.actions.canRunNow || mutationDisabled ||
+                unsavedRoutine}
               onClick={() => runAction("run_now", { success: "Run queued." })}
               size="sm"
               variant="secondary"
@@ -860,14 +895,35 @@ export function AgentHomeOverview({
           </div>
         </div>
         <dl className="agent-home-timing">
-          <div><dt>Next wake</dt><dd><TimeValue value={snapshot.state.nextRunAt} /></dd></div>
-          <div><dt>Last wake</dt><dd><TimeValue value={snapshot.state.lastRunAt} /></dd></div>
-          <div><dt>Last success</dt><dd><TimeValue value={snapshot.state.lastSuccessAt} /></dd></div>
-          <div><dt>Failures</dt><dd>{snapshot.state.failureCount}</dd></div>
+          <div>
+            <dt>Next wake</dt>
+            <dd>
+              <TimeValue value={snapshot.state.nextRunAt} />
+            </dd>
+          </div>
+          <div>
+            <dt>Last wake</dt>
+            <dd>
+              <TimeValue value={snapshot.state.lastRunAt} />
+            </dd>
+          </div>
+          <div>
+            <dt>Last success</dt>
+            <dd>
+              <TimeValue value={snapshot.state.lastSuccessAt} />
+            </dd>
+          </div>
+          <div>
+            <dt>Failures</dt>
+            <dd>{snapshot.state.failureCount}</dd>
+          </div>
         </dl>
         {snapshot.state.blockers.length > 0
           ? (
-            <section className="agent-home-blockers" aria-labelledby="agent-home-blockers-title">
+            <section
+              className="agent-home-blockers"
+              aria-labelledby="agent-home-blockers-title"
+            >
               <h3 id="agent-home-blockers-title">Setup blockers</h3>
               {snapshot.state.blockers.map((blocker) => (
                 <div key={`${blocker.code}:${blocker.message}`}>
@@ -879,7 +935,9 @@ export function AgentHomeOverview({
           )
           : (
             <p className="agent-home-ready-note">
-              {snapshot.setup.ready ? "Setup complete." : "No runtime blocker reported."}
+              {snapshot.setup.ready
+                ? "Setup complete."
+                : "No runtime blocker reported."}
             </p>
           )}
       </Card>
@@ -900,7 +958,9 @@ export function AgentHomeOverview({
         <div className="agent-home-card-head">
           <div>
             <p className="section-label">Identity</p>
-            <p className="muted-note">The package identity shown to you and your connected agents.</p>
+            <p className="muted-note">
+              The package identity shown to you and your connected agents.
+            </p>
           </div>
           <Pill tone="green">Private · owner only</Pill>
         </div>
@@ -909,7 +969,11 @@ export function AgentHomeOverview({
             <span>Name</span>
             <input
               disabled={!snapshot.actions.canEditIdentity || mutationDisabled}
-              onChange={(event) => setIdentity((current) => ({ ...current, name: event.target.value }))}
+              onChange={(event) =>
+                setIdentity((current) => ({
+                  ...current,
+                  name: event.target.value,
+                }))}
               value={identity.name}
             />
           </label>
@@ -918,7 +982,10 @@ export function AgentHomeOverview({
             <textarea
               disabled={!snapshot.actions.canEditIdentity || mutationDisabled}
               onChange={(event) =>
-                setIdentity((current) => ({ ...current, description: event.target.value }))}
+                setIdentity((current) => ({
+                  ...current,
+                  description: event.target.value,
+                }))}
               rows={3}
               value={identity.description}
             />
@@ -926,7 +993,8 @@ export function AgentHomeOverview({
         </div>
         <div className="agent-home-save-row">
           <Button
-            disabled={!identityDirty || !snapshot.actions.canEditIdentity || mutationDisabled}
+            disabled={!identityDirty || !snapshot.actions.canEditIdentity ||
+              mutationDisabled}
             onClick={saveIdentity}
             size="sm"
           >
@@ -939,7 +1007,9 @@ export function AgentHomeOverview({
         <div className="agent-home-card-head">
           <div>
             <p className="section-label">Ongoing responsibility</p>
-            <p className="muted-note">What this Agent owns, when it wakes, and where it reports.</p>
+            <p className="muted-note">
+              What this Agent owns, when it wakes, and where it reports.
+            </p>
           </div>
           {snapshot.responsibility.cadence
             ? <Pill>{snapshot.responsibility.cadence.label}</Pill>
@@ -951,9 +1021,13 @@ export function AgentHomeOverview({
               <label className="agent-home-field">
                 <span>Mission</span>
                 <textarea
-                  disabled={!snapshot.actions.canEditRoutine || mutationDisabled}
+                  disabled={!snapshot.actions.canEditRoutine ||
+                    mutationDisabled}
                   onChange={(event) =>
-                    setResponsibility((current) => ({ ...current, mission: event.target.value }))}
+                    setResponsibility((current) => ({
+                      ...current,
+                      mission: event.target.value,
+                    }))}
                   rows={4}
                   value={responsibility.mission}
                 />
@@ -964,7 +1038,8 @@ export function AgentHomeOverview({
                     <label className="agent-home-field">
                       <span>Cadence (minutes)</span>
                       <input
-                        disabled={!snapshot.actions.canEditRoutine || mutationDisabled}
+                        disabled={!snapshot.actions.canEditRoutine ||
+                          mutationDisabled}
                         min="1"
                         onChange={(event) =>
                           setResponsibility((current) => ({
@@ -980,31 +1055,40 @@ export function AgentHomeOverview({
                   : (
                     <div className="agent-home-readonly-field">
                       <span>Cron cadence</span>
-                      <strong>{snapshot.responsibility.cadence.expression}</strong>
+                      <strong>
+                        {snapshot.responsibility.cadence.expression}
+                      </strong>
                       <small>{snapshot.responsibility.cadence.timezone}</small>
                     </div>
                   )}
                 <div className="agent-home-readonly-field">
                   <span>Reporting destination</span>
                   <strong>{snapshot.responsibility.reporting.label}</strong>
-                  <small>Milestones, anomalies, and pause notices stay in Galactic.</small>
+                  <small>
+                    Milestones, anomalies, and pause notices stay in Galactic.
+                  </small>
                 </div>
               </div>
               <div className="agent-home-save-row">
                 <Button
-                  disabled={!responsibilityDirty || !snapshot.actions.canEditRoutine || mutationDisabled}
+                  disabled={!responsibilityDirty ||
+                    !snapshot.actions.canEditRoutine || mutationDisabled}
                   onClick={saveResponsibility}
                   size="sm"
                 >
-                  {busy === "responsibility" ? "Saving…" : "Save responsibility"}
+                  {busy === "responsibility"
+                    ? "Saving…"
+                    : "Save responsibility"}
                 </Button>
               </div>
             </>
           )
           : (
             <p className="agent-home-empty-copy">
-              Ask your connected coding agent to scaffold this private Agent with
-              <Mono> gx.download(full_time: true)</Mono>, test it, and upload a paused proposal for review.
+              Ask your connected coding agent to scaffold this private Agent
+              with
+              <Mono>gx.download(full_time: true)</Mono>, test it, and upload a
+              paused proposal for review.
             </p>
           )}
       </Card>
@@ -1013,26 +1097,39 @@ export function AgentHomeOverview({
         <div className="agent-home-card-head">
           <div>
             <p className="section-label">Data sources &amp; secrets</p>
-            <p className="muted-note">Values are encrypted, write-only, and never returned to this page.</p>
+            <p className="muted-note">
+              Values are encrypted, write-only, and never returned to this page.
+            </p>
           </div>
-          <Pill tone={settings.some((item) => item.blocking) ? "amber" : "green"}>
-            {settings.some((item) => item.blocking) ? "Setup required" : "Ready"}
+          <Pill
+            tone={settings.some((item) => item.blocking) ? "amber" : "green"}
+          >
+            {settings.some((item) => item.blocking)
+              ? "Setup required"
+              : "Ready"}
           </Pill>
         </div>
         {settings.length === 0
-          ? <p className="agent-home-empty-copy">This Agent declares no owner-provided data or secrets.</p>
+          ? (
+            <p className="agent-home-empty-copy">
+              This Agent declares no owner-provided data or secrets.
+            </p>
+          )
           : (
             <div className="agent-home-setting-list">
               {settings.map((requirement) => {
                 const key = requirement.settingKey!;
-                const inputId = `agent-home-setting-${requirement.id.replace(/[^a-z0-9_-]/giu, "-")}`;
+                const inputId = `agent-home-setting-${
+                  requirement.id.replace(/[^a-z0-9_-]/giu, "-")
+                }`;
                 const descriptionId = `${inputId}-description`;
                 const confirmingRemove = removeConfirmation === key;
                 return (
                   <div className="agent-home-setting-row" key={requirement.id}>
                     <div className="agent-home-setting-copy">
                       <label htmlFor={inputId}>
-                        {requirement.label}{requirement.required ? " *" : ""}
+                        {requirement.label}
+                        {requirement.required ? " *" : ""}
                       </label>
                       <p id={descriptionId}>
                         {requirement.description || requirement.help ||
@@ -1041,12 +1138,22 @@ export function AgentHomeOverview({
                             : "Owner-provided runtime setting.")}
                       </p>
                       {requirement.destination
-                        ? <small>Only sent to <Mono>{requirement.destination}</Mono>.</small>
+                        ? (
+                          <small>
+                            Only sent to <Mono>{requirement.destination}</Mono>.
+                          </small>
+                        )
                         : null}
                     </div>
                     <div className="agent-home-setting-control">
                       <div className="agent-home-setting-status">
-                        <Pill tone={requirement.configured ? "green" : requirement.blocking ? "amber" : "default"}>
+                        <Pill
+                          tone={requirement.configured
+                            ? "green"
+                            : requirement.blocking
+                            ? "amber"
+                            : "default"}
+                        >
                           {requirement.configured ? "Configured" : "Missing"}
                         </Pill>
                         <span>
@@ -1058,8 +1165,11 @@ export function AgentHomeOverview({
                       </div>
                       <input
                         aria-describedby={descriptionId}
-                        autoComplete={requirement.secret ? "new-password" : "off"}
-                        disabled={!snapshot.actions.canManageSettings || mutationDisabled}
+                        autoComplete={requirement.secret
+                          ? "new-password"
+                          : "off"}
+                        disabled={!snapshot.actions.canManageSettings ||
+                          mutationDisabled}
                         id={inputId}
                         onChange={(event) =>
                           setSettingValues((current) => ({
@@ -1078,7 +1188,8 @@ export function AgentHomeOverview({
                           )
                           ? (
                             <Button
-                              disabled={!snapshot.actions.canManageSettings || mutationDisabled ||
+                              disabled={!snapshot.actions.canManageSettings ||
+                                mutationDisabled ||
                                 (settingValues[key] ?? "").length === 0}
                               onClick={() => updateSetting(requirement)}
                               size="sm"
@@ -1091,17 +1202,21 @@ export function AgentHomeOverview({
                             </Button>
                           )
                           : null}
-                        {requirement.configured && requirement.actions.includes("remove")
+                        {requirement.configured &&
+                            requirement.actions.includes("remove")
                           ? confirmingRemove
                             ? (
                               <>
                                 <Button
                                   disabled={mutationDisabled}
-                                  onClick={() => updateSetting(requirement, true)}
+                                  onClick={() =>
+                                    updateSetting(requirement, true)}
                                   size="sm"
                                   variant="secondary"
                                 >
-                                  {busy === `remove:${key}` ? "Removing…" : "Confirm removal"}
+                                  {busy === `remove:${key}`
+                                    ? "Removing…"
+                                    : "Confirm removal"}
                                 </Button>
                                 <button
                                   className="agent-home-text-button"
@@ -1137,12 +1252,19 @@ export function AgentHomeOverview({
         <div className="agent-home-card-head">
           <div>
             <p className="section-label">Allowed actions</p>
-            <p className="muted-note">The complete requested, approved, and effective authority envelope.</p>
+            <p className="muted-note">
+              The complete requested, approved, and effective authority
+              envelope.
+            </p>
           </div>
           <Pill>{snapshot.authority.items.length} items</Pill>
         </div>
         {groupedAuthority.length === 0
-          ? <p className="agent-home-empty-copy">This Agent currently requests no runtime authority.</p>
+          ? (
+            <p className="agent-home-empty-copy">
+              This Agent currently requests no runtime authority.
+            </p>
+          )
           : (
             <div className="agent-home-authority-groups">
               {groupedAuthority.map(({ kind, items }) => (
@@ -1171,31 +1293,46 @@ export function AgentHomeOverview({
               <div>
                 <p className="section-label">Shared account capacity</p>
                 <p className="muted-note">
-                  Every active Agent on this account contributes to the same weekly limit.
+                  Every active Agent on this account contributes to the same
+                  weekly limit.
                 </p>
               </div>
-              <Pill tone={snapshot.capacity.state === "waiting"
-                ? "amber"
-                : snapshot.capacity.state === "low"
-                ? "default"
-                : "green"}
+              <Pill
+                tone={snapshot.capacity.state === "waiting"
+                  ? "amber"
+                  : snapshot.capacity.state === "low"
+                  ? "default"
+                  : "green"}
               >
                 {snapshot.capacity.state}
               </Pill>
             </div>
             <div className="agent-home-budget-table-wrap">
               <table className="agent-home-budget-table">
-                <caption className="sr-only">Shared account capacity windows</caption>
-                <thead><tr><th scope="col">Window</th><th scope="col">State</th><th scope="col">Resets</th></tr></thead>
+                <caption className="sr-only">
+                  Shared account capacity windows
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Window</th>
+                    <th scope="col">State</th>
+                    <th scope="col">Resets</th>
+                  </tr>
+                </thead>
                 <tbody>
-                  <tr><th scope="row">Weekly</th><td>{snapshot.capacity.weekly.state}</td><td>{absoluteTime(snapshot.capacity.weekly.resetsAt)}</td></tr>
+                  <tr>
+                    <th scope="row">Weekly</th>
+                    <td>{snapshot.capacity.weekly.state}</td>
+                    <td>{absoluteTime(snapshot.capacity.weekly.resetsAt)}</td>
+                  </tr>
                 </tbody>
               </table>
             </div>
             {snapshot.capacity.state === "waiting"
               ? (
                 <p className="muted-note" role="status">
-                  This Agent remains active. Its missed wakes are coalesced and resume automatically at {absoluteTime(
+                  This Agent remains active. Its missed wakes are coalesced and
+                  resume automatically at {absoluteTime(
                     snapshot.capacity.nextEligibleAt,
                   )}.
                 </p>
@@ -1209,7 +1346,9 @@ export function AgentHomeOverview({
         <div className="agent-home-card-head">
           <div>
             <p className="section-label">Run limits</p>
-            <p className="muted-note">Capacity limits apply to scheduled and manual runs.</p>
+            <p className="muted-note">
+              Capacity limits apply to scheduled and manual runs.
+            </p>
           </div>
           <Pill>Usage</Pill>
         </div>
@@ -1219,12 +1358,54 @@ export function AgentHomeOverview({
               <div className="agent-home-budget-table-wrap">
                 <table className="agent-home-budget-table">
                   <caption className="sr-only">Agent run limits</caption>
-                  <thead><tr><th scope="col">Window</th><th scope="col">State</th><th scope="col">Limit</th></tr></thead>
+                  <thead>
+                    <tr>
+                      <th scope="col">Window</th>
+                      <th scope="col">State</th>
+                      <th scope="col">Limit</th>
+                    </tr>
+                  </thead>
                   <tbody>
-                    <tr><th scope="row">Last run</th><td>Recorded</td><td>{formatNumber(snapshot.budget.ceilings.perRun)}</td></tr>
-                    <tr><th scope="row" title={`Window starts ${absoluteTime(snapshot.budget.usage.dayStartedAt)}`}>Today (UTC)</th><td>Within limit</td><td>{formatNumber(snapshot.budget.ceilings.daily)}</td></tr>
-                    <tr><th scope="row" title={`Window starts ${absoluteTime(snapshot.budget.usage.monthStartedAt)}`}>This month (UTC)</th><td>Within limit</td><td>{formatNumber(snapshot.budget.ceilings.monthly)}</td></tr>
-                    <tr><th scope="row">Calls / last run</th><td>{formatNumber(snapshot.budget.usage.lastRunCalls)} calls</td><td>{formatNumber(snapshot.budget.ceilings.callsPerRun)} calls</td></tr>
+                    <tr>
+                      <th scope="row">Last run</th>
+                      <td>Recorded</td>
+                      <td>{formatNumber(snapshot.budget.ceilings.perRun)}</td>
+                    </tr>
+                    <tr>
+                      <th
+                        scope="row"
+                        title={`Window starts ${
+                          absoluteTime(snapshot.budget.usage.dayStartedAt)
+                        }`}
+                      >
+                        Today (UTC)
+                      </th>
+                      <td>Within limit</td>
+                      <td>{formatNumber(snapshot.budget.ceilings.daily)}</td>
+                    </tr>
+                    <tr>
+                      <th
+                        scope="row"
+                        title={`Window starts ${
+                          absoluteTime(snapshot.budget.usage.monthStartedAt)
+                        }`}
+                      >
+                        This month (UTC)
+                      </th>
+                      <td>Within limit</td>
+                      <td>{formatNumber(snapshot.budget.ceilings.monthly)}</td>
+                    </tr>
+                    <tr>
+                      <th scope="row">Calls / last run</th>
+                      <td>
+                        {formatNumber(snapshot.budget.usage.lastRunCalls)} calls
+                      </td>
+                      <td>
+                        {formatNumber(snapshot.budget.ceilings.callsPerRun)}
+                        {" "}
+                        calls
+                      </td>
+                    </tr>
                   </tbody>
                 </table>
               </div>
@@ -1238,10 +1419,14 @@ export function AgentHomeOverview({
                   <label className="agent-home-field" key={key}>
                     <span>{label}</span>
                     <input
-                      disabled={!snapshot.actions.canEditRoutine || mutationDisabled}
+                      disabled={!snapshot.actions.canEditRoutine ||
+                        mutationDisabled}
                       min={integer ? "1" : "0"}
                       onChange={(event) =>
-                        setBudget((current) => ({ ...current, [key]: event.target.value }))}
+                        setBudget((current) => ({
+                          ...current,
+                          [key]: event.target.value,
+                        }))}
                       step={integer ? "1" : "any"}
                       type="number"
                       value={budget[key]}
@@ -1251,7 +1436,8 @@ export function AgentHomeOverview({
               </div>
               <div className="agent-home-save-row">
                 <Button
-                  disabled={!budgetDirty || !snapshot.actions.canEditRoutine || mutationDisabled}
+                  disabled={!budgetDirty || !snapshot.actions.canEditRoutine ||
+                    mutationDisabled}
                   onClick={saveBudget}
                   size="sm"
                 >
@@ -1260,14 +1446,20 @@ export function AgentHomeOverview({
               </div>
             </>
           )
-          : <p className="agent-home-empty-copy">Budget controls appear when a routine proposal exists.</p>}
+          : (
+            <p className="agent-home-empty-copy">
+              Budget controls appear when a routine proposal exists.
+            </p>
+          )}
       </Card>
 
       <Card className="agent-home-release-card">
         <div className="agent-home-card-head">
           <div>
             <p className="section-label">Running code</p>
-            <p className="muted-note">The deployed version and latest exact-tested candidate.</p>
+            <p className="muted-note">
+              The deployed version and latest exact-tested candidate.
+            </p>
           </div>
           {snapshot.release.candidateCount > 1
             ? <Pill>{snapshot.release.candidateCount} staged</Pill>
@@ -1283,7 +1475,8 @@ export function AgentHomeOverview({
                   fingerprint={snapshot.release.live.sourceFingerprint}
                   integrity={snapshot.release.live.integrity}
                   label={snapshot.release.live.version}
-                  timestamp={snapshot.release.live.promotedAt || snapshot.release.live.uploadedAt}
+                  timestamp={snapshot.release.live.promotedAt ||
+                    snapshot.release.live.uploadedAt}
                   timestampLabel="Promoted"
                   versionLabel="Declared version"
                 />
@@ -1302,24 +1495,42 @@ export function AgentHomeOverview({
                     timestampLabel={candidate.testedAt ? "Tested" : "Uploaded"}
                     versionLabel="Candidate version"
                   />
-                  <Pill tone={candidate.reviewStatus === "ready"
-                    ? "green"
-                    : candidate.reviewStatus === "owner_review_required"
-                    ? "amber"
-                    : "red"}
+                  <Pill
+                    tone={candidate.reviewStatus === "ready"
+                      ? "green"
+                      : candidate.reviewStatus === "owner_review_required"
+                      ? "amber"
+                      : "red"}
                   >
                     {statusLabel(candidate.reviewStatus)}
                   </Pill>
+                  {candidate.qualification
+                    ? (
+                      <p className="muted-note">
+                        {candidate.qualification.summary}.{" "}
+                        {candidate.qualification.effects.exercised} of{" "}
+                        {candidate.qualification.effects.declared}{" "}
+                        declared authority effects exercised;{" "}
+                        {candidate.qualification.effects.untested === 1
+                          ? "1 remains"
+                          : `${candidate.qualification.effects.untested} remain`}
+                        {" "}
+                        untested. Basic conformance uses local fixtures; live
+                        external services were not exercised.
+                      </p>
+                    )
+                    : null}
                   {candidate.authorityChanges.length > 0
                     ? (
                       <ul className="agent-home-release-changes">
                         {candidate.authorityChanges.map((change) => (
                           <li key={`${change.change}:${change.path}`}>
-                            <Pill tone={change.change === "added"
-                              ? "amber"
-                              : change.change === "removed"
-                              ? "green"
-                              : "default"}
+                            <Pill
+                              tone={change.change === "added"
+                                ? "amber"
+                                : change.change === "removed"
+                                ? "green"
+                                : "default"}
                             >
                               {change.change}
                             </Pill>
@@ -1328,42 +1539,64 @@ export function AgentHomeOverview({
                         ))}
                       </ul>
                     )
-                    : <p className="muted-note">No authority change from live.</p>}
+                    : (
+                      <p className="muted-note">
+                        No authority change from live.
+                      </p>
+                    )}
                   {promotionConfirmation
                     ? (
-                      <div className="agent-home-promotion-confirm" role="group" aria-label="Confirm promotion">
-                        <p>Promote this exact tested version and make it live?</p>
+                      <div
+                        className="agent-home-promotion-confirm"
+                        role="group"
+                        aria-label="Confirm deployment"
+                      >
+                        <p>
+                          Deploy this exact tested version privately? Setup and
+                          ongoing behavior stay paused until you activate them.
+                        </p>
                         <div>
                           <Button
-                            disabled={!candidate.canPromote || !snapshot.actions.canPromoteCandidate || mutationDisabled}
+                            disabled={!candidate.canPromote ||
+                              !snapshot.actions.canPromoteCandidate ||
+                              mutationDisabled}
                             onClick={() =>
                               runAction("promote_candidate", {
                                 version: candidate.version,
-                                success: `Version ${candidate.version} promoted.`,
+                                success:
+                                  `Version ${candidate.version} deployed privately for setup.`,
                               })}
                             size="sm"
                           >
-                            {busy === "action:promote_candidate" ? "Promoting…" : "Confirm promotion"}
+                            {busy === "action:promote_candidate"
+                              ? "Deploying…"
+                              : "Confirm deployment"}
                           </Button>
                           <button
                             className="agent-home-text-button"
                             disabled={mutationDisabled}
                             onClick={() => setPromotionConfirmation(false)}
                             type="button"
-                          >Cancel</button>
+                          >
+                            Cancel
+                          </button>
                         </div>
                       </div>
                     )
                     : (
                       <Button
-                        disabled={!candidate.canPromote || !snapshot.actions.canPromoteCandidate || mutationDisabled}
+                        disabled={!candidate.canPromote ||
+                          !snapshot.actions.canPromoteCandidate ||
+                          mutationDisabled}
                         onClick={() => setPromotionConfirmation(true)}
                         size="sm"
                         variant="secondary"
                       >
                         {candidate.reviewStatus === "owner_review_required"
-                          ? "Review & promote"
-                          : "Promote update"}
+                          ? "Review & deploy"
+                          : snapshot.release.live
+                          ? "Deploy update"
+                          : "Deploy agent"}
                       </Button>
                     )}
                 </>
@@ -1377,11 +1610,17 @@ export function AgentHomeOverview({
         <div className="agent-home-card-head">
           <div>
             <p className="section-label">Recent runs</p>
-            <p className="muted-note">The latest five wakes, including manual runs.</p>
+            <p className="muted-note">
+              The latest five wakes, including manual runs.
+            </p>
           </div>
         </div>
         {snapshot.recentRuns.length === 0
-          ? <p className="agent-home-empty-copy">No wakes have been recorded yet.</p>
+          ? (
+            <p className="agent-home-empty-copy">
+              No wakes have been recorded yet.
+            </p>
+          )
           : (
             <div className="agent-home-run-list">
               {snapshot.recentRuns.slice(0, 5).map((run) => (
@@ -1391,10 +1630,15 @@ export function AgentHomeOverview({
                     <TimeValue value={run.startedAt || run.createdAt} />
                   </div>
                   <div className="agent-home-run-summary">
-                    <strong>{run.summary || (run.errorCode
-                      ? statusLabel(run.errorCode)
-                      : `${statusLabel(run.trigger)} run`)}</strong>
-                    <span>{statusLabel(run.trigger)} · {formatDuration(run.durationMs)}</span>
+                    <strong>
+                      {run.summary || (run.errorCode
+                        ? statusLabel(run.errorCode)
+                        : `${statusLabel(run.trigger)} run`)}
+                    </strong>
+                    <span>
+                      {statusLabel(run.trigger)} ·{" "}
+                      {formatDuration(run.durationMs)}
+                    </span>
                   </div>
                   <div className="agent-home-run-usage">
                     <Mono>{formatNumber(run.calls)} calls</Mono>
@@ -1446,7 +1690,10 @@ function AuthorityGroup({
             </div>
             <div className="agent-home-authority-state">
               {item.badges.map((badge) => (
-                <span className={`function-badge ${badge.toLowerCase()}`} key={badge}>
+                <span
+                  className={`function-badge ${badge.toLowerCase()}`}
+                  key={badge}
+                >
                   {badge}
                 </span>
               ))}
@@ -1468,7 +1715,9 @@ function AuthorityGroup({
                     size="sm"
                     variant="secondary"
                   >
-                    {busy === "action:approve_capabilities" ? "Approving…" : "Approve"}
+                    {busy === "action:approve_capabilities"
+                      ? "Approving…"
+                      : "Approve"}
                   </Button>
                 )
                 : null}
@@ -1503,36 +1752,61 @@ function ReleaseVersion({
   return (
     <>
       <dl className="agent-home-release-version">
-        <div><dt>{versionLabel}</dt><dd><Mono>{label}</Mono></dd></div>
+        <div>
+          <dt>{versionLabel}</dt>
+          <dd>
+            <Mono>{label}</Mono>
+          </dd>
+        </div>
         {executedVersion !== undefined
           ? (
             <div>
               <dt>Executing version</dt>
-              <dd><Mono>{executedVersion || "Unavailable"}</Mono></dd>
+              <dd>
+                <Mono>{executedVersion || "Unavailable"}</Mono>
+              </dd>
             </div>
           )
           : null}
         <div>
           <dt>Source</dt>
-          <dd title={fingerprint || undefined}><Mono>{clipped || "Unavailable"}</Mono></dd>
+          <dd title={fingerprint || undefined}>
+            <Mono>{clipped || "Unavailable"}</Mono>
+          </dd>
         </div>
-        <div><dt>{timestampLabel}</dt><dd><TimeValue value={timestamp} /></dd></div>
+        <div>
+          <dt>{timestampLabel}</dt>
+          <dd>
+            <TimeValue value={timestamp} />
+          </dd>
+        </div>
       </dl>
       {integrity
         ? (
           <div className={`agent-home-integrity ${integrity}`}>
-            <Pill tone={integrity === "verified"
-              ? "green"
-              : integrity === "unverified"
-              ? "red"
-              : "amber"}
+            <Pill
+              tone={integrity === "verified"
+                ? "green"
+                : integrity === "unverified"
+                ? "red"
+                : "amber"}
             >
               Runtime integrity: {integrity}
             </Pill>
             {integrity === "unverified"
-              ? <span role="alert">Execution is blocked until the deployed bytes match their attestation.</span>
+              ? (
+                <span role="alert">
+                  Execution is blocked until the deployed bytes match their
+                  attestation.
+                </span>
+              )
               : integrity === "unknown"
-              ? <span>Execution remains blocked until runtime integrity can be verified.</span>
+              ? (
+                <span>
+                  Execution remains blocked until runtime integrity can be
+                  verified.
+                </span>
+              )
               : null}
           </div>
         )

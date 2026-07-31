@@ -1,4 +1,7 @@
-import { assertEquals, assertThrows } from "https://deno.land/std@0.210.0/assert/mod.ts";
+import {
+  assertEquals,
+  assertThrows,
+} from "https://deno.land/std@0.210.0/assert/mod.ts";
 
 import {
   buildD1FixtureMissMessage,
@@ -22,7 +25,12 @@ Deno.test("d1 test fixtures: validates and normalizes the structured config", ()
 
   assertEquals(fixtures, {
     responses: [
-      { method: "select", table: "items", when: undefined, result: [{ id: "item-1" }] },
+      {
+        method: "select",
+        table: "items",
+        when: undefined,
+        result: [{ id: "item-1" }],
+      },
       {
         method: "first",
         table: "items",
@@ -90,17 +98,20 @@ Deno.test("d1 test fixtures: shapes write results and miss messages", () => {
     },
   });
 
-  assertEquals(buildD1FixtureWriteResult({ meta: { changes: 1, last_row_id: 7 } }, true), {
-    success: true,
-    id: 7,
-    meta: {
-      changes: 1,
-      last_row_id: 7,
-      duration: 0,
-      rows_read: 0,
-      rows_written: 0,
+  assertEquals(
+    buildD1FixtureWriteResult({ meta: { changes: 1, last_row_id: 7 } }, true),
+    {
+      success: true,
+      id: 7,
+      meta: {
+        changes: 1,
+        last_row_id: 7,
+        duration: 0,
+        rows_read: 0,
+        rows_written: 0,
+      },
     },
-  });
+  );
 
   assertEquals(
     buildD1FixtureMissMessage({
@@ -120,8 +131,107 @@ Deno.test("d1 test fixtures: rejects malformed configs", () => {
     "method must be one of",
   );
   assertThrows(
-    () => resolveD1TestFixtureConfig({ responses: [{ method: "select", table: 5 }] }),
+    () =>
+      resolveD1TestFixtureConfig({
+        responses: [{ method: "select", table: 5 }],
+      }),
     Error,
     "table must be a string",
+  );
+});
+
+Deno.test("d1 test fixtures: strict mode rejects response and nested request typos", () => {
+  assertThrows(
+    () =>
+      resolveD1TestFixtureConfig(
+        {
+          responses: [
+            { method: "select", table: "items", results: [] },
+          ],
+        },
+        { strictUnknownKeys: true },
+      ),
+    Error,
+    "responses[0].results is not supported",
+  );
+  assertThrows(
+    () =>
+      resolveD1TestFixtureConfig(
+        {
+          responses: [
+            {
+              method: "select",
+              when: {
+                joins: [
+                  {
+                    table: "owners",
+                    on: { column: "owner_id", foreign_column: "id" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+        { strictUnknownKeys: true },
+      ),
+    Error,
+    "foreign_column is not supported",
+  );
+  assertThrows(
+    () =>
+      resolveD1TestFixtureConfig(
+        {
+          responses: [
+            {
+              method: "update",
+              when: {
+                set: { attempts: { operator: "increment", value: 1 } },
+              },
+            },
+          ],
+        },
+        { strictUnknownKeys: true },
+      ),
+    Error,
+    "operator is not supported",
+  );
+  assertThrows(
+    () =>
+      resolveD1TestFixtureConfig(
+        {
+          responses: [
+            {
+              method: "batch",
+              when: {
+                ops: [{ opp: "insert", table: "items", values: { id: 1 } }],
+              },
+            },
+          ],
+        },
+        { strictUnknownKeys: true },
+      ),
+    Error,
+    ".op must be one of insert, update, delete, upsert",
+  );
+});
+
+Deno.test("d1 test fixtures: legacy mode remains permissive", () => {
+  assertEquals(
+    resolveD1TestFixtureConfig({
+      ignored_legacy_field: true,
+      responses: [
+        { method: "select", table: "items", ignored_response_field: true },
+      ],
+    }),
+    {
+      responses: [
+        {
+          method: "select",
+          table: "items",
+          when: undefined,
+          result: undefined,
+        },
+      ],
+    },
   );
 });

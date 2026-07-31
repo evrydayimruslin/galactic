@@ -7,6 +7,11 @@
 
 import { resolveManifestEnvSchema } from "../../shared/contracts/manifest.ts";
 import { normalizeManifestComputeConfig } from "../../shared/contracts/compute.ts";
+import {
+  GALACTIC_STABLE_EFFECT_IDS,
+  type GalacticAuthorityLevel,
+  galacticAuthorityLevelCoversEffects,
+} from "./galactic-agent-document.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -48,6 +53,145 @@ function stringSet(value: unknown): Set<string> {
       ? value.filter((item): item is string => typeof item === "string")
       : [],
   );
+}
+
+const GALACTIC_STABLE_EFFECT_SET = new Set<string>(
+  GALACTIC_STABLE_EFFECT_IDS,
+);
+
+type FunctionEffectPolicy = "ask" | "free";
+
+interface FunctionAuthoritySnapshot {
+  hasSurface: boolean;
+  effects: Map<string, FunctionEffectPolicy>;
+  invalidFunctions: Set<string>;
+}
+
+function hasOwn(record: JsonRecord, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+function hasFunctionAuthoritySurface(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some((entry) => {
+      const fn = asRecord(entry);
+      return fn ? hasOwn(fn, "authority") : false;
+    });
+  }
+  const functions = asRecord(value);
+  if (!functions) return false;
+  return Object.values(functions).some((entry) => {
+    const fn = asRecord(entry);
+    return fn ? hasOwn(fn, "authority") : false;
+  });
+}
+
+/**
+ * Normalize only the authority fields that can mint Galactic runtime effects.
+ *
+ * Once any function opts into the authority surface, the runtime treats every
+ * function as authority-scoped. Missing or malformed declarations therefore
+ * belong on the owner-review boundary instead of silently falling back to the
+ * legacy app-level permission union.
+ */
+function functionAuthoritySnapshot(
+  manifest: JsonRecord,
+): FunctionAuthoritySnapshot {
+  const hasSurface = hasFunctionAuthoritySurface(manifest.functions);
+  const effects = new Map<string, FunctionEffectPolicy>();
+  const invalidFunctions = new Set<string>();
+  if (!hasSurface) return { hasSurface, effects, invalidFunctions };
+
+  const functions = asRecord(manifest.functions);
+  if (!functions) {
+    invalidFunctions.add("*");
+    return { hasSurface, effects, invalidFunctions };
+  }
+
+  for (const [functionName, rawDeclaration] of Object.entries(functions)) {
+    const declaration = asRecord(rawDeclaration);
+    if (!declaration || !hasOwn(declaration, "authority")) {
+      invalidFunctions.add(functionName);
+      continue;
+    }
+    const authority = asRecord(declaration.authority);
+    if (!authority) {
+      invalidFunctions.add(functionName);
+      continue;
+    }
+    const hasUnknownKey = Object.keys(authority).some((key) =>
+      key !== "level" && key !== "effects" &&
+      (!key.startsWith("x-") || key.length <= 2)
+    );
+    const level = authority.level;
+    const levelValid = level === "read" || level === "internal_write" ||
+      level === "external_write";
+    const rawEffects = asRecord(authority.effects);
+    if (hasUnknownKey || !levelValid || !rawEffects) {
+      invalidFunctions.add(functionName);
+      continue;
+    }
+
+    const stableEffects: Array<[string, FunctionEffectPolicy]> = [];
+    let effectsValid = true;
+    for (const [effect, policy] of Object.entries(rawEffects)) {
+      if (policy !== "ask" && policy !== "free") {
+        effectsValid = false;
+        break;
+      }
+      if (GALACTIC_STABLE_EFFECT_SET.has(effect)) {
+        stableEffects.push([effect, policy]);
+      } else if (!effect.startsWith("x-") || effect.length <= 2) {
+        effectsValid = false;
+        break;
+      }
+    }
+    if (
+      !effectsValid ||
+      !galacticAuthorityLevelCoversEffects(
+        level as GalacticAuthorityLevel,
+        stableEffects.map(([effect]) => effect),
+      )
+    ) {
+      invalidFunctions.add(functionName);
+      continue;
+    }
+    for (const [effect, policy] of stableEffects) {
+      effects.set(`${functionName}\0${effect}`, policy);
+    }
+  }
+
+  return { hasSurface, effects, invalidFunctions };
+}
+
+function addFunctionAuthorityExpansions(
+  output: string[],
+  currentManifest: JsonRecord,
+  targetManifest: JsonRecord,
+): void {
+  const current = functionAuthoritySnapshot(currentManifest);
+  const target = functionAuthoritySnapshot(targetManifest);
+  if (!current.hasSurface && !target.hasSurface) return;
+
+  if (current.hasSurface && !target.hasSurface) {
+    // Removing the function-level surface restores the legacy app-wide
+    // permission union, which can grant every function every app capability.
+    output.push("functions.authority:removed");
+    return;
+  }
+
+  for (const functionName of target.invalidFunctions) {
+    output.push(`functions.authority.invalid:${functionName}`);
+  }
+
+  for (const [pair, targetPolicy] of target.effects) {
+    const currentPolicy = current.effects.get(pair);
+    if (!currentPolicy) {
+      output.push(`functions.authority:${pair}`);
+    } else if (currentPolicy === "ask" && targetPolicy === "free") {
+      output.push(`functions.authority.free:${pair}`);
+    }
+  }
 }
 
 function networkHosts(manifest: JsonRecord): Set<string> {
@@ -132,9 +276,7 @@ function computeCallerAuthorities(manifest: JsonRecord): Set<string> {
   const functions = asRecord(manifest.functions) ?? {};
   return new Set(
     Object.entries(functions)
-      .filter(([, declaration]) =>
-        asRecord(declaration)?.uses_compute === true
-      )
+      .filter(([, declaration]) => asRecord(declaration)?.uses_compute === true)
       .map(([functionName]) => functionName),
   );
 }
@@ -212,6 +354,7 @@ export function findManifestAuthorityExpansions(
     stringSet(current.permissions),
     stringSet(target.permissions),
   );
+  addFunctionAuthorityExpansions(expansions, current, target);
 
   const currentCompute = normalizeManifestComputeConfig(current.compute);
   const targetCompute = normalizeManifestComputeConfig(target.compute);

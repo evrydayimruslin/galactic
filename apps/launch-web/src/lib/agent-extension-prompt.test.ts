@@ -45,7 +45,7 @@ describe("buildAgentExtensionPrompt", () => {
       );
       expect(prompt).toContain("test_attestation");
       expect(prompt).toContain("exact bundle tested");
-      expect(prompt).toContain("staged candidate");
+      expect(prompt).toContain("submit a candidate");
       expect(prompt).not.toContain("$GALACTIC_API_KEY");
     },
   );
@@ -58,8 +58,10 @@ describe("buildAgentExtensionPrompt", () => {
 
     expect(prompt).toContain("Connect this coding agent to my Galactic workspace");
     expect(prompt).toContain("Authorization: Bearer gx_connect_key");
-    expect(prompt).toContain('gx.discover({ scope: "library" })');
-    expect(prompt).toContain("Do not create, edit, upload, promote, activate");
+    expect(prompt).toContain('gx.discover({ scope: "tools" })');
+    expect(prompt).toContain("inspection-only connection");
+    expect(prompt).toContain("Do not enumerate account data or Agents");
+    expect(prompt).not.toContain('gx.discover({ scope: "library" })');
   });
 
   it("builds a new persistent Agent prompt", () => {
@@ -70,11 +72,13 @@ describe("buildAgentExtensionPrompt", () => {
 
     expect(prompt).toContain("new persistent Galactic Agent");
     expect(prompt).toContain("Agent's name");
-    expect(prompt).toContain("generated ID");
+    expect(prompt).toContain("reserved ID");
     expect(prompt).toContain("gx.stage");
     expect(prompt).toContain("gx.test");
     expect(prompt).toContain("gx.upload");
     expect(prompt).toContain("bundle_id: staged.bundle_id");
     expect(prompt).toContain("Authorization: Bearer gx_agent_key");
+    expect(prompt).toContain("Nothing is deployed by this handoff");
+    expect(prompt).not.toContain('gx.discover({ scope: "library" })');
   });
 });

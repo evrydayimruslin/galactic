@@ -7,7 +7,8 @@ import {
   type StagedBundleStore,
 } from './staged-bundles.ts';
 import type { FileUpload } from './storage.ts';
-import { sha256Hex } from './trust.ts';
+import { computeCanonicalDecodedSourceHash } from './test-attestation.ts';
+import { canonicalJson, sha256Hex } from './trust.ts';
 
 class MemoryBundleStore implements StagedBundleStore {
   readonly values = new Map<string, Uint8Array>();
@@ -92,6 +93,47 @@ Deno.test('stageBundle is content-addressed and idempotent', async () => {
   assertEquals(first.created_at, second.created_at);
   assertEquals(store.uploads.length, uploadsAfterFirst);
   assertEquals(first.bundle_id.startsWith('gxb1_'), true);
+});
+
+Deno.test('gxb1 preserves its legacy locale-aware Unicode path identity', async () => {
+  const store = new MemoryBundleStore();
+  const files = [
+    { path: 'z.ts', content: 'export const z = true;' },
+    { path: 'ä.ts', content: 'export const umlaut = true;' },
+  ];
+  const staged = await stageBundle(store, {
+    ownerId: 'user-1',
+    files,
+    now: new Date('2026-07-27T12:00:00.000Z'),
+  });
+
+  const legacyFiles = await Promise.all(files.map(async (file) => ({
+    path: file.path,
+    sha256: await sha256Hex(file.content),
+    encoding: 'text',
+  })));
+  legacyFiles.sort((left, right) => left.path.localeCompare(right.path));
+  const expectedBundleId = `gxb1_${
+    await sha256Hex(canonicalJson({
+      schema_version: 1,
+      files: legacyFiles,
+    }))
+  }`;
+
+  assertEquals(staged.bundle_id, expectedBundleId);
+  const resolved = await resolveStagedBundle(store, {
+    ownerId: 'user-1',
+    bundleId: staged.bundle_id,
+    now: new Date('2026-07-27T12:01:00.000Z'),
+  });
+  assertEquals(
+    resolved.files.map((file) => file.path),
+    legacyFiles.map((file) => file.path),
+  );
+  assertEquals(
+    await computeCanonicalDecodedSourceHash(resolved.files),
+    await computeCanonicalDecodedSourceHash(files),
+  );
 });
 
 Deno.test('incremental stage uploads changes and reuses unchanged base files', async () => {

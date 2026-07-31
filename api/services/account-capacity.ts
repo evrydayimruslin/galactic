@@ -72,7 +72,7 @@ export const ACCOUNT_CAPACITY_ADMISSION_EXPOSURE_LIGHT = 0;
  * boundary, but its attributable subscription-capacity exposure is bounded to
  * ten cents. At 100 canonical Light / USD, 10 Light = $0.10.
  */
-export const ACCOUNT_CAPACITY_EXECUTION_CEILING_LIGHT = 10;
+const ACCOUNT_CAPACITY_EXECUTION_CEILING_LIGHT = 10;
 
 /**
  * Keep one cent of the execution envelope for the separately settled Worker

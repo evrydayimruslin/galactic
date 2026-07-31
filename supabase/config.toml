@@ -38,7 +38,7 @@ file_size_limit = "50MiB"
 
 [auth]
 enabled = true
-site_url = "http://127.0.0.1:3000"
+site_url = "http://127.0.0.1:5178"
 additional_redirect_urls = [
   "http://127.0.0.1:3000",
   "http://localhost:3000",
@@ -46,8 +46,12 @@ additional_redirect_urls = [
   "http://localhost:1420",
   "http://127.0.0.1:5178/auth/callback",
   "http://localhost:5178/auth/callback",
+  "http://127.0.0.1:5178/auth/confirm",
+  "http://localhost:5178/auth/confirm",
   "https://staging.ultralight-launch-web.pages.dev/auth/callback",
+  "https://staging.ultralight-launch-web.pages.dev/auth/confirm",
   "https://connectgalactic.com/auth/callback",
+  "https://connectgalactic.com/auth/confirm",
 ]
 jwt_expiry = 3600
 enable_refresh_token_rotation = true
@@ -62,3 +66,8 @@ enable_signup = true
 enable_confirmations = true
 double_confirm_changes = false
 secure_password_change = true
+otp_expiry = 3600
+
+[auth.email.template.magic_link]
+subject = "Your Galactic sign-in link"
+content_path = "./supabase/templates/magic-link.html"

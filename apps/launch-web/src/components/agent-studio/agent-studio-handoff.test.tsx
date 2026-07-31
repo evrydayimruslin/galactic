@@ -12,14 +12,14 @@ const target = {
   routineCount: 3,
 };
 const sessionId = "7a8c99b7-2875-4a6a-9490-8f03c99587c1";
-const platformMcpUrl = "https://api.galactic.dev/mcp/platform";
+const platformMcpUrl = "https://api.connectgalactic.com/mcp/platform";
 const bearerToken = "gx_0123456789abcdef0123456789abcdef";
 
 describe("AgentStudioHandoff", () => {
   it("renders the two-column ring, three beats, exact target and gated Copy", () => {
     const createCredential = vi.fn(async () => ({
       bearerToken,
-      expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
       platformMcpUrl,
       scope: { agentId: target.id, kind: "agent" as const },
       sessionId,
@@ -39,7 +39,8 @@ describe("AgentStudioHandoff", () => {
     expect(markup).toContain("Paste this prompt to your coding agent");
     expect(markup).toContain("Your coding agent asks, builds and stages");
     expect(markup).toContain("then stages the tested candidate");
-    expect(markup).toContain("The interface runs on Galactic");
+    expect(markup).toContain("The interface candidate waits in Galactic");
+    expect(markup).toContain("changes nothing until you manually deploy it");
     expect(markup).toContain(target.id);
     expect(markup).toContain("Incomplete");
     expect(markup).toContain("Copy prompt");
@@ -107,7 +108,7 @@ describe("AgentStudioHandoff", () => {
       <AgentStudioHandoff
         createCredential={async () => ({
           bearerToken,
-          expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
+          expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
           platformMcpUrl,
           scope: { agentId: target.id, kind: "agent" },
           sessionId,
@@ -123,6 +124,8 @@ describe("AgentStudioHandoff", () => {
 
     expect(markup).toContain("Ready to copy");
     expect(markup).toContain("Check the PMS before quoting a room.");
-    expect(markup).toMatch(/<button class="" type="button">Copy prompt<\/button>/);
+    expect(markup).toMatch(
+      /<button class="" type="button">Copy prompt<\/button>/,
+    );
   });
 });

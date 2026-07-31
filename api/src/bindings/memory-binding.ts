@@ -16,6 +16,7 @@ import {
   normalizeMemoryScope,
   resolveMemoryKey,
 } from "./memory-scope.ts";
+import { assertBindingEffectAuthority } from "./function-authority.ts";
 
 // ============================================
 // TYPES
@@ -23,6 +24,8 @@ import {
 
 interface MemoryBindingProps {
   userId: string;
+  allowRead?: boolean;
+  allowWrite?: boolean;
   // When present, remember/recall default to AGENT scope — a per-(app,user)
   // notebook isolated from every other agent. Absent (or scope:"user") falls
   // back to the shared per-user notebook the person carries between agents.
@@ -43,7 +46,6 @@ interface MemoryBindingProps {
   requireExecCtx?: boolean;
 }
 
-
 // ============================================
 // RPC BINDING
 // ============================================
@@ -54,20 +56,20 @@ export class MemoryBinding
   // (Cloudflare WorkerEntrypoint contract), so this is call-scoped. Set at each
   // public method entry; meter() resolves the CURRENT metering context from it,
   // so a warm-reused isolate never meters against a stale baked hold.
-  private execCtxHandle?: string;
+  #execCtxHandle?: string;
 
-  private getR2Bucket(): R2Bucket {
+  #getR2Bucket(): R2Bucket {
     return globalThis.__env.R2_BUCKET;
   }
 
-  private meteringContext() {
+  #meteringContext() {
     // Handle threaded (even if it resolves to null) → resolve-or-FAIL-CLOSED:
     // never fall back to props, which are frozen at load and go STALE under a
     // warm get() reuse. Handle NOT threaded (undefined: legacy/direct-call
     // path) → props fallback preserves pre-registry behavior. No-op under
     // load(); safety linchpin under get() reuse. See database-binding.ts.
-    if (this.execCtxHandle !== undefined) {
-      const resolved = resolveExecutionContext(this.execCtxHandle);
+    if (this.#execCtxHandle !== undefined) {
+      const resolved = resolveExecutionContext(this.#execCtxHandle);
       return {
         metering: resolved?.cloudOperationMetering ?? null,
         billingConfig: resolved?.cloudOperationBillingConfig ?? null,
@@ -79,12 +81,12 @@ export class MemoryBinding
     };
   }
 
-  private async meter(
+  async #meter(
     operation: string,
     memKey: string,
     units = 1,
   ): Promise<void> {
-    const { metering, billingConfig } = this.meteringContext();
+    const { metering, billingConfig } = this.#meteringContext();
     if (!metering) {
       return;
     }
@@ -103,7 +105,7 @@ export class MemoryBinding
     });
   }
 
-  private memoryKey(scope: MemoryScope): string {
+  #memoryKey(scope: MemoryScope): string {
     return resolveMemoryKey(scope, this.ctx.props.userId, this.ctx.props.appId);
   }
 
@@ -113,11 +115,12 @@ export class MemoryBinding
     scope?: MemoryScope,
     execCtxHandle?: string,
   ): Promise<void> {
-    if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
-    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
-    const memKey = this.memoryKey(normalizeMemoryScope(scope));
-    await this.meter("memory.remember", memKey, 2);
-    const bucket = this.getR2Bucket();
+    assertBindingEffectAuthority(this.ctx.props.allowWrite, "memory.write");
+    if (execCtxHandle !== undefined) this.#execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.#execCtxHandle, this.ctx.props.requireExecCtx);
+    const memKey = this.#memoryKey(normalizeMemoryScope(scope));
+    await this.#meter("memory.remember", memKey, 2);
+    const bucket = this.#getR2Bucket();
 
     // Load existing memory
     let memory = "";
@@ -148,11 +151,12 @@ export class MemoryBinding
     scope?: MemoryScope,
     execCtxHandle?: string,
   ): Promise<unknown> {
-    if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
-    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
-    const memKey = this.memoryKey(normalizeMemoryScope(scope));
-    await this.meter("memory.recall", memKey);
-    const bucket = this.getR2Bucket();
+    assertBindingEffectAuthority(this.ctx.props.allowRead, "memory.read");
+    if (execCtxHandle !== undefined) this.#execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.#execCtxHandle, this.ctx.props.requireExecCtx);
+    const memKey = this.#memoryKey(normalizeMemoryScope(scope));
+    await this.#meter("memory.recall", memKey);
+    const bucket = this.#getR2Bucket();
 
     try {
       const obj = await bucket.get(memKey);

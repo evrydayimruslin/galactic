@@ -14,10 +14,14 @@ export type LaunchRouteKey =
   | "settings"
   | "adminAgent"
   | "authCallback"
+  | "authConfirm"
   | "terms"
   | "privacy";
 
-export type LaunchRoutePath = LaunchPublicRoute | "/auth/callback";
+export type LaunchRoutePath =
+  | LaunchPublicRoute
+  | "/auth/callback"
+  | "/auth/confirm";
 
 export interface LaunchRouteDefinition {
   key: LaunchRouteKey;
@@ -142,6 +146,13 @@ export const launchRoutes: LaunchRouteDefinition[] = [
     key: "authCallback",
     path: "/auth/callback",
     label: "Auth callback",
+    nav: "hidden",
+    apiRoutes: [],
+  },
+  {
+    key: "authConfirm",
+    path: "/auth/confirm",
+    label: "Confirm sign in",
     nav: "hidden",
     apiRoutes: [],
   },

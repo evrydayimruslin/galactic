@@ -465,6 +465,12 @@ Deno.test("routines: managed resume claims the Free slot and activates atomicall
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = input.toString();
     const method = init?.method || "GET";
+    if (url.includes("/account_entitlements?")) {
+      return jsonResponse([{
+        plan_code: "pro",
+        subscription_status: "active",
+      }]);
+    }
     if (url.includes("/user_routines?") && method === "GET") {
       return jsonResponse([paused]);
     }

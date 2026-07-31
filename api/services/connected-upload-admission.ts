@@ -7,6 +7,7 @@ import {
   type BytePreservingSourceContent,
   sourceFileByteLength,
 } from "./source-file-content.ts";
+import { runSafetyScan } from "./integrity.ts";
 
 export const MAX_CONNECTED_NON_LIVE_VERSIONS = 3;
 
@@ -41,6 +42,40 @@ export interface ConnectedUploadFile extends BytePreservingSourceContent {
   path: string;
 }
 
+const SENSITIVE_SOURCE_BASENAMES = new Set([
+  ".env",
+  ".env.local",
+  ".npmrc",
+  ".netrc",
+  "_netrc",
+  "id_rsa",
+  "id_dsa",
+  "id_ecdsa",
+  "id_ed25519",
+  "credentials",
+  "credentials.json",
+  "application_default_credentials.json",
+]);
+
+function sensitiveSourcePathRule(path: string): string | null {
+  const normalized = path.toLowerCase().replaceAll("\\", "/");
+  const basename = normalized.split("/").pop() || normalized;
+  if (SENSITIVE_SOURCE_BASENAMES.has(basename)) {
+    return "sensitive-source-file";
+  }
+  if (
+    /(?:^|\/)\.aws\/credentials$/.test(normalized) ||
+    /(?:^|\/)\.ssh\/.+/.test(normalized) ||
+    /(?:^|\/)(?:service[-_.]?account|service_account)[^/]*\.json$/.test(
+      normalized,
+    ) ||
+    /\.(?:pem|key|p12|pfx|jks)$/.test(basename)
+  ) {
+    return "sensitive-source-file";
+  }
+  return null;
+}
+
 export function validateConnectedUploadFileSet(
   files: ConnectedUploadFile[],
 ): { totalBytes: number } {
@@ -53,6 +88,12 @@ export function validateConnectedUploadFileSet(
 
   let totalBytes = 0;
   for (const file of files) {
+    const sensitiveRule = sensitiveSourcePathRule(file.path);
+    if (sensitiveRule) {
+      throw new Error(
+        `Source file rejected (${sensitiveRule}): ${file.path}`,
+      );
+    }
     const lowerPath = file.path.toLowerCase();
     if (
       !ALLOWED_EXTENSIONS.some((extension) => lowerPath.endsWith(extension))
@@ -67,6 +108,22 @@ export function validateConnectedUploadFileSet(
         }MB limit`,
       );
     }
+  }
+
+  const safety = runSafetyScan(
+    files.map((file) => ({
+      name: file.path,
+      content: file.content,
+      ...(file.bytes ? { bytes: file.bytes } : {}),
+    })),
+  );
+  const secret = safety.issues.find((issue) =>
+    issue.severity === "error" && issue.rule.startsWith("secret-")
+  );
+  if (secret) {
+    throw new Error(
+      `Source file rejected (${secret.rule}): ${secret.file || "unknown path"}`,
+    );
   }
   return { totalBytes };
 }

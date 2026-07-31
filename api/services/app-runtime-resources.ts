@@ -28,6 +28,11 @@ import {
 import { createServerLogger, type LoggerLike } from "./logging.ts";
 import { getManifestPermissions } from "./trust.ts";
 import { recordMissingSettingIncidents } from "./notification-recovery.ts";
+import {
+  GALACTIC_STABLE_EFFECT_IDS,
+  galacticAuthorityLevelCoversEffects,
+  type GalacticStableEffectId,
+} from "./galactic-agent-document.ts";
 
 export const APP_ENTRY_FILES = [
   "index.tsx",
@@ -290,7 +295,11 @@ export async function resolveAppRuntimeEnvVars(
     if (!entry.credential) continue;
     const value = envVars[key];
     if (typeof value === "string") {
-      credentials[key] = { value, credential: entry.credential };
+      credentials[key] = {
+        value,
+        credential: entry.credential,
+        vaulted: true,
+      };
     }
     delete envVars[key];
   }
@@ -328,7 +337,11 @@ export async function resolveAppRuntimeEnvVars(
         try {
           const value = await decryptEnvVarFn(secret.value_encrypted);
           const entry = envSchema[secret.key];
-          credentials[secret.key] = { value, credential: entry.credential };
+          credentials[secret.key] = {
+            value,
+            credential: entry.credential,
+            vaulted: isVaultedSecret(entry),
+          };
           // Non-secret per-user CONFIG (host/port/email/name) is readable in the
           // sandbox env, like a universal var. Actual SECRETS stay vaulted-only.
           if (!isVaultedSecret(entry)) {
@@ -664,10 +677,52 @@ const STRICT_RUNTIME_PERMISSIONS = new Set([
   COMPUTE_EXEC_PERMISSION,
 ]);
 
+const GALACTIC_RUNTIME_EFFECT_SET = new Set<string>(
+  GALACTIC_STABLE_EFFECT_IDS,
+);
+
+const GALACTIC_EFFECT_PERMISSION: Partial<
+  Record<GalacticStableEffectId, string>
+> = {
+  "storage.read": "storage:read",
+  "storage.write": "storage:write",
+  "storage.delete": "storage:delete",
+  "memory.read": "memory:read",
+  "memory.write": "memory:write",
+  "notification.owner.write": "notify:owner",
+  "inference.generate": "ai:call",
+  "inference.embed": "ai:embed",
+  "compute.execute": COMPUTE_EXEC_PERMISSION,
+  "network.http": "net:fetch",
+  "network.tcp": "net:connect",
+  "credential.http": "net:fetch",
+  "email.imap.read": "net:connect",
+  "email.smtp.send": "net:connect",
+  "agent.call": "app:call",
+};
+
 export interface StrictRuntimePermissionResolution {
   permissions: string[];
   manifestBacked: boolean;
   ignoredPermissions: string[];
+}
+
+interface FunctionRuntimeAuthorityResolution
+  extends StrictRuntimePermissionResolution {
+  /**
+   * Stable effects declared by this exact function.
+   *
+   * `null` means a legacy manifest with no function-authority surface, so the
+   * runtime preserves its existing app-level behavior. An empty array means
+   * the manifest opted into function authority but this function has no valid
+   * stable effects, and therefore receives no effect-backed capabilities.
+   *
+   * This is deliberately a safe narrowing opt-in rather than a provenance
+   * claim: a legacy manifest may author the same structurally valid field, but
+   * it can never widen beyond the top-level permission ceiling. Only signed
+   * qualification metadata may claim Galactic conformance.
+   */
+  declaredEffects: GalacticStableEffectId[] | null;
 }
 
 export interface RuntimeAppCallDependency {
@@ -904,5 +959,124 @@ export function resolveStrictManifestPermissions(
     permissions: [...new Set(permissions)],
     manifestBacked: !!app.manifest,
     ignoredPermissions,
+  };
+}
+
+function parseRuntimeManifest(
+  manifest: RuntimeApp["manifest"],
+): Record<string, unknown> | null {
+  try {
+    const parsed = typeof manifest === "string"
+      ? JSON.parse(manifest)
+      : manifest;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function hasFunctionAuthoritySurface(
+  functions: Record<string, unknown>,
+): boolean {
+  return Object.values(functions).some((value) =>
+    value !== null && typeof value === "object" && !Array.isArray(value) &&
+    Object.prototype.hasOwnProperty.call(value, "authority")
+  );
+}
+
+function normalizeDeclaredRuntimeEffects(
+  value: unknown,
+): GalacticStableEffectId[] | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const authority = value as Record<string, unknown>;
+  for (const key of Object.keys(authority)) {
+    if (
+      key !== "level" && key !== "effects" &&
+      (!key.startsWith("x-") || key.length <= 2)
+    ) {
+      return null;
+    }
+  }
+  if (
+    authority.level !== "read" && authority.level !== "internal_write" &&
+    authority.level !== "external_write"
+  ) {
+    return null;
+  }
+  const effects = authority.effects;
+  if (!effects || typeof effects !== "object" || Array.isArray(effects)) {
+    return null;
+  }
+
+  const declared: GalacticStableEffectId[] = [];
+  for (const [effect, policy] of Object.entries(effects)) {
+    if (policy !== "ask" && policy !== "free") return null;
+    if (GALACTIC_RUNTIME_EFFECT_SET.has(effect)) {
+      declared.push(effect as GalacticStableEffectId);
+      continue;
+    }
+    // Namespaced extension effects remain document evidence but do not mint a
+    // runtime capability until Galactic assigns them stable semantics.
+    if (!effect.startsWith("x-") || effect.length <= 2) return null;
+  }
+  if (
+    !galacticAuthorityLevelCoversEffects(
+      authority.level,
+      declared as GalacticStableEffectId[],
+    )
+  ) {
+    return null;
+  }
+  return [...new Set(declared)].sort();
+}
+
+/**
+ * Resolve the live capability ceiling for one function.
+ *
+ * Legacy manifests keep the existing app-level permission set. A manifest
+ * with any per-function `authority` surface opts into fail-closed narrowing:
+ * the selected function receives only permissions implied by its structurally
+ * valid stable effects, intersected with the top-level manifest ceiling.
+ * Malformed/missing authority in an opted-in manifest resolves to no effects.
+ */
+export function resolveFunctionStrictManifestPermissions(
+  app: Pick<RuntimeApp, "manifest">,
+  functionName: string,
+): FunctionRuntimeAuthorityResolution {
+  const appResolution = resolveStrictManifestPermissions(app);
+  const parsed = parseRuntimeManifest(app.manifest);
+  const rawFunctions = parsed?.functions;
+  if (
+    !rawFunctions || typeof rawFunctions !== "object" ||
+    Array.isArray(rawFunctions)
+  ) {
+    return { ...appResolution, declaredEffects: null };
+  }
+
+  const functions = rawFunctions as Record<string, unknown>;
+  if (!hasFunctionAuthoritySurface(functions)) {
+    return { ...appResolution, declaredEffects: null };
+  }
+
+  const rawFunction = functions[functionName];
+  const authority = rawFunction && typeof rawFunction === "object" &&
+      !Array.isArray(rawFunction)
+    ? (rawFunction as { authority?: unknown }).authority
+    : undefined;
+  const declaredEffects = normalizeDeclaredRuntimeEffects(authority) ?? [];
+  const topLevelPermissions = new Set(appResolution.permissions);
+  const permissions = declaredEffects
+    .map((effect) => GALACTIC_EFFECT_PERMISSION[effect])
+    .filter((permission): permission is string =>
+      typeof permission === "string" &&
+      topLevelPermissions.has(permission)
+    );
+
+  return {
+    ...appResolution,
+    permissions: [...new Set(permissions)],
+    declaredEffects,
   };
 }

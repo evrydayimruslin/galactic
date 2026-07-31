@@ -4,7 +4,8 @@
 // user, fixture-backed) stay on load() even with the flag ON. Also pins the
 // reuse PRECONDITIONS: per-call data (functionName/args/authToken/callerCtx/
 // execCtxHandle) rides the fetch body and never appears in the baked module
-// content, and reusable-isolate bindings are constructed with requireExecCtx.
+// content. Reusable-isolate bindings require live execution handles; EVENTS
+// requires one in both reuse and fresh-load modes.
 
 import { assert } from "https://deno.land/std@0.210.0/assert/assert.ts";
 import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
@@ -19,7 +20,15 @@ import {
   resolveExecutionContext,
 } from "../services/execution-context-registry.ts";
 import { verifySandboxActorToken } from "../services/sandbox-actor.ts";
-import { putLiveExecutedBundle } from "../services/executed-bundle.ts";
+import {
+  putLiveExecutedBundle,
+  putReleaseExecutedBundle,
+} from "../services/executed-bundle.ts";
+import { TestRuntimeStateStore } from "../services/test-state-store.ts";
+import type {
+  UlTestBlockedEffect,
+  UlTestObservedEffect,
+} from "../services/ul-test-runtime.ts";
 import type { RuntimeConfig } from "./sandbox.ts";
 
 const BUNDLE_CODE = "export const noop = 1;";
@@ -30,6 +39,7 @@ interface Captured {
   loadCalls: number;
   getCalls: number;
   getIds: string[];
+  codeCacheKeys: string[];
   cbInvocations: number;
   modules: Record<string, string>;
   requestBodies: unknown[];
@@ -53,6 +63,7 @@ function installHarness(): { captured: Captured; restore: () => void } {
     getCalls: 0,
     cbInvocations: 0,
     getIds: [],
+    codeCacheKeys: [],
     modules: {},
     requestBodies: [],
     requestHeaders: [],
@@ -72,6 +83,45 @@ function installHarness(): { captured: Captured; restore: () => void } {
     remove: () => Promise<void>;
     list: () => Promise<unknown[]>;
   } | null = null;
+
+  const createTestSession = () => {
+    const state = new TestRuntimeStateStore();
+    const session = {
+      dup: () => session,
+      storeAppData: (key: string, value: unknown) => {
+        state.storeAppData(key, value);
+        return Promise.resolve();
+      },
+      loadAppData: (key: string) => Promise.resolve(state.loadAppData(key)),
+      removeAppData: (key: string) => {
+        state.removeAppData(key);
+        return Promise.resolve();
+      },
+      listAppData: (prefix?: string) =>
+        Promise.resolve(state.listAppData(prefix)),
+      recordBlockedEffect: (effect: UlTestBlockedEffect) => {
+        state.recordBlockedEffect(effect);
+        return Promise.resolve();
+      },
+      recordObservedEffect: (effect: UlTestObservedEffect) => {
+        state.recordObservedEffect(effect);
+        return Promise.resolve();
+      },
+      sealAndSnapshot: () =>
+        Promise.resolve({
+          blockedEffects: state.blockedEffects(),
+          observedEffects: state.observedEffects(),
+        }),
+      close: () => {
+        state.close();
+        return Promise.resolve();
+      },
+      [Symbol.dispose]: () => {
+        // Local harness owns no remote capability graph.
+      },
+    };
+    return session;
+  };
 
   // Resolve the body's handle against the REAL registry (as a binding would) and
   // record which user's context it points at. Called inside each fetch, while
@@ -174,9 +224,14 @@ function installHarness(): { captured: Captured; restore: () => void } {
   globalThis.__env = {
     LOADER: loader,
     CODE_CACHE: {
-      get: () => Promise.resolve(liveCode),
-      getWithMetadata: () =>
-        Promise.resolve({ value: liveCode, metadata: liveMetadata }),
+      get: (key: string) => {
+        captured.codeCacheKeys.push(key);
+        return Promise.resolve(liveCode);
+      },
+      getWithMetadata: (key: string) => {
+        captured.codeCacheKeys.push(key);
+        return Promise.resolve({ value: liveCode, metadata: liveMetadata });
+      },
       put: (
         _key: string,
         value: string,
@@ -195,6 +250,49 @@ function installHarness(): { captured: Captured; restore: () => void } {
 
   globalThis.__ctx = {
     exports: {
+      TestRuntimeSessionFactory: () => ({
+        create: () => Promise.resolve(createTestSession()),
+      }),
+      FixtureDatabaseBinding: () => ({}),
+      // deno-lint-ignore no-explicit-any
+      TestAppDataBinding: (input: any) => ({
+        store: (key: string, value: unknown) =>
+          input.props.session.storeAppData(key, value),
+        load: (key: string) => input.props.session.loadAppData(key),
+        remove: (key: string) => input.props.session.removeAppData(key),
+        list: (prefix?: string) => input.props.session.listAppData(prefix),
+      }),
+      TestOutboundBinding: () => ({
+        fetch: () => Promise.reject(new Error("gx.test outbound blocked")),
+        connect: () => Promise.reject(new Error("gx.test connect blocked")),
+      }),
+      TestCredentialBinding: () => ({
+        authenticatedFetch: () =>
+          Promise.reject(new Error("gx.test credentials blocked")),
+      }),
+      TestEventsBinding: () => ({
+        emit: () => Promise.reject(new Error("gx.test event blocked")),
+      }),
+      TestMemoryBinding: () => ({
+        remember: () => Promise.resolve(),
+        recall: () => Promise.resolve(null),
+      }),
+      TestRunsBinding: () => ({
+        recent: () => Promise.resolve({ runs: [] }),
+      }),
+      TestNetworkBinding: () => ({
+        imapFetchUnseen: () =>
+          Promise.reject(new Error("gx.test IMAP blocked")),
+        smtpSend: () => Promise.reject(new Error("gx.test SMTP blocked")),
+      }),
+      TestAppCallBinding: () => ({
+        fetch: () => Promise.reject(new Error("gx.test Agent call blocked")),
+      }),
+      TestComputeBinding: () => ({
+        call: () => Promise.resolve({ ok: true, value: {} }),
+        get: () => Promise.resolve({ ok: true, value: {} }),
+        cancel: () => Promise.resolve({ ok: true, value: {} }),
+      }),
       // deno-lint-ignore no-explicit-any
       AppDataBinding: (input: any) => {
         captured.bindingProps.DATA = input?.props;
@@ -320,6 +418,52 @@ Deno.test("get reuse: flag ON + eligible → loader.get with the derived reuse k
   }
 });
 
+Deno.test("canonical release execution reads its exact release-digest key", async () => {
+  const harness = installHarness();
+  try {
+    const releaseDigest = "a".repeat(64);
+    await putReleaseExecutedBundle({
+      appId: "app_get_reuse",
+      version: "1.2.3",
+      releaseDigest,
+      esmCode: BUNDLE_CODE,
+    });
+    harness.captured.codeCacheKeys.length = 0;
+    const config = baseConfig();
+    config.expectedVersion = "1.2.3";
+    config.immutableReleaseDigest = releaseDigest;
+    const result = await executeInDynamicSandbox(config, "noop", []);
+
+    assertEquals(result.success, true);
+    assertEquals(harness.captured.codeCacheKeys, [
+      `esm:app_get_reuse:release:${releaseDigest}`,
+    ]);
+  } finally {
+    harness.restore();
+  }
+});
+
+Deno.test("canonical release requires verified-ok even when legacy verification is off", async () => {
+  const harness = installHarness();
+  try {
+    // The harness starts with executable bytes but no signed metadata. Legacy
+    // `latest` can still follow the rollout flag; a canonical release cannot.
+    // deno-lint-ignore no-explicit-any
+    (globalThis.__env as any).EXECUTED_BUNDLE_VERIFY = "off";
+    const config = baseConfig();
+    config.expectedVersion = "1.2.3";
+    config.immutableReleaseDigest = "b".repeat(64);
+    const result = await executeInDynamicSandbox(config, "noop", []);
+
+    assertEquals(result.success, false);
+    assertEquals(result.error?.type, "IntegrityError");
+    assertEquals(harness.captured.loadCalls, 0);
+    assertEquals(harness.captured.getCalls, 0);
+  } finally {
+    harness.restore();
+  }
+});
+
 Deno.test("get reuse: flag OFF (default) → loader.load, get() never called", async () => {
   const harness = installHarness();
   try {
@@ -356,6 +500,20 @@ Deno.test("get reuse: fixture-backed execution (gx.test) stays on load() even wi
     const config = baseConfig();
     // deno-lint-ignore no-explicit-any
     (config as any).d1Fixtures = { tables: {} };
+    const result = await executeInDynamicSandbox(config, "noop", []);
+    assertEquals(result.success, true);
+    assertEquals(harness.captured.loadCalls, 1);
+    assertEquals(harness.captured.getCalls, 0);
+  } finally {
+    harness.restore();
+  }
+});
+
+Deno.test("get reuse: gx.test without D1 fixtures still stays on load()", async () => {
+  const harness = installHarness();
+  try {
+    const config = baseConfig();
+    config.testMode = true;
     const result = await executeInDynamicSandbox(config, "noop", []);
     assertEquals(result.success, true);
     assertEquals(harness.captured.loadCalls, 1);
@@ -497,9 +655,17 @@ Deno.test("dynamic sandbox: gx.test uses only host test AI/embed/notify bindings
     };
     await executeInDynamicSandbox(config, "testFn", []);
 
-    assertEquals(harness.captured.bindingProps.TEST_AI, {});
-    assertEquals(harness.captured.bindingProps.TEST_EMBED, {});
-    assertEquals(harness.captured.bindingProps.TEST_NOTIFY, {});
+    const testAiSession =
+      (harness.captured.bindingProps.TEST_AI as { session?: unknown })?.session;
+    assert(testAiSession);
+    assert(
+      (harness.captured.bindingProps.TEST_EMBED as { session?: unknown })
+        ?.session === testAiSession,
+    );
+    assert(
+      (harness.captured.bindingProps.TEST_NOTIFY as { session?: unknown })
+        ?.session === testAiSession,
+    );
     assertEquals(harness.captured.bindingProps.AI, undefined);
     assertEquals(harness.captured.bindingProps.EMBED, undefined);
     assertEquals(harness.captured.bindingProps.NOTIFY, undefined);
@@ -508,18 +674,17 @@ Deno.test("dynamic sandbox: gx.test uses only host test AI/embed/notify bindings
   }
 });
 
-Deno.test("get reuse: reusable-isolate bindings are constructed with requireExecCtx (bypass fail-closed)", async () => {
+Deno.test("get reuse: reusable-isolate bindings fail closed on direct binding bypass", async () => {
   const harness = installHarness();
   try {
     await executeInDynamicSandbox(baseConfig(), "noop", []);
     const dataProps = harness.captured.bindingProps.DATA as {
       requireExecCtx?: boolean;
     };
-    const eventsProps = harness.captured.bindingProps.EVENTS as {
-      requireExecCtx?: boolean;
-    };
     assertEquals(dataProps?.requireExecCtx, true);
-    assertEquals(eventsProps?.requireExecCtx, true);
+    // EVENTS always requires the live handle and therefore carries no frozen
+    // per-execution token or compatibility flag in either loader mode.
+    assertEquals(harness.captured.bindingProps.EVENTS, {});
   } finally {
     harness.restore();
   }
@@ -643,6 +808,36 @@ Deno.test("get reuse: same config → same key across calls; different user → 
   } finally {
     harness.restore();
   }
+});
+
+Deno.test("get reuse: different function effect ceilings cannot share a warm isolate", async () => {
+  const read = baseConfig();
+  read.permissions = ["storage:read", "storage:write"];
+  read.declaredEffects = ["storage.read"];
+  const write: RuntimeConfig = {
+    ...read,
+    declaredEffects: ["storage.write"],
+  };
+  const bindingState = {
+    dbId: null,
+    hasDb: false,
+    hasMemory: false,
+    hasRuns: false,
+  };
+
+  const readKey = await deriveIsolateReuseKey(
+    read,
+    BUNDLE_CODE,
+    [],
+    bindingState,
+  );
+  const writeKey = await deriveIsolateReuseKey(
+    write,
+    BUNDLE_CODE,
+    [],
+    bindingState,
+  );
+  assertNotEquals(readKey, writeKey);
 });
 
 Deno.test("get reuse: WARM HIT — callback runs once (frozen isolate); per-call body still reaches the second fetch", async () => {

@@ -4,9 +4,13 @@ import {
   buildD1FixtureMissMessage,
   buildD1FixtureWriteResult,
   type D1FixtureMethod,
-  findD1TestFixtureResponse,
   type D1TestFixtureConfig,
+  findD1TestFixtureResponse,
 } from "../../services/d1-test-fixtures.ts";
+import {
+  UL_TEST_OBSERVED_EFFECTS,
+  type UlTestObservedEffectRecorder,
+} from "../../services/ul-test-runtime.ts";
 import {
   buildCount,
   buildDelete,
@@ -27,6 +31,7 @@ interface FixtureDatabaseBindingProps {
   appId: string;
   userId: string;
   fixtures: D1TestFixtureConfig;
+  session: UlTestObservedEffectRecorder;
 }
 
 // A fixed scope for validation only — gx.test never touches a real DB, but we
@@ -38,7 +43,7 @@ export class FixtureDatabaseBinding extends WorkerEntrypoint<
   unknown,
   FixtureDatabaseBindingProps
 > {
-  private lookup(
+  #lookup(
     method: D1FixtureMethod,
     op: Record<string, unknown>,
   ) {
@@ -55,56 +60,82 @@ export class FixtureDatabaseBinding extends WorkerEntrypoint<
   }
 
   async select(op: SelectOp): Promise<Record<string, unknown>[]> {
+    await this.ctx.props.session.recordObservedEffect(
+      UL_TEST_OBSERVED_EFFECTS.databaseRead,
+    );
     buildSelect(op, TEST_SCOPE); // validate op (throws on bad table/column)
-    const r = this.lookup("select", op as unknown as Record<string, unknown>);
+    const r = this.#lookup("select", op as unknown as Record<string, unknown>);
     return Array.isArray(r.result)
       ? (r.result as Record<string, unknown>[])
       : [];
   }
 
   async first(op: SelectOp): Promise<Record<string, unknown> | null> {
+    await this.ctx.props.session.recordObservedEffect(
+      UL_TEST_OBSERVED_EFFECTS.databaseRead,
+    );
     buildSelect({ ...op, limit: 1 }, TEST_SCOPE);
-    const r = this.lookup("first", op as unknown as Record<string, unknown>);
+    const r = this.#lookup("first", op as unknown as Record<string, unknown>);
     return (r.result as Record<string, unknown> | null) ?? null;
   }
 
   async count(op: CountOp): Promise<number> {
+    await this.ctx.props.session.recordObservedEffect(
+      UL_TEST_OBSERVED_EFFECTS.databaseRead,
+    );
     buildCount(op, TEST_SCOPE);
-    const r = this.lookup("count", op as unknown as Record<string, unknown>);
+    const r = this.#lookup("count", op as unknown as Record<string, unknown>);
     return Number(r.result ?? 0);
   }
 
   async insert(op: InsertOp) {
+    await this.ctx.props.session.recordObservedEffect(
+      UL_TEST_OBSERVED_EFFECTS.databaseWrite,
+    );
     buildInsert(op, TEST_SCOPE);
-    const r = this.lookup("insert", op as unknown as Record<string, unknown>);
+    const r = this.#lookup("insert", op as unknown as Record<string, unknown>);
     return buildD1FixtureWriteResult(r.result, true);
   }
 
   async update(op: UpdateOp) {
+    await this.ctx.props.session.recordObservedEffect(
+      UL_TEST_OBSERVED_EFFECTS.databaseWrite,
+    );
     buildUpdate(op, TEST_SCOPE);
-    const r = this.lookup("update", op as unknown as Record<string, unknown>);
+    const r = this.#lookup("update", op as unknown as Record<string, unknown>);
     return buildD1FixtureWriteResult(r.result);
   }
 
   async delete(op: DeleteOp) {
+    await this.ctx.props.session.recordObservedEffect(
+      UL_TEST_OBSERVED_EFFECTS.databaseWrite,
+    );
     buildDelete(op, TEST_SCOPE);
-    const r = this.lookup("delete", op as unknown as Record<string, unknown>);
+    const r = this.#lookup("delete", op as unknown as Record<string, unknown>);
     return buildD1FixtureWriteResult(r.result);
   }
 
   async upsert(op: UpsertOp) {
+    await this.ctx.props.session.recordObservedEffect(
+      UL_TEST_OBSERVED_EFFECTS.databaseWrite,
+    );
     buildUpsert(op, TEST_SCOPE);
-    const r = this.lookup("upsert", op as unknown as Record<string, unknown>);
+    const r = this.#lookup("upsert", op as unknown as Record<string, unknown>);
     return buildD1FixtureWriteResult(r.result);
   }
 
   async batch(ops: ScopedBatchOp[]) {
+    await this.ctx.props.session.recordObservedEffect(
+      UL_TEST_OBSERVED_EFFECTS.databaseWrite,
+    );
     if (!Array.isArray(ops)) {
-      throw new Error("galactic.db.batch expects an array of write operations.");
+      throw new Error(
+        "galactic.db.batch expects an array of write operations.",
+      );
     }
     // Validate each op through the builder for prod parity.
     for (const op of ops) validateBatchOp(op);
-    const response = this.lookup("batch", { ops } as Record<string, unknown>);
+    const response = this.#lookup("batch", { ops } as Record<string, unknown>);
     const canned = Array.isArray(response.result) ? response.result : [];
     return ops.map((_, i) => buildD1FixtureWriteResult(canned[i]));
   }

@@ -7,6 +7,7 @@ import {
 } from "https://deno.land/std@0.210.0/assert/mod.ts";
 
 import {
+  activateMemberDeployedAgentCAS,
   AgentHomeRevisionError,
   approveAgentHomeCapabilitiesCAS,
   assertAgentHomeRevision,
@@ -294,6 +295,50 @@ Deno.test("lifecycle, capability, and run-now gates use dedicated owner CAS RPCs
   assert(calls[1].url.endsWith("/rpc/approve_agent_home_capabilities"));
   assert(calls[2].url.endsWith("/rpc/assert_agent_home_revision"));
   assertEquals(calls[1].body.p_capability_ids, [CAPABILITY_ID]);
+});
+
+Deno.test("member deployment activation supports a callable Agent with no routine", async () => {
+  let requestBody: Record<string, unknown> | null = null;
+  const activated = await activateMemberDeployedAgentCAS(
+    {
+      appId: APP_ID,
+      userId: USER_ID,
+      expectedRevision: formatAgentHomeRevision(APP_ID, 7),
+      expectedReleaseGeneration: 3,
+      authSource: "supabase",
+      routineId: null,
+    },
+    deps(mockFetch((url, init) => {
+      assert(url.endsWith("/rpc/activate_member_deployed_agent"));
+      requestBody = bodyOf(init);
+      return jsonResponse({
+        code: "activated",
+        app_id: APP_ID,
+        deployment_state: "ready",
+        release_generation: "3",
+        agent_home_revision: "8",
+        routine_id: null,
+        routine_status: null,
+        replayed: false,
+      });
+    })),
+  );
+  assertEquals(requestBody, {
+    p_request: {
+      owner_id: USER_ID,
+      app_id: APP_ID,
+      expected_release_generation: "3",
+      expected_agent_home_revision: "7",
+      routine_id: null,
+    },
+  });
+  assertEquals(activated, {
+    revision: formatAgentHomeRevision(APP_ID, 8),
+    releaseGeneration: "3",
+    routineId: null,
+    routineStatus: null,
+    replayed: false,
+  });
 });
 
 Deno.test("action claims canonicalize authority payload and parse replay state", async () => {
@@ -899,7 +944,10 @@ Deno.test("Agent Home migration safely parses legacy text manifests", () => {
 Deno.test("Agent Home action claims fingerprint the full request and only CAS first claim", () => {
   assertStringIncludes(migration, "request_payload jsonb NOT NULL");
   assertStringIncludes(migration, "request_fingerprint text NOT NULL");
-  assertStringIncludes(migration, "lease_token uuid DEFAULT gen_random_uuid() NOT NULL");
+  assertStringIncludes(
+    migration,
+    "lease_token uuid DEFAULT gen_random_uuid() NOT NULL",
+  );
   assertStringIncludes(migration, "lease_expires_at timestamp with time zone");
   assertStringIncludes(migration, "agent_home_action_request_keys");
   assertStringIncludes(migration, "agent_home_action_alias_unique");
@@ -940,14 +988,26 @@ Deno.test("Agent Home action claims fingerprint the full request and only CAS fi
   );
   assertStringIncludes(fence, "v_revision <> v_existing.expected_revision");
   assertStringIncludes(fence, "side_effect_started_at = COALESCE");
-  assertStringIncludes(fence, "v_existing.lease_token IS DISTINCT FROM p_lease_token");
+  assertStringIncludes(
+    fence,
+    "v_existing.lease_token IS DISTINCT FROM p_lease_token",
+  );
   const promotionCommit = sqlFunction(
     "commit_agent_home_promotion_app_record",
     "CREATE OR REPLACE FUNCTION public.renew_agent_home_action_lease",
   );
-  assertStringIncludes(promotionCommit, "galactic.agent_home_promotion_request");
-  assertStringIncludes(promotionCommit, "v_existing.request_payload->>'version'");
-  assertStringIncludes(promotionCommit, "v_existing.lease_token IS DISTINCT FROM p_lease_token");
+  assertStringIncludes(
+    promotionCommit,
+    "galactic.agent_home_promotion_request",
+  );
+  assertStringIncludes(
+    promotionCommit,
+    "v_existing.request_payload->>'version'",
+  );
+  assertStringIncludes(
+    promotionCommit,
+    "v_existing.lease_token IS DISTINCT FROM p_lease_token",
+  );
   assertStringIncludes(
     migration,
     "CREATE TRIGGER guard_agent_home_promotion_release_write",
@@ -962,7 +1022,10 @@ Deno.test("Agent Home action claims fingerprint the full request and only CAS fi
     "CREATE OR REPLACE FUNCTION public.complete_agent_home_action",
   );
   assertStringIncludes(renew, "v_existing.lease_expires_at <= now()");
-  assertStringIncludes(renew, "v_existing.lease_token IS DISTINCT FROM p_lease_token");
+  assertStringIncludes(
+    renew,
+    "v_existing.lease_token IS DISTINCT FROM p_lease_token",
+  );
   assertStringIncludes(renew, "lease_expires_at = v_expires_at");
 
   const emergencyPause = sqlFunction(
@@ -1001,7 +1064,10 @@ Deno.test("Agent Home action claims fingerprint the full request and only CAS fi
     "queue_agent_home_routine_run",
     "CREATE OR REPLACE FUNCTION public.get_agent_home_budget_usage",
   );
-  assertStringIncludes(queue, "v_existing.lease_token IS DISTINCT FROM p_lease_token");
+  assertStringIncludes(
+    queue,
+    "v_existing.lease_token IS DISTINCT FROM p_lease_token",
+  );
   assertStringIncludes(queue, "v_revision <> p_expected_revision");
   assertStringIncludes(queue, "metadata->>'launch_primary' = 'true'");
   assertStringIncludes(queue, "AND status = 'active'");

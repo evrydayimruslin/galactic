@@ -155,7 +155,12 @@ Deno.test("reuse key: gx.test mode changes the key (host stub bindings are baked
 Deno.test("reuse key: AI route / unavailable-reason change → different key", async () => {
   const a = await derive(base());
   const routed = base();
-  routed.aiRoute = { provider: "openrouter", baseUrl: "https://x", apiKey: "k", model: "m" };
+  routed.aiRoute = {
+    provider: "openrouter",
+    baseUrl: "https://x",
+    apiKey: "k",
+    model: "m",
+  };
   const b = await derive(routed);
   assertNotEquals(a, b);
   const unavailable = base();
@@ -227,6 +232,7 @@ Deno.test("reuse key: DB / MEMORY / RUNS binding-set presence changes the key (n
 function eligBase(over: Record<string, unknown> = {}): any {
   return {
     userId: "user-A",
+    testMode: false,
     d1Fixtures: null,
     permissions: ["storage:read"],
     appCallDependencies: [],
@@ -254,6 +260,12 @@ Deno.test("eligibility: fixture-backed execution (gx.test) → ineligible (per-c
   const v = isolateReuseEligibility(eligBase({ d1Fixtures: { tables: {} } }));
   assertEquals(v.eligible, false);
   assertEquals(v.reason, "fixture_execution");
+});
+
+Deno.test("eligibility: gx.test is ineligible even without D1 fixtures", () => {
+  const v = isolateReuseEligibility(eligBase({ testMode: true }));
+  assertEquals(v.eligible, false);
+  assertEquals(v.reason, "test_execution");
 });
 
 Deno.test("eligibility: Compute-capable execution → ineligible (request handle isolation)", () => {

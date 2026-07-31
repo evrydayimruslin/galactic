@@ -59,6 +59,92 @@ describe("Compute release workflow static guards", () => {
     );
   });
 
+  it("binds the exact local image to a registry SBOM without a Docker export", async () => {
+    const deploy = await text(".github/workflows/compute-deploy.yml");
+    const install = deploy.indexOf("Install dependencies");
+    const build = deploy.indexOf("Build and smoke exact image");
+    const push = deploy.indexOf("Push image and resolve registry digest");
+    const pullCredential = deploy.indexOf(
+      "Issue isolated read-only registry credential for SBOM",
+    );
+    const sbom = deploy.indexOf("Generate image SBOM");
+    const vulnerabilityGate = deploy.indexOf(
+      "Gate all critical and fixable high image vulnerabilities",
+    );
+    const deployConfig = deploy.indexOf(
+      "Build exact-digest Compute deployment config",
+    );
+    expect(build).toBeGreaterThan(install);
+    expect(push).toBeGreaterThan(build);
+    expect(pullCredential).toBeGreaterThan(push);
+    expect(sbom).toBeGreaterThan(pullCredential);
+    expect(vulnerabilityGate).toBeGreaterThan(sbom);
+    expect(deployConfig).toBeGreaterThan(vulnerabilityGate);
+
+    const buildStep = deploy.slice(build, push);
+    expect(buildStep).toContain(
+      "docker builder prune --all --force",
+    );
+    expect(buildStep).toContain("local-image-id.txt");
+    expect(buildStep).toContain(
+      "docker image inspect --format '{{.Id}}'",
+    );
+    expect(buildStep).toContain("base-image-id.txt");
+    expect(buildStep).not.toContain("docker system prune");
+    expect(buildStep).not.toContain("docker image prune");
+
+    const pushStep = deploy.slice(push, pullCredential);
+    expect(pushStep).toContain("remote_config_digest");
+    expect(pushStep).toContain("local_image_id");
+    expect(pushStep).toContain(
+      '"The pushed manifest config does not match the exact local image."',
+    );
+    expect(pushStep).toContain(
+      'docker image rm --force "$local_image_id"',
+    );
+    expect(pushStep).toContain(
+      'docker image rm --force "$base_image_id"',
+    );
+    expect(pushStep).toContain(
+      "docker logout registry.cloudflare.com",
+    );
+    expect(pushStep.indexOf("remote_config_digest")).toBeLessThan(
+      pushStep.indexOf('docker image rm --force "$local_image_id"'),
+    );
+    expect(pushStep).not.toContain("docker image prune");
+    expect(pushStep).not.toContain("docker system prune");
+
+    const credentialStep = deploy.slice(pullCredential, sbom);
+    expect(credentialStep).toContain("--pull");
+    expect(credentialStep).not.toContain("--push");
+    expect(credentialStep).toContain("--expiration-minutes 60");
+    expect(credentialStep).toContain("SBOM_DOCKER_CONFIG");
+
+    const sbomStep = deploy.slice(sbom, vulnerabilityGate);
+    expect(sbomStep).toContain(
+      'expected_image_id="$(cat "$EVIDENCE_DIR/local-image-id.txt")"',
+    );
+    expect(sbomStep).toContain(
+      '"$syft_dir/syft" "registry:$REMOTE_IMAGE"',
+    );
+    expect(sbomStep).not.toContain('"docker:$LOCAL_IMAGE_TAG"');
+    expect(sbomStep).toContain("image.syft.json");
+    expect(sbomStep).toContain(
+      ".source.metadata.manifestDigest == $manifest_digest",
+    );
+    expect(sbomStep).toContain(
+      ".source.metadata.imageID == $image_id",
+    );
+    expect(sbomStep).toContain('"$EVIDENCE_DIR/sbom-source.json"');
+    expect(sbomStep).not.toContain("docker image inspect");
+    expect(sbomStep).toContain(
+      'rm -rf -- "$SBOM_DOCKER_CONFIG"',
+    );
+    expect(deploy).toContain(
+      'rm -rf -- "$RUNNER_TEMP/compute-sbom-docker"',
+    );
+  });
+
   it("keeps emergency disable source-immutable and free of enable authority", async () => {
     const admission = await text(".github/workflows/compute-admission.yml");
     const resolveStart = admission.indexOf("Resolve certified OFF version from Compute release evidence");

@@ -1,43 +1,85 @@
-import { assertEquals } from 'https://deno.land/std@0.210.0/assert/assert_equals.ts';
-import { assertStringIncludes } from 'https://deno.land/std@0.210.0/assert/assert_string_includes.ts';
+import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
+import { assertStringIncludes } from "https://deno.land/std@0.210.0/assert/assert_string_includes.ts";
+import { assertThrows } from "https://deno.land/std@0.210.0/assert/assert_throws.ts";
 
 import {
   classifyLaunchAgentHomePromotionReconciliation,
   handleLaunch,
+  type LaunchHandlerDependencies,
   parseLaunchApiKeyCreateRequest,
   parseLaunchHandoffCreateRequest,
-} from './launch.ts';
-import { putLiveExecutedBundle } from '../services/executed-bundle.ts';
-import { encryptEnvVar } from '../services/envvars.ts';
-import { compileOperatorItems } from '../services/operator-issue-compiler.ts';
+  requireConfirmedEmailForApiKeyCreation,
+} from "./launch.ts";
+import { putLiveExecutedBundle } from "../services/executed-bundle.ts";
+import { BuilderHandoffDeploymentError } from "../services/builder-handoff-deployments.ts";
+import { encryptEnvVar } from "../services/envvars.ts";
+import { compileOperatorItems } from "../services/operator-issue-compiler.ts";
+import {
+  SubscriptionCheckoutAttemptNotFoundError,
+  SubscriptionCheckoutCancellationError,
+} from "../services/subscriptions.ts";
+import {
+  GALACTIC_BASIC_POLICY_REVISION,
+  GALACTIC_COMPILER_REVISION,
+  GALACTIC_RUNTIME_CONTRACT_REVISION,
+} from "../services/galactic-release-identity.ts";
+import { buildVersionTrustMetadata } from "../services/trust.ts";
+import type {
+  LaunchCandidateInvitation,
+  LaunchSubscriptionResponse,
+} from "../../shared/contracts/launch.ts";
+import type {
+  VersionMetadata,
+  VersionTestAttestationMetadataV2,
+} from "../../shared/types/index.ts";
 
 const TEST_ENV = {
-  BASE_URL: 'https://ultralight.test',
-  SUPABASE_URL: 'https://supabase.test',
-  SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
+  BASE_URL: "https://ultralight.test",
+  SUPABASE_URL: "https://supabase.test",
+  SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
 };
 
-Deno.test('launch Agent Home: promotion reconciliation fails closed on every partial phase', () => {
+Deno.test("launch Galactic Keys: confirmed email is required for Supabase sessions", () => {
+  assertThrows(
+    () =>
+      requireConfirmedEmailForApiKeyCreation({
+        authSource: "supabase",
+        emailConfirmedAt: null,
+      }),
+    Error,
+    "Confirm your email before creating a Galactic Key",
+  );
+  requireConfirmedEmailForApiKeyCreation({
+    authSource: "supabase",
+    emailConfirmedAt: "2026-07-30T17:30:00.000Z",
+  });
+  requireConfirmedEmailForApiKeyCreation({
+    authSource: "api_token",
+    emailConfirmedAt: null,
+  });
+});
+
+Deno.test("launch Agent Home: promotion reconciliation fails closed on every partial phase", () => {
   assertEquals(
     classifyLaunchAgentHomePromotionReconciliation({
       databaseAtTarget: false,
       liveAtTarget: false,
     }),
-    'not_applied',
+    "not_applied",
   );
   assertEquals(
     classifyLaunchAgentHomePromotionReconciliation({
       databaseAtTarget: false,
       liveAtTarget: true,
     }),
-    'repair_required',
+    "repair_required",
   );
   assertEquals(
     classifyLaunchAgentHomePromotionReconciliation({
       databaseAtTarget: true,
       liveAtTarget: false,
     }),
-    'repair_required',
+    "repair_required",
   );
   assertEquals(
     classifyLaunchAgentHomePromotionReconciliation({
@@ -45,7 +87,7 @@ Deno.test('launch Agent Home: promotion reconciliation fails closed on every par
       liveAtTarget: true,
       storageCurrent: false,
     }),
-    'repair_required',
+    "repair_required",
   );
   assertEquals(
     classifyLaunchAgentHomePromotionReconciliation({
@@ -53,8 +95,460 @@ Deno.test('launch Agent Home: promotion reconciliation fails closed on every par
       liveAtTarget: true,
       storageCurrent: true,
     }),
-    'applied',
+    "applied",
   );
+});
+
+function candidateRouteSubscription(): LaunchSubscriptionResponse {
+  return {
+    plan: "pro",
+    planName: "Membership",
+    priceCents: 2_000,
+    currency: "usd",
+    interval: "month",
+    status: "active",
+    currentPeriodEnd: "2026-08-30T18:00:00.000Z",
+    cancelAtPeriodEnd: false,
+    hasActiveSubscription: true,
+    canSubscribe: false,
+    canManage: true,
+    capacity: {
+      plan: "pro",
+      state: "available",
+      weekly: {
+        state: "available",
+        resetsAt: "2026-08-03T00:00:00.000Z",
+      },
+      nextEligibleAt: null,
+      activeAgentLimit: null,
+      generatedAt: "2026-07-30T18:00:00.000Z",
+    },
+    generatedAt: "2026-07-30T18:00:00.000Z",
+  };
+}
+
+function recoveredCandidateRouteProjection(): LaunchCandidateInvitation {
+  const candidateId = "22222222-2222-4222-8222-222222222221";
+  const agentId = "22222222-2222-4222-8222-222222222223";
+  const deploymentId = "22222222-2222-4222-8222-222222222224";
+  return {
+    id: candidateId,
+    handoffId: candidateId,
+    intent: "agent",
+    status: "deployed",
+    target: { kind: "new_agent", reservedAgentId: agentId },
+    archive: {
+      digest: "a".repeat(64),
+      byteCount: 1_024,
+      objectCount: 4,
+    },
+    release: {
+      version: "1.0.0",
+      name: "Recovered Agent",
+      description: "A recovered completed candidate.",
+      functions: [],
+      interfaces: [],
+      routines: [],
+      settings: [],
+      network: [],
+      compute: null,
+      permissions: [],
+    },
+    evidence: {
+      bundleId: `gxb1_${"b".repeat(64)}`,
+      sourceHash: "c".repeat(64),
+      attestationId: "attestation-recovered",
+      attestationDigest: "d".repeat(64),
+      documentDigest: "e".repeat(64),
+      reportDigest: "f".repeat(64),
+      releaseDigest: "1".repeat(64),
+      qualification: {
+        profile: "basic",
+        document_digest: "e".repeat(64),
+        release_digest: "1".repeat(64),
+        report_digest: "f".repeat(64),
+        compiler_revision: "compiler-test",
+        runtime_revision: "runtime-test",
+        policy_revision: "policy-test",
+        cases: {
+          declared: 1,
+          required: 1,
+          passed: 1,
+          optional_failed: 0,
+        },
+        functions: { declared: 1, exercised: 1 },
+        effects: { declared: 0, exercised: 0, untested: 0 },
+      },
+    },
+    deploymentReady: false,
+    blocker: null,
+    deployment: {
+      deploymentId,
+      completedAt: "2026-07-30T18:00:00.000Z",
+      agent: {
+        id: agentId,
+        slug: "recovered-agent",
+        name: "Recovered Agent",
+        version: "1.0.0",
+        setupRequired: true,
+      },
+    },
+    reviewRevision: `gxr1:${"2".repeat(64)}`,
+    createdAt: "2026-07-30T17:00:00.000Z",
+    updatedAt: "2026-07-30T18:00:00.000Z",
+  };
+}
+
+Deno.test("launch candidates: account-session list and owner-private misses are no-store", async () => {
+  let listOwner: string | null = null;
+  let detailOwner: string | null = null;
+  const recovered = recoveredCandidateRouteProjection();
+  const dependencies: LaunchHandlerDependencies = {
+    candidates: {
+      list: (ownerId) => {
+        listOwner = ownerId;
+        return Promise.resolve([recovered]);
+      },
+      subscription: () => Promise.resolve(candidateRouteSubscription()),
+      get: (ownerId, candidateId) => {
+        detailOwner = ownerId;
+        return Promise.resolve(candidateId === recovered.id ? recovered : null);
+      },
+    },
+  };
+  await withLaunchEnv(
+    async () => {
+      const list = await handleLaunch(
+        new Request("https://ultralight.test/api/launch/candidates", {
+          headers: { Authorization: "Bearer browser-session-token" },
+        }),
+        dependencies,
+      );
+      assertEquals(list.status, 200);
+      const listPayload = await list.json();
+      assertEquals(listPayload.candidates.length, 1);
+      assertEquals(listPayload.candidates[0].status, "deployed");
+      assertEquals(
+        listPayload.candidates[0].deployment,
+        recovered.deployment,
+      );
+      assertEquals(listOwner, "user-1");
+      assertEquals(list.headers.get("cache-control"), "private, no-store");
+
+      const detail = await handleLaunch(
+        new Request(
+          `https://ultralight.test/api/launch/candidates/${recovered.id}`,
+          { headers: { Authorization: "Bearer browser-session-token" } },
+        ),
+        dependencies,
+      );
+      assertEquals(detail.status, 200);
+      assertEquals(
+        (await detail.json()).candidate.deployment,
+        recovered.deployment,
+      );
+      assertEquals(detail.headers.get("cache-control"), "private, no-store");
+
+      const invalid = await handleLaunch(
+        new Request(
+          "https://ultralight.test/api/launch/candidates/not-a-uuid",
+          { headers: { Authorization: "Bearer browser-session-token" } },
+        ),
+        dependencies,
+      );
+      assertEquals(invalid.status, 400);
+
+      const missing = await handleLaunch(
+        new Request(
+          "https://ultralight.test/api/launch/candidates/22222222-2222-4222-8222-222222222229",
+          { headers: { Authorization: "Bearer browser-session-token" } },
+        ),
+        dependencies,
+      );
+      assertEquals(missing.status, 404);
+      assertEquals(detailOwner, "user-1");
+    },
+    agentHomeFetchMock(),
+  );
+});
+
+Deno.test("launch candidates: Deploy strictly parses reviewed identity and checkout polling stays owner-scoped", async () => {
+  let deployInput: Record<string, unknown> | null = null;
+  let checkoutInput: Record<string, unknown> | null = null;
+  let cancelCheckoutInput: Record<string, unknown> | null = null;
+  const dependencies: LaunchHandlerDependencies = {
+    candidates: {
+      deploy: (input) => {
+        deployInput = input as unknown as Record<string, unknown>;
+        return Promise.resolve({
+          success: true,
+          candidateId: HOME_APP_ID,
+          deploymentId: HOME_ACTION_ID,
+          status: "completed",
+          replayed: false,
+          agent: {
+            id: HOME_APP_ID,
+            slug: "callable-agent",
+            name: "Callable Agent",
+            version: "1.0.0",
+            setupRequired: true,
+          },
+          message: "Agent deployed privately.",
+          generatedAt: "2026-07-30T18:00:00.000Z",
+        });
+      },
+      checkoutAttempt: (input) => {
+        checkoutInput = input as unknown as Record<string, unknown>;
+        return Promise.resolve({
+          attemptId: HOME_ROUTINE_ID,
+          status: "active",
+          subscription: candidateRouteSubscription(),
+          generatedAt: "2026-07-30T18:00:00.000Z",
+        });
+      },
+      cancelCheckoutAttempt: (input) => {
+        cancelCheckoutInput = input as unknown as Record<string, unknown>;
+        return Promise.resolve({
+          attemptId: HOME_ROUTINE_ID,
+          status: "cancelled",
+          subscription: candidateRouteSubscription(),
+          generatedAt: "2026-07-30T18:00:00.000Z",
+        });
+      },
+    },
+  };
+  await withLaunchEnv(
+    async () => {
+      const rejected = await handleLaunch(
+        new Request(
+          `https://ultralight.test/api/launch/candidates/${HOME_APP_ID}/deploy`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: "Bearer browser-session-token",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              idempotencyKey: HOME_IDEMPOTENCY_KEY,
+              archiveDigest: "a".repeat(64),
+              releaseDigest: "b".repeat(64),
+              reviewRevision: `gxr1:${"c".repeat(64)}`,
+              deployImmediately: true,
+            }),
+          },
+        ),
+        dependencies,
+      );
+      assertEquals(rejected.status, 400);
+      assertEquals(deployInput, null);
+
+      const deployed = await handleLaunch(
+        new Request(
+          `https://ultralight.test/api/launch/candidates/${HOME_APP_ID}/deploy`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: "Bearer browser-session-token",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              idempotencyKey: HOME_IDEMPOTENCY_KEY,
+              archiveDigest: "a".repeat(64),
+              releaseDigest: "b".repeat(64),
+              reviewRevision: `gxr1:${"c".repeat(64)}`,
+            }),
+          },
+        ),
+        dependencies,
+      );
+      assertEquals(deployed.status, 200);
+      assertEquals(deployInput, {
+        ownerId: "user-1",
+        candidateId: HOME_APP_ID,
+        idempotencyKey: HOME_IDEMPOTENCY_KEY,
+        archiveDigest: "a".repeat(64),
+        releaseDigest: "b".repeat(64),
+        reviewRevision: `gxr1:${"c".repeat(64)}`,
+      });
+      assertEquals(deployed.headers.get("cache-control"), "private, no-store");
+
+      const membershipRequired = await handleLaunch(
+        new Request(
+          `https://ultralight.test/api/launch/candidates/${HOME_APP_ID}/deploy`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: "Bearer browser-session-token",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              idempotencyKey: HOME_IDEMPOTENCY_KEY,
+              archiveDigest: "a".repeat(64),
+              releaseDigest: "b".repeat(64),
+              reviewRevision: `gxr1:${"c".repeat(64)}`,
+            }),
+          },
+        ),
+        {
+          candidates: {
+            deploy: () =>
+              Promise.reject(
+                new BuilderHandoffDeploymentError(
+                  "membership_required",
+                  "Membership is required",
+                  402,
+                ),
+              ),
+          },
+        },
+      );
+      assertEquals(membershipRequired.status, 402);
+      assertEquals(
+        (await membershipRequired.json()).code,
+        "membership_required",
+      );
+
+      const checkout = await handleLaunch(
+        new Request(
+          `https://ultralight.test/api/launch/subscription/checkout-attempts/${HOME_ROUTINE_ID}`,
+          { headers: { Authorization: "Bearer browser-session-token" } },
+        ),
+        dependencies,
+      );
+      assertEquals(checkout.status, 200);
+      assertEquals(checkoutInput, {
+        userId: "user-1",
+        attemptId: HOME_ROUTINE_ID,
+      });
+      assertEquals(checkout.headers.get("cache-control"), "private, no-store");
+
+      const invalidCheckout = await handleLaunch(
+        new Request(
+          "https://ultralight.test/api/launch/subscription/checkout-attempts/not-a-uuid",
+          { headers: { Authorization: "Bearer browser-session-token" } },
+        ),
+        dependencies,
+      );
+      assertEquals(invalidCheckout.status, 400);
+
+      const cancelledCheckout = await handleLaunch(
+        new Request(
+          `https://ultralight.test/api/launch/subscription/checkout-attempts/${HOME_ROUTINE_ID}/cancel`,
+          {
+            method: "POST",
+            headers: { Authorization: "Bearer browser-session-token" },
+          },
+        ),
+        dependencies,
+      );
+      assertEquals(cancelledCheckout.status, 200);
+      assertEquals(cancelCheckoutInput, {
+        userId: "user-1",
+        attemptId: HOME_ROUTINE_ID,
+      });
+      assertEquals(
+        (await cancelledCheckout.json()).status,
+        "cancelled",
+      );
+      assertEquals(
+        cancelledCheckout.headers.get("cache-control"),
+        "private, no-store",
+      );
+
+      const cancelWithGet = await handleLaunch(
+        new Request(
+          `https://ultralight.test/api/launch/subscription/checkout-attempts/${HOME_ROUTINE_ID}/cancel`,
+          { headers: { Authorization: "Bearer browser-session-token" } },
+        ),
+        dependencies,
+      );
+      assertEquals(cancelWithGet.status, 405);
+
+      const ownerPrivateMiss = await handleLaunch(
+        new Request(
+          `https://ultralight.test/api/launch/subscription/checkout-attempts/${HOME_ROUTINE_ID}/cancel`,
+          {
+            method: "POST",
+            headers: { Authorization: "Bearer browser-session-token" },
+          },
+        ),
+        {
+          candidates: {
+            cancelCheckoutAttempt: () =>
+              Promise.reject(
+                new SubscriptionCheckoutAttemptNotFoundError(),
+              ),
+          },
+        },
+      );
+      assertEquals(ownerPrivateMiss.status, 404);
+
+      const cancellationConflict = await handleLaunch(
+        new Request(
+          `https://ultralight.test/api/launch/subscription/checkout-attempts/${HOME_ROUTINE_ID}/cancel`,
+          {
+            method: "POST",
+            headers: { Authorization: "Bearer browser-session-token" },
+          },
+        ),
+        {
+          candidates: {
+            cancelCheckoutAttempt: () =>
+              Promise.reject(
+                new SubscriptionCheckoutCancellationError(
+                  "checkout_cancellation_conflict",
+                  "Nothing was changed.",
+                ),
+              ),
+          },
+        },
+      );
+      assertEquals(cancellationConflict.status, 409);
+      assertEquals(
+        (await cancellationConflict.json()).code,
+        "checkout_cancellation_conflict",
+      );
+    },
+    agentHomeFetchMock(),
+  );
+});
+
+Deno.test({
+  name:
+    "launch candidates: connected API keys cannot read invitations or checkout attempts",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    for (
+      const path of [
+        "/api/launch/candidates",
+        `/api/launch/candidates/${HOME_APP_ID}`,
+        `/api/launch/subscription/checkout-attempts/${HOME_ROUTINE_ID}`,
+        `/api/launch/subscription/checkout-attempts/${HOME_ROUTINE_ID}/cancel`,
+      ]
+    ) {
+      const response = await withLaunchEnv(
+        () =>
+          handleLaunch(
+            new Request(`https://ultralight.test${path}`, {
+              headers: { Authorization: `Bearer ${TEST_API_TOKEN}` },
+            }),
+            {
+              candidates: {
+                list: () => Promise.reject(new Error("must not be called")),
+                get: () => Promise.reject(new Error("must not be called")),
+                checkoutAttempt: () =>
+                  Promise.reject(new Error("must not be called")),
+                cancelCheckoutAttempt: () =>
+                  Promise.reject(new Error("must not be called")),
+              },
+            },
+          ),
+        apiTokenAuthMock(),
+      );
+      assertEquals(response.status, 403, path);
+    }
+  },
 });
 
 async function withLaunchEnv<T>(
@@ -83,60 +577,60 @@ async function withLaunchEnv<T>(
 function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { "Content-Type": "application/json" },
   });
 }
 
 function launchPermissionTestApp(): Record<string, unknown> {
   return {
-    id: 'app-1',
-    owner_id: 'owner-1',
-    slug: 'deploy-helper',
-    name: 'Deploy Helper',
-    description: 'Deploy tools for existing agents',
-    visibility: 'public',
-    download_access: 'public',
-    current_version: 'v1',
+    id: "app-1",
+    owner_id: "owner-1",
+    slug: "deploy-helper",
+    name: "Deploy Helper",
+    description: "Deploy tools for existing agents",
+    visibility: "public",
+    download_access: "public",
+    current_version: "v1",
     manifest: {
       access_policy: {
-        mode: 'module',
-        module: 'policy.ts',
-        export: 'planAccess',
+        mode: "module",
+        module: "policy.ts",
+        export: "planAccess",
       },
       functions: {
         deploy: {
-          description: 'Deploy code',
+          description: "Deploy code",
           annotations: {
             readOnlyHint: false,
             destructiveHint: true,
           },
           parameters: {
             repo: {
-              type: 'string',
-              description: 'Repository URL',
+              type: "string",
+              description: "Repository URL",
             },
             dry_run: {
-              type: 'boolean',
-              description: 'Validate without deploying',
+              type: "boolean",
+              description: "Validate without deploying",
               required: false,
             },
           },
           returns: {
-            type: 'object',
-            description: 'Deployment result',
+            type: "object",
+            description: "Deployment result",
           },
         },
-        inspect: { description: 'Inspect state' },
+        inspect: { description: "Inspect state" },
       },
       widgets: [{
-        id: 'ops',
-        label: 'Ops',
-        description: 'Operations widget',
-        ui_function: 'widget_ops_ui',
-        data_function: 'widget_ops_data',
+        id: "ops",
+        label: "Ops",
+        description: "Operations widget",
+        ui_function: "widget_ops_ui",
+        data_function: "widget_ops_data",
       }],
     },
-    exports: ['deploy', 'inspect', 'widget_ops_ui', 'widget_ops_data'],
+    exports: ["deploy", "inspect", "widget_ops_ui", "widget_ops_data"],
     pricing_config: {
       default_price_light: 1,
       default_skill_pull_price_light: 2,
@@ -149,13 +643,13 @@ function launchPermissionTestApp(): Record<string, unknown> {
       },
     },
     gpu_pricing_config: null,
-    runtime: 'deno',
+    runtime: "deno",
     gpu_status: null,
     gpu_type: null,
     version_metadata: [],
     env_schema: {},
-    tags: ['deploy'],
-    category: 'devtools',
+    tags: ["deploy"],
+    category: "devtools",
     likes: 0,
     dislikes: 0,
     weighted_likes: 0,
@@ -163,38 +657,38 @@ function launchPermissionTestApp(): Record<string, unknown> {
     total_runs: 0,
     runs_30d: 0,
     hosting_suspended: false,
-    updated_at: '2026-06-01T00:00:00.000Z',
-    created_at: '2026-06-01T00:00:00.000Z',
+    updated_at: "2026-06-01T00:00:00.000Z",
+    created_at: "2026-06-01T00:00:00.000Z",
   };
 }
 
 function privateOwnerTestApp(): Record<string, unknown> {
   return {
     ...launchPermissionTestApp(),
-    id: 'app-private-1',
-    owner_id: 'user-1',
-    slug: 'private-helper',
-    name: 'Private Helper',
-    description: 'Private owner-only preview tool',
-    visibility: 'private',
+    id: "app-private-1",
+    owner_id: "user-1",
+    slug: "private-helper",
+    name: "Private Helper",
+    description: "Private owner-only preview tool",
+    visibility: "private",
   };
 }
 
 function persistentRoutineRow(): Record<string, unknown> {
   return {
-    id: 'routine-1',
-    user_id: 'user-1',
-    composer_app_id: 'app-private-1',
-    composer_app_slug: 'private-helper',
-    template_id: 'monitor',
-    template_version: 'v1',
-    name: 'Private monitor',
-    description: 'Checks the private system',
-    intent: 'Watch the private system and report meaningful changes.',
-    handler_function: 'inspect',
-    status: 'paused',
-    schedule: { type: 'interval', every_seconds: 300 },
-    config: { secret_value: 'must-not-leak' },
+    id: "routine-1",
+    user_id: "user-1",
+    composer_app_id: "app-private-1",
+    composer_app_slug: "private-helper",
+    template_id: "monitor",
+    template_version: "v1",
+    name: "Private monitor",
+    description: "Checks the private system",
+    intent: "Watch the private system and report meaningful changes.",
+    handler_function: "inspect",
+    status: "paused",
+    schedule: { type: "interval", every_seconds: 300 },
+    config: { secret_value: "must-not-leak" },
     budget_policy: {
       max_light_per_run: 10,
       max_light_per_day: 50,
@@ -204,66 +698,66 @@ function persistentRoutineRow(): Record<string, unknown> {
     approval_policy: { require_user_approval: true },
     max_concurrency: 1,
     next_run_at: null,
-    last_run_at: '2026-07-14T12:00:00.000Z',
+    last_run_at: "2026-07-14T12:00:00.000Z",
     last_success_at: null,
-    last_error_at: '2026-07-14T12:00:00.000Z',
+    last_error_at: "2026-07-14T12:00:00.000Z",
     failure_count: 1,
-    created_by_trace_id: 'trace-created',
+    created_by_trace_id: "trace-created",
     metadata: {
-      secret_value: 'must-not-leak',
-      auto_pause: { reason: 'consecutive_failures' },
+      secret_value: "must-not-leak",
+      auto_pause: { reason: "consecutive_failures" },
     },
-    created_at: '2026-07-14T10:00:00.000Z',
-    updated_at: '2026-07-14T12:00:00.000Z',
+    created_at: "2026-07-14T10:00:00.000Z",
+    updated_at: "2026-07-14T12:00:00.000Z",
     deleted_at: null,
   };
 }
 
 function persistentRoutineCapabilityRow(): Record<string, unknown> {
   return {
-    id: 'capability-1',
-    routine_id: 'routine-1',
-    user_id: 'user-1',
-    app_id: 'app-private-1',
-    app_ref: 'private-helper',
-    function_name: 'inspect',
-    access: 'read',
+    id: "capability-1",
+    routine_id: "routine-1",
+    user_id: "user-1",
+    app_id: "app-private-1",
+    app_ref: "private-helper",
+    function_name: "inspect",
+    access: "read",
     required: true,
-    purpose: 'Read current private status',
+    purpose: "Read current private status",
     approved: false,
     approved_at: null,
     approved_by_user_id: null,
     pricing_snapshot: {},
     constraints: {},
     metadata: {},
-    created_at: '2026-07-14T10:00:00.000Z',
-    updated_at: '2026-07-14T10:00:00.000Z',
+    created_at: "2026-07-14T10:00:00.000Z",
+    updated_at: "2026-07-14T10:00:00.000Z",
   };
 }
 
 function persistentRoutineRunRow(): Record<string, unknown> {
   return {
-    id: 'run-1',
-    routine_id: 'routine-1',
-    user_id: 'user-1',
-    status: 'failed',
-    trigger: 'scheduled',
-    trace_id: 'trace-run',
-    started_at: '2026-07-14T11:59:00.000Z',
-    completed_at: '2026-07-14T12:00:00.000Z',
+    id: "run-1",
+    routine_id: "routine-1",
+    user_id: "user-1",
+    status: "failed",
+    trigger: "scheduled",
+    trace_id: "trace-run",
+    started_at: "2026-07-14T11:59:00.000Z",
+    completed_at: "2026-07-14T12:00:00.000Z",
     duration_ms: 60_000,
     total_light: 2,
-    summary: 'Inbox delivery did not complete.',
-    error: { code: 'inbox_unavailable', message: 'must-not-leak' },
-    run_config: { secret_value: 'must-not-leak' },
-    metadata: { secret_value: 'must-not-leak' },
-    created_at: '2026-07-14T11:59:00.000Z',
+    summary: "Inbox delivery did not complete.",
+    error: { code: "inbox_unavailable", message: "must-not-leak" },
+    run_config: { secret_value: "must-not-leak" },
+    metadata: { secret_value: "must-not-leak" },
+    created_at: "2026-07-14T11:59:00.000Z",
   };
 }
 
 // Legacy-format API token (plaintext column) so the api_token auth path can be
 // exercised without reproducing salted-hash material in tests.
-const TEST_API_TOKEN = `ul_${'a'.repeat(32)}`;
+const TEST_API_TOKEN = `ul_${"a".repeat(32)}`;
 
 function apiTokenAuthMock(): typeof fetch {
   return (async (
@@ -272,28 +766,28 @@ function apiTokenAuthMock(): typeof fetch {
   ) => {
     const url = input instanceof Request ? input.url : String(input);
     const method = init?.method ||
-      (input instanceof Request ? input.method : 'GET');
-    if (url.startsWith('https://supabase.test/rest/v1/user_api_tokens?')) {
-      if (method === 'PATCH') {
+      (input instanceof Request ? input.method : "GET");
+    if (url.startsWith("https://supabase.test/rest/v1/user_api_tokens?")) {
+      if (method === "PATCH") {
         return new Response(null, { status: 204 });
       }
       return jsonResponse({
-        id: 'token-1',
-        user_id: 'user-1',
+        id: "token-1",
+        user_id: "user-1",
         token_hash: null,
         token_salt: null,
         plaintext_token: TEST_API_TOKEN,
-        scopes: ['*'],
+        scopes: ["*"],
         app_ids: null,
         function_names: null,
         expires_at: null,
       });
     }
-    if (url.startsWith('https://supabase.test/rest/v1/users?')) {
+    if (url.startsWith("https://supabase.test/rest/v1/users?")) {
       return jsonResponse({
-        id: 'user-1',
-        email: 'agent@example.com',
-        tier: 'free',
+        id: "user-1",
+        email: "agent@example.com",
+        tier: "free",
         provisional: false,
         last_active_at: null,
       });
@@ -302,48 +796,138 @@ function apiTokenAuthMock(): typeof fetch {
   }) as typeof fetch;
 }
 
-const HOME_APP_ID = '11111111-1111-4111-8111-111111111111';
-const HOME_ROUTINE_ID = '22222222-2222-4222-8222-222222222222';
-const HOME_RUN_ID = '33333333-3333-4333-8333-333333333333';
-const HOME_ACTION_ID = '44444444-4444-4444-8444-444444444444';
-const HOME_IDEMPOTENCY_KEY = '55555555-5555-4555-8555-555555555555';
-const HOME_ACTION_LEASE_TOKEN = '66666666-6666-4666-8666-666666666666';
+const HOME_APP_ID = "11111111-1111-4111-8111-111111111111";
+const HOME_ROUTINE_ID = "22222222-2222-4222-8222-222222222222";
+const HOME_RUN_ID = "33333333-3333-4333-8333-333333333333";
+const HOME_ACTION_ID = "44444444-4444-4444-8444-444444444444";
+const HOME_IDEMPOTENCY_KEY = "55555555-5555-4555-8555-555555555555";
+const HOME_ACTION_LEASE_TOKEN = "66666666-6666-4666-8666-666666666666";
+
+function agentHomeR2(
+  files: Readonly<Record<string, string | Uint8Array>>,
+): R2Bucket {
+  return {
+    get: (key: string) => {
+      const value = files[key];
+      if (value === undefined) return Promise.resolve(null);
+      const bytes = typeof value === "string"
+        ? new TextEncoder().encode(value)
+        : value;
+      return Promise.resolve({
+        text: () => Promise.resolve(new TextDecoder().decode(bytes)),
+        arrayBuffer: () =>
+          Promise.resolve(
+            bytes.buffer.slice(
+              bytes.byteOffset,
+              bytes.byteOffset + bytes.byteLength,
+            ),
+          ),
+      });
+    },
+  } as unknown as R2Bucket;
+}
+
+async function agentHomeQualifiedCandidate(input: {
+  manifest: Record<string, unknown>;
+  version?: string;
+  compilerRevision?: string;
+  runtimeRevision?: string;
+  policyRevision?: string;
+}): Promise<VersionMetadata> {
+  const version = input.version || "1.1.0";
+  const sourceHash = "e".repeat(64);
+  const testAttestation: VersionTestAttestationMetadataV2 = {
+    schema_version: 2,
+    attestation_id: "agent-home-qualified-candidate",
+    mode: "deno_execution",
+    source_hash: sourceHash,
+    tested_at: "2026-07-14T18:59:00.000Z",
+    token_expires_at: "2026-07-14T19:15:00.000Z",
+    verified_at: "2026-07-14T19:00:00.000Z",
+    qualification: {
+      profile: "basic",
+      document_digest: "a".repeat(64),
+      release_digest: "b".repeat(64),
+      report_digest: "c".repeat(64),
+      compiler_revision: input.compilerRevision ??
+        GALACTIC_COMPILER_REVISION,
+      runtime_revision: input.runtimeRevision ??
+        GALACTIC_RUNTIME_CONTRACT_REVISION,
+      policy_revision: input.policyRevision ??
+        GALACTIC_BASIC_POLICY_REVISION,
+      cases: {
+        declared: 2,
+        required: 2,
+        passed: 2,
+        optional_failed: 0,
+      },
+      functions: { declared: 2, exercised: 1 },
+      effects: { declared: 2, exercised: 1, untested: 1 },
+    },
+  };
+  const manifestJson = JSON.stringify(input.manifest);
+  const trust = await buildVersionTrustMetadata({
+    appId: HOME_APP_ID,
+    version,
+    runtime: "deno",
+    manifest: manifestJson,
+    files: [
+      { name: "manifest.json", content: manifestJson },
+      {
+        name: "galactic.yaml",
+        content:
+          "apiVersion: agents.connectgalactic.com/v1alpha1\nkind: Agent\n",
+      },
+    ],
+    executable: "export function inspect() { return { ok: true }; }",
+    testAttestation,
+    storageKey: `apps/${HOME_APP_ID}/${version}/`,
+  });
+  return {
+    version,
+    size_bytes: manifestJson.length,
+    created_at: "2026-07-14T19:00:00.000Z",
+    source_hash: sourceHash,
+    trust,
+    test_attestation: testAttestation,
+  };
+}
 
 function agentHomeTestApp(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   const envSchema = {
     OWNER_TOKEN: {
-      scope: 'universal',
+      scope: "universal",
       required: true,
-      input: 'password',
-      label: 'Owner token',
+      input: "password",
+      label: "Owner token",
     },
     USER_TOKEN: {
-      scope: 'per_user',
+      scope: "per_user",
       required: true,
-      input: 'password',
-      label: 'User token',
+      input: "password",
+      label: "User token",
     },
   };
   return {
     ...privateOwnerTestApp(),
     id: HOME_APP_ID,
-    slug: 'home-agent',
-    name: 'Home Agent',
-    description: 'Owns one ongoing responsibility.',
+    slug: "home-agent",
+    name: "Home Agent",
+    description: "Owns one ongoing responsibility.",
     current_version: null,
     current_version_promoted_at: null,
     versions: [],
     version_metadata: [],
-    exports: ['inspect'],
+    exports: ["inspect"],
     env_schema: envSchema,
     manifest: {
-      permissions: ['notify:owner', 'ai:call', 'unknown:scope'],
+      permissions: ["notify:owner", "ai:call", "unknown:scope"],
       env_vars: envSchema,
       functions: {
         inspect: {
-          description: 'Inspect the system.',
+          description: "Inspect the system.",
           annotations: { readOnlyHint: true },
         },
       },
@@ -359,9 +943,9 @@ function agentHomeRoutineRow(
     ...persistentRoutineRow(),
     id: HOME_ROUTINE_ID,
     composer_app_id: HOME_APP_ID,
-    composer_app_slug: 'home-agent',
-    name: 'Home Agent routine',
-    status: 'paused',
+    composer_app_slug: "home-agent",
+    name: "Home Agent routine",
+    status: "paused",
     ...overrides,
   };
 }
@@ -379,8 +963,8 @@ function agentHomeRunRow(
 
 function agentHomeBudgetRow(): Record<string, unknown> {
   return {
-    day_started_at: '2026-07-14T00:00:00.000Z',
-    month_started_at: '2026-07-01T00:00:00.000Z',
+    day_started_at: "2026-07-14T00:00:00.000Z",
+    month_started_at: "2026-07-01T00:00:00.000Z",
     day_settled_light: 3,
     day_reserved_light: 1,
     day_total_light: 4,
@@ -399,8 +983,9 @@ function agentHomeBudgetRow(): Record<string, unknown> {
 interface AgentHomeFetchMockOptions {
   revisionSequence?: string[];
   app?: () => Record<string, unknown>;
-  routine?: () => Record<string, unknown>;
+  routine?: () => Record<string, unknown> | null;
   runs?: () => Record<string, unknown>[];
+  activeProSubscription?: boolean;
   agentEnvVars?: () => Record<string, string>;
   userSecretRows?: () => Record<string, unknown>[];
   rpc?: (
@@ -415,49 +1000,50 @@ function agentHomeFetchMock(
   let revisionCall = 0;
   return (async (input: Request | URL | string, init?: RequestInit) => {
     const url = input instanceof Request ? input.url : String(input);
-    if (url === 'https://supabase.test/auth/v1/user') {
+    if (url === "https://supabase.test/auth/v1/user") {
       return jsonResponse({
-        id: 'user-1',
-        email: 'founder@example.com',
+        id: "user-1",
+        email: "founder@example.com",
+        email_confirmed_at: "2026-07-30T18:00:00.000Z",
         user_metadata: {},
       });
     }
-    if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
-      return jsonResponse([{ id: 'user-1' }]);
+    if (url.includes("/rest/v1/users?") && url.includes("select=id")) {
+      return jsonResponse([{ id: "user-1" }]);
     }
-    if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
-      return jsonResponse([{ tier: 'free' }]);
+    if (url.includes("/rest/v1/users?") && url.includes("select=tier")) {
+      return jsonResponse([{ tier: "free" }]);
     }
-    if (url.startsWith('https://supabase.test/rest/v1/rpc/')) {
-      const name = url.slice(url.lastIndexOf('/') + 1);
+    if (url.startsWith("https://supabase.test/rest/v1/rpc/")) {
+      const name = url.slice(url.lastIndexOf("/") + 1);
       const rawBody = init?.body ??
-        (input instanceof Request ? await input.clone().text() : '{}');
-      const body = JSON.parse(String(rawBody || '{}')) as Record<
+        (input instanceof Request ? await input.clone().text() : "{}");
+      const body = JSON.parse(String(rawBody || "{}")) as Record<
         string,
         unknown
       >;
       const custom = await options.rpc?.(name, body);
       if (custom) return custom;
-      if (name === 'get_agent_home_revision') {
-        const sequence = options.revisionSequence || ['7'];
+      if (name === "get_agent_home_revision") {
+        const sequence = options.revisionSequence || ["7"];
         const revision = sequence[Math.min(revisionCall, sequence.length - 1)];
         revisionCall += 1;
         return jsonResponse(revision);
       }
-      if (name === 'get_agent_home_budget_usage') {
+      if (name === "get_agent_home_budget_usage") {
         return jsonResponse([agentHomeBudgetRow()]);
       }
       return jsonResponse([]);
     }
-    if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
+    if (url.startsWith("https://supabase.test/rest/v1/apps?")) {
       if (
-        (new URL(url).searchParams.get('select') || '').includes('env_vars')
+        (new URL(url).searchParams.get("select") || "").includes("env_vars")
       ) {
         const app = options.app?.() || agentHomeTestApp();
         return jsonResponse([{
           id: HOME_APP_ID,
           env_vars: options.agentEnvVars?.() || {
-            OWNER_TOKEN: 'owner-secret-sentinel',
+            OWNER_TOKEN: "owner-secret-sentinel",
           },
           env_schema: app.env_schema,
           manifest: app.manifest,
@@ -465,79 +1051,91 @@ function agentHomeFetchMock(
       }
       return jsonResponse([options.app?.() || agentHomeTestApp()]);
     }
-    if (url.startsWith('https://supabase.test/rest/v1/user_routines?')) {
-      return new URL(url).searchParams.get('select') === 'id'
-        ? jsonResponse([{ id: HOME_ROUTINE_ID }])
-        : jsonResponse([options.routine?.() || agentHomeRoutineRow()]);
+    if (url.startsWith("https://supabase.test/rest/v1/account_entitlements?")) {
+      return options.activeProSubscription
+        ? jsonResponse([{
+          plan_code: "pro",
+          subscription_status: "active",
+        }])
+        : jsonResponse([]);
     }
-    if (url.startsWith('https://supabase.test/rest/v1/routine_capabilities?')) {
+    if (url.startsWith("https://supabase.test/rest/v1/user_routines?")) {
+      const routine = options.routine === undefined
+        ? agentHomeRoutineRow()
+        : options.routine();
+      if (!routine) return jsonResponse([]);
+      return new URL(url).searchParams.get("select") === "id"
+        ? jsonResponse([{ id: routine.id }])
+        : jsonResponse([routine]);
+    }
+    if (url.startsWith("https://supabase.test/rest/v1/routine_capabilities?")) {
       return jsonResponse([{
         ...persistentRoutineCapabilityRow(),
-        id: '66666666-6666-4666-8666-666666666666',
+        id: "66666666-6666-4666-8666-666666666666",
         routine_id: HOME_ROUTINE_ID,
         app_id: HOME_APP_ID,
-        app_ref: 'home-agent',
+        app_ref: "home-agent",
         approved: true,
-        approved_at: '2026-07-14T10:05:00.000Z',
-        approved_by_user_id: 'user-1',
+        approved_at: "2026-07-14T10:05:00.000Z",
+        approved_by_user_id: "user-1",
       }]);
     }
     if (
       url.startsWith(
-        'https://supabase.test/rest/v1/routine_dashboard_bindings?',
+        "https://supabase.test/rest/v1/routine_dashboard_bindings?",
       )
     ) {
       return jsonResponse([]);
     }
-    if (url.startsWith('https://supabase.test/rest/v1/routine_runs?')) {
+    if (url.startsWith("https://supabase.test/rest/v1/routine_runs?")) {
       return jsonResponse(options.runs?.() || [agentHomeRunRow()]);
     }
-    if (url.startsWith('https://supabase.test/rest/v1/user_app_secrets?')) {
-      if (url.includes('value_encrypted')) {
+    if (url.startsWith("https://supabase.test/rest/v1/user_app_secrets?")) {
+      if (url.includes("value_encrypted")) {
         return jsonResponse(options.userSecretRows?.() || []);
       }
       return jsonResponse(
         options.userSecretRows?.() || [{
-          key: 'USER_TOKEN',
-          updated_at: '2026-07-14T10:10:00.000Z',
-          value_encrypted: 'per-user-secret-sentinel',
+          key: "USER_TOKEN",
+          updated_at: "2026-07-14T10:10:00.000Z",
+          value_encrypted: "per-user-secret-sentinel",
         }],
       );
     }
     if (
       url.startsWith(
-        'https://supabase.test/rest/v1/user_agent_permission_defaults?',
+        "https://supabase.test/rest/v1/user_agent_permission_defaults?",
       )
     ) {
       return jsonResponse([{
-        user_id: 'user-1',
-        default_policy: 'ask',
+        user_id: "user-1",
+        default_policy: "ask",
         default_health_gate: true,
       }]);
     }
     if (
       url.startsWith(
-        'https://supabase.test/rest/v1/user_agent_function_permissions?',
+        "https://supabase.test/rest/v1/user_agent_function_permissions?",
       ) ||
       url.startsWith(
-        'https://supabase.test/rest/v1/user_function_inference_overrides?',
+        "https://supabase.test/rest/v1/user_function_inference_overrides?",
       ) ||
-      url.startsWith('https://supabase.test/rest/v1/agent_function_grants?')
+      url.startsWith("https://supabase.test/rest/v1/agent_function_grants?")
     ) {
       return jsonResponse([]);
     }
     if (
-      url.startsWith('https://supabase.test/rest/v1/user_notifications?')
+      url.startsWith("https://supabase.test/rest/v1/user_notifications?")
     ) {
       const headers = new Headers(
         init?.headers ?? (input instanceof Request ? input.headers : undefined),
       );
-      return headers.get('Prefer') === 'count=exact'
-        ? new Response('[]', {
+      return headers.get("Prefer") === "count=exact"
+        ? new Response("[]", {
           status: 200,
           headers: {
-            'Content-Type': 'application/json',
-            'Content-Range': '*/0',
+            "Content-Type": "application/json",
+            "Content-Range": "*/0",
           },
         })
         : jsonResponse([]);
@@ -550,14 +1148,14 @@ function byokUserRow(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
-    id: 'user-1',
-    email: 'founder@example.com',
-    display_name: 'Founder',
+    id: "user-1",
+    email: "founder@example.com",
+    display_name: "Founder",
     avatar_url: null,
-    tier: 'free',
+    tier: "free",
     country: null,
     featured_app_id: null,
-    profile_slug: 'founder',
+    profile_slug: "founder",
     byok_enabled: false,
     byok_provider: null,
     byok_keys: null,
@@ -571,36 +1169,36 @@ function byokSessionMock(
 ): typeof fetch {
   return (async (input: Request | URL | string) => {
     const url = input instanceof Request ? input.url : String(input);
-    if (url === 'https://supabase.test/auth/v1/user') {
+    if (url === "https://supabase.test/auth/v1/user") {
       return jsonResponse({
-        id: 'user-1',
-        email: 'founder@example.com',
+        id: "user-1",
+        email: "founder@example.com",
         user_metadata: {},
       });
     }
-    if (url.includes('/rest/v1/users?') && url.includes('byok_keys')) {
+    if (url.includes("/rest/v1/users?") && url.includes("byok_keys")) {
       return jsonResponse([profile]);
     }
     if (
-      url.includes('/rest/v1/users?') &&
-      url.includes('select=balance_light')
+      url.includes("/rest/v1/users?") &&
+      url.includes("select=balance_light")
     ) {
       return jsonResponse([{ balance_light: balanceLight }]);
     }
-    if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
-      return jsonResponse([{ id: 'user-1' }]);
+    if (url.includes("/rest/v1/users?") && url.includes("select=id")) {
+      return jsonResponse([{ id: "user-1" }]);
     }
-    if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
-      return jsonResponse([{ tier: 'free' }]);
+    if (url.includes("/rest/v1/users?") && url.includes("select=tier")) {
+      return jsonResponse([{ tier: "free" }]);
     }
     return jsonResponse([]);
   }) as typeof fetch;
 }
 
-Deno.test('launch facade: install instructions expose MCP and CLI targets', async () => {
+Deno.test("launch facade: install instructions expose MCP and CLI targets", async () => {
   await withLaunchEnv(async () => {
     const response = await handleLaunch(
-      new Request('https://ultralight.test/api/launch/install'),
+      new Request("https://ultralight.test/api/launch/install"),
     );
     const body = await response.json() as {
       instructions: Array<{ target: string; configText?: string }>;
@@ -610,77 +1208,77 @@ Deno.test('launch facade: install instructions expose MCP and CLI targets', asyn
     assertEquals(
       body.instructions.map((instruction) => instruction.target),
       [
-        'prompt',
-        'claude_code',
-        'cursor',
-        'codex',
-        'openai_remote_mcp',
-        'generic_mcp',
-        'cli',
-        'api',
+        "prompt",
+        "claude_code",
+        "cursor",
+        "codex",
+        "openai_remote_mcp",
+        "generic_mcp",
+        "cli",
+        "api",
       ],
     );
     assertStringIncludes(
-      body.instructions[0].configText || '',
-      'https://ultralight.test/mcp/platform',
+      body.instructions[0].configText || "",
+      "https://ultralight.test/mcp/platform",
     );
     // The agent prompt must carry every install path plus first actions.
     const promptInstruction = body.instructions.find((instruction) =>
-      instruction.target === 'prompt'
+      instruction.target === "prompt"
     );
-    assertStringIncludes(promptInstruction?.configText || '', 'claude mcp add');
+    assertStringIncludes(promptInstruction?.configText || "", "claude mcp add");
     assertStringIncludes(
-      promptInstruction?.configText || '',
-      'npx galacticconnection setup --token $GALACTIC_API_KEY',
+      promptInstruction?.configText || "",
+      "npx galacticconnection setup --token $GALACTIC_API_KEY",
     );
-    assertStringIncludes(promptInstruction?.configText || '', 'gx.discover');
+    assertStringIncludes(promptInstruction?.configText || "", "gx.discover");
     assertStringIncludes(
-      promptInstruction?.configText || '',
+      promptInstruction?.configText || "",
       '"Authorization":"Bearer $GALACTIC_API_KEY"',
     );
     // First-contact UX: the prompt must drive the private persistent-Agent
     // conjuring flow and stop at the owner activation boundary.
     assertStringIncludes(
-      promptInstruction?.configText || '',
-      'one useful full-time Agent',
+      promptInstruction?.configText || "",
+      "one useful full-time Agent",
     );
     assertStringIncludes(
-      promptInstruction?.configText || '',
-      'explicit review of capabilities',
+      promptInstruction?.configText || "",
+      "explicit review of capabilities",
     );
     assertEquals(
-      (promptInstruction?.configText || '').includes('public marketplace'),
+      (promptInstruction?.configText || "").includes("public marketplace"),
       false,
     );
     const apiInstruction = body.instructions.find((instruction) =>
-      instruction.target === 'api'
+      instruction.target === "api"
     );
     assertStringIncludes(
-      apiInstruction?.configText || '',
-      'https://ultralight.test/api/launch/openapi.json',
+      apiInstruction?.configText || "",
+      "https://ultralight.test/api/launch/openapi.json",
     );
     assertStringIncludes(
-      apiInstruction?.configText || '',
-      'https://ultralight.test/api/launch/store?query=deploy',
+      apiInstruction?.configText || "",
+      "https://ultralight.test/api/launch/store?query=deploy",
     );
   });
 });
 
 Deno.test({
   name:
-    'launch facade: notifications route rejects api_token/actor callers (account session only)',
+    "launch facade: notifications route rejects api_token/actor callers (account session only)",
   // The api_token auth path lazily creates a module-cached supabase-js client
   // whose timer outlives the test (same pattern as the BYOK/wallet launch tests).
   sanitizeOps: false,
   sanitizeResources: false,
   fn: async () => {
     await withLaunchEnv(async () => {
-      for (const method of ['GET', 'PATCH'] as const) {
+      for (const method of ["GET", "PATCH"] as const) {
         const response = await handleLaunch(
-          new Request('https://ultralight.test/api/launch/notifications', {
+          new Request("https://ultralight.test/api/launch/notifications", {
             method,
             headers: { Authorization: `Bearer ${TEST_API_TOKEN}` },
-            ...(method === 'PATCH'
+            ...(method === "PATCH"
               ? { body: JSON.stringify({ all: true }) }
               : {}),
           }),
@@ -694,12 +1292,12 @@ Deno.test({
   },
 });
 
-Deno.test('launch facade: install can include tool-specific handoff', async () => {
+Deno.test("launch facade: install can include tool-specific handoff", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/install?tool=deploy-helper',
+          "https://ultralight.test/api/launch/install?tool=deploy-helper",
         ),
       );
       const body = await response.json() as {
@@ -719,74 +1317,74 @@ Deno.test('launch facade: install can include tool-specific handoff', async () =
       };
 
       assertEquals(response.status, 200);
-      assertEquals(body.toolInstall?.selectedToolSlug, 'deploy-helper');
+      assertEquals(body.toolInstall?.selectedToolSlug, "deploy-helper");
       assertEquals(
         body.toolInstall?.publicToolUrl,
-        'https://ultralight.test/agents/deploy-helper',
+        "https://ultralight.test/agents/deploy-helper",
       );
       assertEquals(
         body.toolInstall?.platformMcpUrl,
-        'https://ultralight.test/mcp/platform',
+        "https://ultralight.test/mcp/platform",
       );
       assertEquals(
         body.toolInstall?.agentMcpUrl,
-        'https://ultralight.test/mcp/app-1',
+        "https://ultralight.test/mcp/app-1",
       );
       assertEquals(body.toolInstall?.recommendedApiKey.scopes, [
-        'apps:call',
+        "apps:call",
       ]);
-      assertEquals(body.toolInstall?.recommendedApiKey.appIds, ['app-1']);
-      assertEquals('widgetUrls' in (body.toolInstall || {}), false);
+      assertEquals(body.toolInstall?.recommendedApiKey.appIds, ["app-1"]);
+      assertEquals("widgetUrls" in (body.toolInstall || {}), false);
       assertStringIncludes(
-        body.toolInstall?.agentHandoff.join('\n') || '',
-        'receipt_id',
+        body.toolInstall?.agentHandoff.join("\n") || "",
+        "receipt_id",
       );
       // The per-agent prompt installs the dedicated endpoint, named by slug.
       assertStringIncludes(
-        body.toolInstall?.connectPrompt || '',
-        'claude mcp add --transport http --scope user deploy-helper https://ultralight.test/mcp/app-1',
+        body.toolInstall?.connectPrompt || "",
+        "claude mcp add --transport http --scope user deploy-helper https://ultralight.test/mcp/app-1",
       );
       assertStringIncludes(
-        body.toolInstall?.connectPrompt || '',
+        body.toolInstall?.connectPrompt || "",
         '"Authorization":"Bearer $GALACTIC_API_KEY"',
       );
       assertStringIncludes(
-        body.toolInstall?.mcpConfigText || '',
+        body.toolInstall?.mcpConfigText || "",
         '"deploy-helper"',
       );
     },
     async (input) => {
       const url = input instanceof Request ? input.url : String(input);
-      if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
+      if (url.startsWith("https://supabase.test/rest/v1/apps?")) {
         return jsonResponse([
           {
-            id: 'app-1',
-            owner_id: 'owner-1',
-            slug: 'deploy-helper',
-            name: 'Deploy Helper',
-            description: 'Deploy tools for existing agents',
-            visibility: 'public',
-            download_access: 'public',
-            current_version: 'v1',
+            id: "app-1",
+            owner_id: "owner-1",
+            slug: "deploy-helper",
+            name: "Deploy Helper",
+            description: "Deploy tools for existing agents",
+            visibility: "public",
+            download_access: "public",
+            current_version: "v1",
             manifest: {
               widgets: [{
-                id: 'ops',
-                label: 'Ops',
-                description: 'Operations widget',
-                ui_function: 'widget_ops_ui',
-                data_function: 'widget_ops_data',
+                id: "ops",
+                label: "Ops",
+                description: "Operations widget",
+                ui_function: "widget_ops_ui",
+                data_function: "widget_ops_data",
               }],
             },
-            exports: ['widget_ops_ui', 'widget_ops_data'],
+            exports: ["widget_ops_ui", "widget_ops_data"],
             pricing_config: {},
             gpu_pricing_config: null,
-            runtime: 'deno',
+            runtime: "deno",
             gpu_status: null,
             gpu_type: null,
             version_metadata: [],
             env_schema: {},
-            tags: ['deploy'],
-            category: 'devtools',
+            tags: ["deploy"],
+            category: "devtools",
             likes: 0,
             dislikes: 0,
             weighted_likes: 0,
@@ -794,17 +1392,17 @@ Deno.test('launch facade: install can include tool-specific handoff', async () =
             total_runs: 0,
             runs_30d: 0,
             hosting_suspended: false,
-            updated_at: '2026-06-01T00:00:00.000Z',
-            created_at: '2026-06-01T00:00:00.000Z',
+            updated_at: "2026-06-01T00:00:00.000Z",
+            created_at: "2026-06-01T00:00:00.000Z",
           },
         ]);
       }
-      if (url.startsWith('https://supabase.test/rest/v1/users?')) {
+      if (url.startsWith("https://supabase.test/rest/v1/users?")) {
         return jsonResponse([
           {
-            id: 'owner-1',
-            display_name: 'Ada',
-            profile_slug: 'ada',
+            id: "owner-1",
+            display_name: "Ada",
+            profile_slug: "ada",
             avatar_url: null,
           },
         ]);
@@ -814,10 +1412,10 @@ Deno.test('launch facade: install can include tool-specific handoff', async () =
   );
 });
 
-Deno.test('launch facade: status exposes self-describing agent links', async () => {
+Deno.test("launch facade: status exposes self-describing agent links", async () => {
   await withLaunchEnv(async () => {
     const response = await handleLaunch(
-      new Request('https://ultralight.test/api/launch/status'),
+      new Request("https://ultralight.test/api/launch/status"),
     );
     const body = await response.json() as {
       available: boolean;
@@ -835,97 +1433,97 @@ Deno.test('launch facade: status exposes self-describing agent links', async () 
 
     assertEquals(response.status, 200);
     assertEquals(body.available, true);
-    assertEquals(body.version, 'persistent-agent-mvp-v1');
-    assertEquals(body.endpoints.openapi, '/api/launch/openapi.json');
-    assertEquals(body.endpoints.mcpPlatform, '/mcp/platform');
-    assertEquals(body.compatibilityPublicRoutes.includes('/discover'), true);
-    assertEquals(body.endpoints.store, '/api/launch/store?query={query}');
-    assertEquals(body.endpoints.discover, '/api/launch/discover?query={query}');
+    assertEquals(body.version, "persistent-agent-mvp-v1");
+    assertEquals(body.endpoints.openapi, "/api/launch/openapi.json");
+    assertEquals(body.endpoints.mcpPlatform, "/mcp/platform");
+    assertEquals(body.compatibilityPublicRoutes.includes("/discover"), true);
+    assertEquals(body.endpoints.store, "/api/launch/store?query={query}");
+    assertEquals(body.endpoints.discover, "/api/launch/discover?query={query}");
     assertEquals(
       body.endpoints.discoverAlias,
-      '/api/launch/discover?query={query}',
+      "/api/launch/discover?query={query}",
     );
     assertEquals(
-      body.apiRoutes.includes('GET /api/launch/openapi.json'),
+      body.apiRoutes.includes("GET /api/launch/openapi.json"),
       true,
     );
     assertEquals(
-      body.apiRoutes.includes('GET /api/launch/store'),
+      body.apiRoutes.includes("GET /api/launch/store"),
       true,
     );
     assertEquals(
-      body.apiRoutes.includes('POST /api/launch/api-keys'),
+      body.apiRoutes.includes("POST /api/launch/api-keys"),
       true,
     );
     assertEquals(
-      body.apiRoutes.includes('POST /api/launch/operator-items/:id/actions'),
+      body.apiRoutes.includes("POST /api/launch/operator-items/:id/actions"),
       true,
     );
     assertEquals(
-      body.apiRoutes.includes('GET /api/launch/wallet/topup/quote'),
+      body.apiRoutes.includes("GET /api/launch/wallet/topup/quote"),
       false,
     );
     assertEquals(
-      body.apiRoutes.includes('POST /api/launch/wallet/topup/intent'),
+      body.apiRoutes.includes("POST /api/launch/wallet/topup/intent"),
       false,
     );
     assertEquals(
-      body.apiRoutes.includes('GET /api/launch/wallet/transactions'),
+      body.apiRoutes.includes("GET /api/launch/wallet/transactions"),
       false,
     );
     assertEquals(
-      body.apiRoutes.includes('GET /api/launch/wallet/earnings'),
+      body.apiRoutes.includes("GET /api/launch/wallet/earnings"),
       false,
     );
     assertEquals(
-      body.apiRoutes.some((route) => route.includes('/widgets')),
+      body.apiRoutes.some((route) => route.includes("/widgets")),
       false,
     );
     assertEquals(
-      body.apiRoutes.some((route) => route.includes('/skills')),
+      body.apiRoutes.some((route) => route.includes("/skills")),
       false,
     );
     assertEquals(
-      body.apiRoutes.includes('GET /api/launch/agents/:id/functions'),
+      body.apiRoutes.includes("GET /api/launch/agents/:id/functions"),
       true,
     );
     assertEquals(
       body.apiRoutes.includes(
-        'POST /api/launch/agents/:id/functions/:functionName/run',
+        "POST /api/launch/agents/:id/functions/:functionName/run",
       ),
       true,
     );
     assertEquals(
-      body.apiRoutes.includes('GET /api/launch/agents/:id/caller-permissions'),
+      body.apiRoutes.includes("GET /api/launch/agents/:id/caller-permissions"),
       true,
     );
     assertEquals(
       body.apiRoutes.includes(
-        'PATCH /api/launch/agents/:id/caller-permissions',
+        "PATCH /api/launch/agents/:id/caller-permissions",
       ),
       true,
     );
-    assertEquals(body.endpoints.apiKeys, '/api/launch/api-keys');
-    assertEquals(body.endpoints.byok, '/api/launch/byok');
+    assertEquals(body.endpoints.apiKeys, "/api/launch/api-keys");
+    assertEquals(body.endpoints.byok, "/api/launch/byok");
     assertEquals(
       body.endpoints.inferenceOptions,
-      '/api/launch/inference-options',
+      "/api/launch/inference-options",
     );
-    assertEquals(body.apiRoutes.includes('GET /api/launch/byok'), true);
+    assertEquals(body.apiRoutes.includes("GET /api/launch/byok"), true);
     assertEquals(
-      body.apiRoutes.includes('PUT /api/launch/byok/:provider'),
+      body.apiRoutes.includes("PUT /api/launch/byok/:provider"),
       true,
     );
     assertEquals(
-      body.apiRoutes.includes('DELETE /api/launch/byok/:provider'),
+      body.apiRoutes.includes("DELETE /api/launch/byok/:provider"),
       true,
     );
     assertEquals(
-      body.apiRoutes.includes('POST /api/launch/byok/primary'),
+      body.apiRoutes.includes("POST /api/launch/byok/primary"),
       true,
     );
     assertEquals(
-      body.apiRoutes.includes('GET /api/launch/inference-options'),
+      body.apiRoutes.includes("GET /api/launch/inference-options"),
       true,
     );
     assertEquals(body.endpoints.widgetRender, undefined);
@@ -934,45 +1532,45 @@ Deno.test('launch facade: status exposes self-describing agent links', async () 
     assertEquals(body.endpoints.skillPull, undefined);
     assertEquals(
       body.endpoints.agentFunctions,
-      '/api/launch/agents/{id}/functions',
+      "/api/launch/agents/{id}/functions",
     );
     assertEquals(
       body.endpoints.functionRun,
-      '/api/launch/agents/{id}/functions/{functionName}/run',
+      "/api/launch/agents/{id}/functions/{functionName}/run",
     );
     assertEquals(
       body.endpoints.callerPermissions,
-      '/api/launch/agents/{id}/caller-permissions',
+      "/api/launch/agents/{id}/caller-permissions",
     );
     assertEquals(body.endpoints.walletTopUpQuote, undefined);
     assertEquals(body.endpoints.walletTopUpIntent, undefined);
     assertEquals(body.endpoints.walletTransactions, undefined);
     assertEquals(body.endpoints.walletEarnings, undefined);
-    assertEquals(body.endpoints.subscription, '/api/launch/subscription');
-    assertEquals(body.endpoints.capacity, '/api/launch/capacity');
-    assertEquals(body.policy.access, 'private_owner_only');
-    assertEquals(body.policy.activationAuthority, 'account_session');
-    assertEquals(body.policy.budgetEnforcement, 'hard_pre_execution');
-    assertEquals(body.capabilities.deferred.includes('marketplace'), true);
-    assertEquals(body.capabilities.included.includes('credits_balance'), false);
+    assertEquals(body.endpoints.subscription, "/api/launch/subscription");
+    assertEquals(body.endpoints.capacity, "/api/launch/capacity");
+    assertEquals(body.policy.access, "private_owner_only");
+    assertEquals(body.policy.activationAuthority, "account_session");
+    assertEquals(body.policy.budgetEnforcement, "hard_pre_execution");
+    assertEquals(body.capabilities.deferred.includes("marketplace"), true);
+    assertEquals(body.capabilities.included.includes("credits_balance"), false);
     assertEquals(
-      body.capabilities.included.includes('subscription_capacity'),
+      body.capabilities.included.includes("subscription_capacity"),
       true,
     );
     assertEquals(
-      body.capabilities.included.includes('full_time_routines'),
+      body.capabilities.included.includes("full_time_routines"),
       true,
     );
-    assertEquals(body.capabilities.included.includes('byok'), true);
-    assertEquals(body.capabilities.included.includes('credits_wallet'), false);
-    assertEquals(body.capabilities.deferred.includes('byok'), false);
+    assertEquals(body.capabilities.included.includes("byok"), true);
+    assertEquals(body.capabilities.included.includes("credits_wallet"), false);
+    assertEquals(body.capabilities.deferred.includes("byok"), false);
   });
 });
 
-Deno.test('launch facade: openapi documents curated launch and MCP paths', async () => {
+Deno.test("launch facade: openapi documents curated launch and MCP paths", async () => {
   await withLaunchEnv(async () => {
     const response = await handleLaunch(
-      new Request('https://ultralight.test/api/launch/openapi.json'),
+      new Request("https://ultralight.test/api/launch/openapi.json"),
     );
     const spec = await response.json() as {
       openapi: string;
@@ -982,65 +1580,86 @@ Deno.test('launch facade: openapi documents curated launch and MCP paths', async
         securitySchemes?: Record<string, unknown>;
         schemas?: Record<string, unknown>;
       };
-      'x-launch-scope'?: {
+      "x-launch-scope"?: {
         deferredCapabilities?: string[];
         compatibilityPublicRoutes?: string[];
       };
     };
 
     assertEquals(response.status, 200);
-    assertEquals(spec.openapi, '3.1.0');
-    assertEquals(spec.servers[0].url, 'https://ultralight.test');
-    assertEquals(Boolean(spec.paths['/api/launch/store']), true);
-    assertEquals(Boolean(spec.paths['/api/launch/discover']), true);
-    assertEquals(Boolean(spec.paths['/api/launch/wallet/transactions']), false);
-    assertEquals(Boolean(spec.paths['/api/launch/wallet/receipts']), false);
-    assertEquals(Boolean(spec.paths['/api/launch/wallet/earnings']), false);
-    assertEquals(Boolean(spec.paths['/api/launch/wallet/payouts']), false);
-    assertEquals(Boolean(spec.paths['/api/launch/wallet/topup/quote']), false);
-    assertEquals(Boolean(spec.paths['/api/launch/wallet/topup/intent']), false);
-    assertEquals(Boolean(spec.paths['/api/launch/subscription']), true);
-    assertEquals(Boolean(spec.paths['/api/launch/capacity']), true);
+    assertEquals(spec.openapi, "3.1.0");
+    assertEquals(spec.servers[0].url, "https://ultralight.test");
+    assertEquals(Boolean(spec.paths["/api/launch/store"]), true);
+    assertEquals(Boolean(spec.paths["/api/launch/discover"]), true);
+    assertEquals(Boolean(spec.paths["/api/launch/wallet/transactions"]), false);
+    assertEquals(Boolean(spec.paths["/api/launch/wallet/receipts"]), false);
+    assertEquals(Boolean(spec.paths["/api/launch/wallet/earnings"]), false);
+    assertEquals(Boolean(spec.paths["/api/launch/wallet/payouts"]), false);
+    assertEquals(Boolean(spec.paths["/api/launch/wallet/topup/quote"]), false);
+    assertEquals(Boolean(spec.paths["/api/launch/wallet/topup/intent"]), false);
+    assertEquals(Boolean(spec.paths["/api/launch/subscription"]), true);
+    assertEquals(Boolean(spec.paths["/api/launch/capacity"]), true);
     assertEquals(
-      Boolean(spec.paths['/api/launch/subscription/checkout']),
+      Boolean(spec.paths["/api/launch/subscription/checkout"]),
       true,
     );
-    assertEquals(Boolean(spec.paths['/api/launch/subscription/portal']), true);
-    assertEquals(Boolean(spec.paths['/api/launch/api-keys']), true);
-    assertEquals(Boolean(spec.paths['/api/launch/api-keys/{id}']), true);
-    assertEquals(Boolean(spec.paths['/api/launch/handoffs']), true);
+    assertEquals(Boolean(spec.paths["/api/launch/subscription/portal"]), true);
+    assertEquals(Boolean(spec.paths["/api/launch/api-keys"]), true);
+    assertEquals(Boolean(spec.paths["/api/launch/api-keys/{id}"]), true);
+    assertEquals(Boolean(spec.paths["/api/launch/handoffs"]), true);
     assertEquals(
-      Boolean(spec.paths['/api/launch/agents/{id}/handoffs']),
+      Boolean(spec.paths["/api/launch/agents/{id}/handoffs"]),
       true,
     );
-    assertEquals(Boolean(spec.paths['/api/launch/byok']), true);
-    assertEquals(Boolean(spec.paths['/api/launch/byok/{provider}']), true);
-    assertEquals(Boolean(spec.paths['/api/launch/byok/primary']), true);
-    assertEquals(Boolean(spec.paths['/api/launch/inference-options']), true);
+    const workspaceHandoff = spec.paths["/api/launch/handoffs"] as {
+      post?: { description?: string };
+    };
+    const agentHandoff = spec.paths[
+      "/api/launch/agents/{id}/handoffs"
+    ] as {
+      post?: { description?: string };
+    };
+    assertStringIncludes(
+      workspaceHandoff.post?.description || "",
+      "60-minute expiry",
+    );
+    assertStringIncludes(
+      agentHandoff.post?.description || "",
+      "expiring in 60 minutes",
+    );
     assertEquals(
-      Object.keys(spec.paths).some((path) => path.includes('/widgets')),
+      `${workspaceHandoff.post?.description} ${agentHandoff.post?.description}`
+        .includes("30-minute"),
+      false,
+    );
+    assertEquals(Boolean(spec.paths["/api/launch/byok"]), true);
+    assertEquals(Boolean(spec.paths["/api/launch/byok/{provider}"]), true);
+    assertEquals(Boolean(spec.paths["/api/launch/byok/primary"]), true);
+    assertEquals(Boolean(spec.paths["/api/launch/inference-options"]), true);
+    assertEquals(
+      Object.keys(spec.paths).some((path) => path.includes("/widgets")),
       false,
     );
     assertEquals(
-      Object.keys(spec.paths).some((path) => path.includes('/skills')),
+      Object.keys(spec.paths).some((path) => path.includes("/skills")),
       false,
     );
     assertEquals(
-      Boolean(spec.paths['/api/launch/agents/{id}/functions']),
+      Boolean(spec.paths["/api/launch/agents/{id}/functions"]),
       true,
     );
     assertEquals(
       Boolean(
-        spec.paths['/api/launch/agents/{id}/functions/{functionName}/run'],
+        spec.paths["/api/launch/agents/{id}/functions/{functionName}/run"],
       ),
       true,
     );
     assertEquals(
-      Boolean(spec.paths['/api/launch/agents/{id}/caller-permissions']),
+      Boolean(spec.paths["/api/launch/agents/{id}/caller-permissions"]),
       true,
     );
-    assertEquals(Boolean(spec.paths['/api/launch/status']), true);
-    assertEquals(Boolean(spec.paths['/mcp/platform']), true);
+    assertEquals(Boolean(spec.paths["/api/launch/status"]), true);
+    assertEquals(Boolean(spec.paths["/mcp/platform"]), true);
     assertEquals(Boolean(spec.components?.securitySchemes?.bearerAuth), true);
     assertEquals(Boolean(spec.components?.schemas?.ApiKeySummary), true);
     assertEquals(
@@ -1054,7 +1673,7 @@ Deno.test('launch facade: openapi documents curated launch and MCP paths', async
     assertEquals(Boolean(spec.components?.schemas?.TrustCard), true);
     assertEquals(
       Object.keys(spec.components?.schemas || {}).some((name) =>
-        name.includes('Widget') || name.includes('Skill')
+        name.includes("Widget") || name.includes("Skill")
       ),
       false,
     );
@@ -1074,22 +1693,22 @@ Deno.test('launch facade: openapi documents curated launch and MCP paths', async
     assertEquals(Boolean(spec.components?.schemas?.ByokMutation), true);
     assertEquals(Boolean(spec.components?.schemas?.InferenceOptions), true);
     assertEquals(
-      spec['x-launch-scope']?.deferredCapabilities?.includes('marketplace'),
+      spec["x-launch-scope"]?.deferredCapabilities?.includes("marketplace"),
       true,
     );
     assertEquals(
-      spec['x-launch-scope']?.compatibilityPublicRoutes?.includes('/discover'),
+      spec["x-launch-scope"]?.compatibilityPublicRoutes?.includes("/discover"),
       true,
     );
   });
 });
 
-Deno.test('launch facade: widget and skill endpoints are removed', async () => {
+Deno.test("launch facade: widget and skill endpoints are removed", async () => {
   await withLaunchEnv(async () => {
     const removedGetEndpoints = [
-      '/api/launch/tools/deploy-helper/widgets',
-      '/api/launch/tools/deploy-helper/widgets/ops',
-      '/api/launch/tools/deploy-helper/skills',
+      "/api/launch/tools/deploy-helper/widgets",
+      "/api/launch/tools/deploy-helper/widgets/ops",
+      "/api/launch/tools/deploy-helper/skills",
     ];
     for (const endpoint of removedGetEndpoints) {
       const response = await handleLaunch(
@@ -1098,16 +1717,16 @@ Deno.test('launch facade: widget and skill endpoints are removed', async () => {
       const body = await response.json() as { error?: string };
 
       assertEquals(response.status, 404, endpoint);
-      assertEquals(body.error, 'Launch endpoint not found', endpoint);
+      assertEquals(body.error, "Launch endpoint not found", endpoint);
     }
 
     const removedPostEndpoints = [
-      '/api/launch/tools/deploy-helper/widgets/ops/render',
-      '/api/launch/tools/deploy-helper/skills/context/pull',
+      "/api/launch/tools/deploy-helper/widgets/ops/render",
+      "/api/launch/tools/deploy-helper/skills/context/pull",
     ];
     for (const endpoint of removedPostEndpoints) {
       const response = await handleLaunch(
-        new Request(`https://ultralight.test${endpoint}`, { method: 'POST' }),
+        new Request(`https://ultralight.test${endpoint}`, { method: "POST" }),
       );
       await response.body?.cancel();
 
@@ -1116,12 +1735,12 @@ Deno.test('launch facade: widget and skill endpoints are removed', async () => {
   });
 });
 
-Deno.test('launch facade: public slug lookups avoid uuid id comparisons', async () => {
+Deno.test("launch facade: public slug lookups avoid uuid id comparisons", async () => {
   await withLaunchEnv(
     async () => {
       const endpoints = [
-        '/api/launch/tools/deploy-helper',
-        '/api/launch/tools/deploy-helper/functions',
+        "/api/launch/tools/deploy-helper",
+        "/api/launch/tools/deploy-helper/functions",
       ];
 
       for (const endpoint of endpoints) {
@@ -1133,32 +1752,32 @@ Deno.test('launch facade: public slug lookups avoid uuid id comparisons', async 
           error?: string;
         };
 
-        assertEquals(response.status, 200, `${endpoint}: ${body.error || ''}`);
-        assertEquals(body.tool?.slug, 'deploy-helper');
+        assertEquals(response.status, 200, `${endpoint}: ${body.error || ""}`);
+        assertEquals(body.tool?.slug, "deploy-helper");
       }
     },
     async (input) => {
       const url = input instanceof Request ? input.url : String(input);
-      if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
+      if (url.startsWith("https://supabase.test/rest/v1/apps?")) {
         const parsed = new URL(url);
-        const orParam = parsed.searchParams.get('or') || '';
-        if (orParam.includes('id.eq.deploy-helper')) {
+        const orParam = parsed.searchParams.get("or") || "";
+        if (orParam.includes("id.eq.deploy-helper")) {
           return jsonResponse(
             { error: 'invalid input syntax for type uuid: "deploy-helper"' },
             400,
           );
         }
-        if (parsed.searchParams.get('slug') === 'eq.deploy-helper') {
+        if (parsed.searchParams.get("slug") === "eq.deploy-helper") {
           return jsonResponse([launchPermissionTestApp()]);
         }
         return jsonResponse([]);
       }
-      if (url.startsWith('https://supabase.test/rest/v1/users?')) {
+      if (url.startsWith("https://supabase.test/rest/v1/users?")) {
         return jsonResponse([
           {
-            id: 'owner-1',
-            display_name: 'Ada',
-            profile_slug: 'ada',
+            id: "owner-1",
+            display_name: "Ada",
+            profile_slug: "ada",
             avatar_url: null,
           },
         ]);
@@ -1174,31 +1793,31 @@ function interfaceTestApp(): Record<string, unknown> {
   const functions = manifest.functions as Record<string, unknown>;
   // A name that used to be globally special is deliberately mutating.
   functions.inbox_snapshot = {
-    description: 'Advance the inbox cursor',
+    description: "Advance the inbox cursor",
     annotations: { readOnlyHint: false, destructiveHint: false },
   };
   functions.read_state = {
-    description: 'Read the current state',
+    description: "Read the current state",
     annotations: { readOnlyHint: true, destructiveHint: false },
   };
   functions.inspect_state = {
-    description: 'Read state with conservative default caching',
+    description: "Read state with conservative default caching",
     annotations: { readOnlyHint: true, destructiveHint: false },
   };
   manifest.interfaces = [
     {
-      id: 'dashboard',
-      label: 'Dashboard',
-      description: 'Live overview',
-      entry: 'interfaces/dashboard.html',
+      id: "dashboard",
+      label: "Dashboard",
+      description: "Live overview",
+      entry: "interfaces/dashboard.html",
       // ghostFunction is not a manifest function — must be pruned from the
       // exposed bridge allowlist.
       functions: [
-        'deploy',
-        'inbox_snapshot',
-        'read_state',
-        'inspect_state',
-        'ghostFunction',
+        "deploy",
+        "inbox_snapshot",
+        "read_state",
+        "inspect_state",
+        "ghostFunction",
       ],
       read_models: {
         // Invalid legacy/corrupt metadata is filtered again at the API edge.
@@ -1210,17 +1829,17 @@ function interfaceTestApp(): Record<string, unknown> {
         read_state: {
           fresh_for_ms: 12_000,
           stale_for_ms: 180_000,
-          prefetch_args: { scope: 'overview' },
+          prefetch_args: { scope: "overview" },
         },
       },
       min_height: 320,
-      hash: 'a'.repeat(64),
+      hash: "a".repeat(64),
     },
     {
-      id: 'unstamped',
-      label: 'Unstamped',
-      entry: 'interfaces/unstamped.html',
-      functions: ['deploy'],
+      id: "unstamped",
+      label: "Unstamped",
+      entry: "interfaces/unstamped.html",
+      functions: ["deploy"],
       // No server-stamped hash (pre-PR2 manifest / GPU upload): nothing the
       // sandbox worker can serve, so it must not be exposed.
     },
@@ -1233,15 +1852,15 @@ function interfaceTestFetchMock(
 ): typeof fetch {
   return ((input: Request | URL | string) => {
     const url = input instanceof Request ? input.url : String(input);
-    if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
+    if (url.startsWith("https://supabase.test/rest/v1/apps?")) {
       return Promise.resolve(jsonResponse([app]));
     }
-    if (url.startsWith('https://supabase.test/rest/v1/users?')) {
+    if (url.startsWith("https://supabase.test/rest/v1/users?")) {
       return Promise.resolve(jsonResponse([
         {
-          id: 'owner-1',
-          display_name: 'Ada',
-          profile_slug: 'ada',
+          id: "owner-1",
+          display_name: "Ada",
+          profile_slug: "ada",
           avatar_url: null,
         },
       ]));
@@ -1250,11 +1869,11 @@ function interfaceTestFetchMock(
   }) as typeof fetch;
 }
 
-Deno.test('launch facade: agent detail exposes hash-stamped interfaces with pruned allowlists', async () => {
+Deno.test("launch facade: agent detail exposes hash-stamped interfaces with pruned allowlists", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
-        new Request('https://ultralight.test/api/launch/agents/deploy-helper'),
+        new Request("https://ultralight.test/api/launch/agents/deploy-helper"),
       );
       const body = await response.json() as {
         agent?: { interfaces?: unknown[] };
@@ -1262,28 +1881,28 @@ Deno.test('launch facade: agent detail exposes hash-stamped interfaces with prun
         error?: string;
       };
 
-      assertEquals(response.status, 200, body.error || '');
+      assertEquals(response.status, 200, body.error || "");
       assertEquals(body.agent?.interfaces, [
         {
-          id: 'dashboard',
-          label: 'Dashboard',
-          description: 'Live overview',
-          url: `https://interfaces.test/i/app-1/${'a'.repeat(64)}`,
+          id: "dashboard",
+          label: "Dashboard",
+          description: "Live overview",
+          url: `https://interfaces.test/i/app-1/${"a".repeat(64)}`,
           functions: [
-            'deploy',
-            'inbox_snapshot',
-            'read_state',
-            'inspect_state',
+            "deploy",
+            "inbox_snapshot",
+            "read_state",
+            "inspect_state",
           ],
-          releaseVersion: 'v1',
-          artifactHash: 'a'.repeat(64),
+          releaseVersion: "v1",
+          artifactHash: "a".repeat(64),
           readModels: [{
-            functionName: 'read_state',
+            functionName: "read_state",
             freshForMs: 12_000,
             staleForMs: 180_000,
-            prefetchArgs: { scope: 'overview' },
+            prefetchArgs: { scope: "overview" },
           }, {
-            functionName: 'inspect_state',
+            functionName: "inspect_state",
             freshForMs: 5_000,
             staleForMs: 30_000,
           }],
@@ -1294,15 +1913,15 @@ Deno.test('launch facade: agent detail exposes hash-stamped interfaces with prun
       assertEquals(body.tool?.interfaces, body.agent?.interfaces);
     },
     interfaceTestFetchMock(interfaceTestApp()),
-    { INTERFACE_SANDBOX_BASE_URL: 'https://interfaces.test/' },
+    { INTERFACE_SANDBOX_BASE_URL: "https://interfaces.test/" },
   );
 });
 
-Deno.test('launch facade: interfaces fail closed without a sandbox base URL', async () => {
+Deno.test("launch facade: interfaces fail closed without a sandbox base URL", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
-        new Request('https://ultralight.test/api/launch/agents/deploy-helper'),
+        new Request("https://ultralight.test/api/launch/agents/deploy-helper"),
       );
       const body = await response.json() as {
         agent?: { interfaces?: unknown };
@@ -1316,13 +1935,13 @@ Deno.test('launch facade: interfaces fail closed without a sandbox base URL', as
   );
 });
 
-Deno.test('launch facade: draft-only interfaces never expose cache or prefetch authority', async () => {
+Deno.test("launch facade: draft-only interfaces never expose cache or prefetch authority", async () => {
   const app = interfaceTestApp();
   app.current_version = null;
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
-        new Request('https://ultralight.test/api/launch/agents/deploy-helper'),
+        new Request("https://ultralight.test/api/launch/agents/deploy-helper"),
       );
       const body = (await response.json()) as {
         agent?: {
@@ -1338,15 +1957,15 @@ Deno.test('launch facade: draft-only interfaces never expose cache or prefetch a
       assertEquals(body.agent?.interfaces?.[0]?.readModels, undefined);
     },
     interfaceTestFetchMock(app),
-    { INTERFACE_SANDBOX_BASE_URL: 'https://interfaces.test/' },
+    { INTERFACE_SANDBOX_BASE_URL: "https://interfaces.test/" },
   );
 });
 
-Deno.test('launch facade: agents without interfaces omit the field', async () => {
+Deno.test("launch facade: agents without interfaces omit the field", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
-        new Request('https://ultralight.test/api/launch/agents/deploy-helper'),
+        new Request("https://ultralight.test/api/launch/agents/deploy-helper"),
       );
       const body = await response.json() as {
         agent?: { interfaces?: unknown };
@@ -1356,22 +1975,22 @@ Deno.test('launch facade: agents without interfaces omit the field', async () =>
       assertEquals(body.agent?.interfaces, undefined);
     },
     interfaceTestFetchMock(launchPermissionTestApp()),
-    { INTERFACE_SANDBOX_BASE_URL: 'https://interfaces.test' },
+    { INTERFACE_SANDBOX_BASE_URL: "https://interfaces.test" },
   );
 });
 
-Deno.test('launch facade: owners can preview private tools', async () => {
+Deno.test("launch facade: owners can preview private tools", async () => {
   await withLaunchEnv(
     async () => {
       const endpoints = [
-        '/api/launch/tools/private-helper',
-        '/api/launch/tools/private-helper/functions',
+        "/api/launch/tools/private-helper",
+        "/api/launch/tools/private-helper/functions",
       ];
 
       for (const endpoint of endpoints) {
         const response = await handleLaunch(
           new Request(`https://ultralight.test${endpoint}`, {
-            headers: { Authorization: 'Bearer browser-session-token' },
+            headers: { Authorization: "Bearer browser-session-token" },
           }),
         );
         const body = await response.json() as {
@@ -1380,61 +1999,61 @@ Deno.test('launch facade: owners can preview private tools', async () => {
           tool?: { relationship?: string; slug?: string };
         };
 
-        assertEquals(response.status, 200, `${endpoint}: ${body.error || ''}`);
-        assertEquals(body.tool?.slug, 'private-helper');
-        assertEquals(body.tool?.relationship, 'owner');
-        if (endpoint.endsWith('/functions')) {
+        assertEquals(response.status, 200, `${endpoint}: ${body.error || ""}`);
+        assertEquals(body.tool?.slug, "private-helper");
+        assertEquals(body.tool?.relationship, "owner");
+        if (endpoint.endsWith("/functions")) {
           assertEquals(
             body.functions?.map((entry) => entry.name),
-            ['deploy', 'inspect', 'widget_ops_data', 'widget_ops_ui'],
+            ["deploy", "inspect", "widget_ops_data", "widget_ops_ui"],
           );
         }
       }
     },
     async (input) => {
       const url = input instanceof Request ? input.url : String(input);
-      if (url === 'https://supabase.test/auth/v1/user') {
+      if (url === "https://supabase.test/auth/v1/user") {
         return jsonResponse({
-          id: 'user-1',
-          email: 'founder@example.com',
+          id: "user-1",
+          email: "founder@example.com",
           user_metadata: {},
         });
       }
-      if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
-        return jsonResponse([{ id: 'user-1' }]);
+      if (url.includes("/rest/v1/users?") && url.includes("select=id")) {
+        return jsonResponse([{ id: "user-1" }]);
       }
-      if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
-        return jsonResponse([{ tier: 'free' }]);
+      if (url.includes("/rest/v1/users?") && url.includes("select=tier")) {
+        return jsonResponse([{ tier: "free" }]);
       }
-      if (url.startsWith('https://supabase.test/rest/v1/user_app_library?')) {
+      if (url.startsWith("https://supabase.test/rest/v1/user_app_library?")) {
         return jsonResponse([]);
       }
-      if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
-        if (url.includes('owner_id=eq.user-1')) {
+      if (url.startsWith("https://supabase.test/rest/v1/apps?")) {
+        if (url.includes("owner_id=eq.user-1")) {
           return jsonResponse([privateOwnerTestApp()]);
         }
         return jsonResponse([]);
       }
       if (
         url.startsWith(
-          'https://supabase.test/rest/v1/user_agent_permission_defaults?',
+          "https://supabase.test/rest/v1/user_agent_permission_defaults?",
         )
       ) {
-        return jsonResponse([{ user_id: 'user-1', default_policy: 'ask' }]);
+        return jsonResponse([{ user_id: "user-1", default_policy: "ask" }]);
       }
       if (
         url.startsWith(
-          'https://supabase.test/rest/v1/user_agent_function_permissions?',
+          "https://supabase.test/rest/v1/user_agent_function_permissions?",
         )
       ) {
         return jsonResponse([]);
       }
-      if (url.startsWith('https://supabase.test/rest/v1/users?')) {
+      if (url.startsWith("https://supabase.test/rest/v1/users?")) {
         return jsonResponse([
           {
-            id: 'user-1',
-            display_name: 'Founder',
-            profile_slug: 'founder',
+            id: "user-1",
+            display_name: "Founder",
+            profile_slug: "founder",
             avatar_url: null,
           },
         ]);
@@ -1444,13 +2063,13 @@ Deno.test('launch facade: owners can preview private tools', async () => {
   );
 });
 
-Deno.test('launch facade: owner routine overview is live, bounded, and secret-free', async () => {
+Deno.test("launch facade: owner routine overview is live, bounded, and secret-free", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/agents/private-helper/routine',
-          { headers: { Authorization: 'Bearer browser-session-token' } },
+          "https://ultralight.test/api/launch/agents/private-helper/routine",
+          { headers: { Authorization: "Bearer browser-session-token" } },
         ),
       );
       const body = await response.json() as {
@@ -1478,7 +2097,7 @@ Deno.test('launch facade: owner routine overview is live, bounded, and secret-fr
       assertEquals(response.status, 200);
       assertEquals(
         body.routine?.mission,
-        'Watch the private system and report meaningful changes.',
+        "Watch the private system and report meaningful changes.",
       );
       assertEquals(body.routine?.intervalSeconds, 300);
       assertEquals(body.routine?.budgets, {
@@ -1488,70 +2107,70 @@ Deno.test('launch facade: owner routine overview is live, bounded, and secret-fr
         maxCallsPerRun: 12,
       });
       assertEquals(body.routine?.capabilities, [{
-        id: 'capability-1',
-        appId: 'app-private-1',
-        appRef: 'private-helper',
-        functionName: 'inspect',
-        access: 'read',
+        id: "capability-1",
+        appId: "app-private-1",
+        appRef: "private-helper",
+        functionName: "inspect",
+        access: "read",
         required: true,
-        purpose: 'Read current private status',
+        purpose: "Read current private status",
         approved: false,
         approvedAt: null,
       }]);
       assertEquals(
         body.routine?.blockers?.[0]?.code,
-        'pending_required_capabilities',
+        "pending_required_capabilities",
       );
       assertEquals(body.routine?.blockers?.[0]?.capabilityIds, [
-        'capability-1',
+        "capability-1",
       ]);
-      assertEquals(body.routine?.autoPauseReason, 'consecutive_failures');
+      assertEquals(body.routine?.autoPauseReason, "consecutive_failures");
       assertEquals(
         body.routine?.recentRuns?.[0]?.errorCode,
-        'inbox_unavailable',
+        "inbox_unavailable",
       );
       const serialized = JSON.stringify(body);
-      assertEquals(serialized.includes('must-not-leak'), false);
-      assertEquals(serialized.includes('run_config'), false);
-      assertEquals(serialized.includes('metadata'), false);
-      assertEquals(serialized.includes('secret_value'), false);
+      assertEquals(serialized.includes("must-not-leak"), false);
+      assertEquals(serialized.includes("run_config"), false);
+      assertEquals(serialized.includes("metadata"), false);
+      assertEquals(serialized.includes("secret_value"), false);
     },
     async (input) => {
       const url = input instanceof Request ? input.url : String(input);
-      if (url === 'https://supabase.test/auth/v1/user') {
+      if (url === "https://supabase.test/auth/v1/user") {
         return jsonResponse({
-          id: 'user-1',
-          email: 'founder@example.com',
+          id: "user-1",
+          email: "founder@example.com",
           user_metadata: {},
         });
       }
-      if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
-        return jsonResponse([{ id: 'user-1' }]);
+      if (url.includes("/rest/v1/users?") && url.includes("select=id")) {
+        return jsonResponse([{ id: "user-1" }]);
       }
-      if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
-        return jsonResponse([{ tier: 'free' }]);
+      if (url.includes("/rest/v1/users?") && url.includes("select=tier")) {
+        return jsonResponse([{ tier: "free" }]);
       }
-      if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
+      if (url.startsWith("https://supabase.test/rest/v1/apps?")) {
         return jsonResponse([privateOwnerTestApp()]);
       }
-      if (url.startsWith('https://supabase.test/rest/v1/user_routines?')) {
-        return new URL(url).searchParams.get('select') === 'id'
-          ? jsonResponse([{ id: 'routine-1' }])
+      if (url.startsWith("https://supabase.test/rest/v1/user_routines?")) {
+        return new URL(url).searchParams.get("select") === "id"
+          ? jsonResponse([{ id: "routine-1" }])
           : jsonResponse([persistentRoutineRow()]);
       }
       if (
-        url.startsWith('https://supabase.test/rest/v1/routine_capabilities?')
+        url.startsWith("https://supabase.test/rest/v1/routine_capabilities?")
       ) {
         return jsonResponse([persistentRoutineCapabilityRow()]);
       }
       if (
         url.startsWith(
-          'https://supabase.test/rest/v1/routine_dashboard_bindings?',
+          "https://supabase.test/rest/v1/routine_dashboard_bindings?",
         )
       ) {
         return jsonResponse([]);
       }
-      if (url.startsWith('https://supabase.test/rest/v1/routine_runs?')) {
+      if (url.startsWith("https://supabase.test/rest/v1/routine_runs?")) {
         return jsonResponse([persistentRoutineRunRow()]);
       }
       return jsonResponse([]);
@@ -1559,22 +2178,22 @@ Deno.test('launch facade: owner routine overview is live, bounded, and secret-fr
   );
 });
 
-Deno.test('launch facade: legacy routine mutations cannot bypass Agent Home CAS', async () => {
+Deno.test("launch facade: legacy routine mutations cannot bypass Agent Home CAS", async () => {
   let routine = persistentRoutineRow();
   let routinePatch: Record<string, unknown> | null = null;
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/agents/private-helper/routine',
+          "https://ultralight.test/api/launch/agents/private-helper/routine",
           {
-            method: 'PATCH',
+            method: "PATCH",
             headers: {
-              Authorization: 'Bearer browser-session-token',
-              'Content-Type': 'application/json',
+              Authorization: "Bearer browser-session-token",
+              "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              mission: 'Check the private system every ten minutes.',
+              mission: "Check the private system every ten minutes.",
               intervalSeconds: 600,
               budgets: {
                 maxLightPerRun: 8,
@@ -1590,7 +2209,7 @@ Deno.test('launch facade: legacy routine mutations cannot bypass Agent Home CAS'
 
       assertEquals(response.status, 410);
       assertEquals(
-        body.error?.includes('legacy mutation route is retired'),
+        body.error?.includes("legacy mutation route is retired"),
         true,
       );
       assertEquals(routinePatch, null);
@@ -1598,49 +2217,49 @@ Deno.test('launch facade: legacy routine mutations cannot bypass Agent Home CAS'
     async (input, init) => {
       const url = input instanceof Request ? input.url : String(input);
       const method = init?.method ||
-        (input instanceof Request ? input.method : 'GET');
-      if (url === 'https://supabase.test/auth/v1/user') {
+        (input instanceof Request ? input.method : "GET");
+      if (url === "https://supabase.test/auth/v1/user") {
         return jsonResponse({
-          id: 'user-1',
-          email: 'founder@example.com',
+          id: "user-1",
+          email: "founder@example.com",
           user_metadata: {},
         });
       }
-      if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
-        return jsonResponse([{ id: 'user-1' }]);
+      if (url.includes("/rest/v1/users?") && url.includes("select=id")) {
+        return jsonResponse([{ id: "user-1" }]);
       }
-      if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
-        return jsonResponse([{ tier: 'free' }]);
+      if (url.includes("/rest/v1/users?") && url.includes("select=tier")) {
+        return jsonResponse([{ tier: "free" }]);
       }
-      if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
+      if (url.startsWith("https://supabase.test/rest/v1/apps?")) {
         return jsonResponse([privateOwnerTestApp()]);
       }
-      if (url.startsWith('https://supabase.test/rest/v1/user_routines?')) {
-        if (method === 'PATCH') {
-          routinePatch = JSON.parse(String(init?.body || '{}')) as Record<
+      if (url.startsWith("https://supabase.test/rest/v1/user_routines?")) {
+        if (method === "PATCH") {
+          routinePatch = JSON.parse(String(init?.body || "{}")) as Record<
             string,
             unknown
           >;
           routine = { ...routine, ...routinePatch };
           return jsonResponse([routine]);
         }
-        return new URL(url).searchParams.get('select') === 'id'
-          ? jsonResponse([{ id: 'routine-1' }])
+        return new URL(url).searchParams.get("select") === "id"
+          ? jsonResponse([{ id: "routine-1" }])
           : jsonResponse([routine]);
       }
       if (
-        url.startsWith('https://supabase.test/rest/v1/routine_capabilities?')
+        url.startsWith("https://supabase.test/rest/v1/routine_capabilities?")
       ) {
         return jsonResponse([persistentRoutineCapabilityRow()]);
       }
       if (
         url.startsWith(
-          'https://supabase.test/rest/v1/routine_dashboard_bindings?',
+          "https://supabase.test/rest/v1/routine_dashboard_bindings?",
         )
       ) {
         return jsonResponse([]);
       }
-      if (url.startsWith('https://supabase.test/rest/v1/routine_runs?')) {
+      if (url.startsWith("https://supabase.test/rest/v1/routine_runs?")) {
         return jsonResponse([]);
       }
       return jsonResponse([]);
@@ -1648,20 +2267,20 @@ Deno.test('launch facade: legacy routine mutations cannot bypass Agent Home CAS'
   );
 });
 
-Deno.test('launch facade: unauthenticated private previews stay hidden', async () => {
+Deno.test("launch facade: unauthenticated private previews stay hidden", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
-        new Request('https://ultralight.test/api/launch/tools/private-helper'),
+        new Request("https://ultralight.test/api/launch/tools/private-helper"),
       );
       const body = await response.json() as { error?: string };
 
       assertEquals(response.status, 404);
-      assertEquals(body.error, 'Agent not found');
+      assertEquals(body.error, "Agent not found");
     },
     async (input) => {
       const url = input instanceof Request ? input.url : String(input);
-      if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
+      if (url.startsWith("https://supabase.test/rest/v1/apps?")) {
         return jsonResponse([]);
       }
       return jsonResponse([]);
@@ -1669,13 +2288,13 @@ Deno.test('launch facade: unauthenticated private previews stay hidden', async (
   );
 });
 
-Deno.test('launch facade: tool functions expose pricing, schemas, and policy', async () => {
+Deno.test("launch facade: tool functions expose pricing, schemas, and policy", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/tools/deploy-helper/functions',
-          { headers: { Authorization: 'Bearer browser-session-token' } },
+          "https://ultralight.test/api/launch/tools/deploy-helper/functions",
+          { headers: { Authorization: "Bearer browser-session-token" } },
         ),
       );
       const body = await response.json() as {
@@ -1707,80 +2326,80 @@ Deno.test('launch facade: tool functions expose pricing, schemas, and policy', a
       };
 
       assertEquals(response.status, 200);
-      assertEquals(body.tool.slug, 'deploy-helper');
-      assertEquals('widgets' in body.tool, false);
+      assertEquals(body.tool.slug, "deploy-helper");
+      assertEquals("widgets" in body.tool, false);
       assertEquals(body.functions.map((entry) => entry.name), [
-        'deploy',
-        'inspect',
-        'widget_ops_data',
-        'widget_ops_ui',
+        "deploy",
+        "inspect",
+        "widget_ops_data",
+        "widget_ops_ui",
       ]);
       assertEquals(
-        body.functions.some((entry) => 'widgetIds' in entry),
+        body.functions.some((entry) => "widgetIds" in entry),
         false,
       );
       const deploy = body.functions[0];
-      assertEquals(deploy.description, 'Deploy code');
+      assertEquals(deploy.description, "Deploy code");
       assertEquals(Boolean(deploy.inputSchema?.properties?.repo), true);
-      assertEquals(deploy.inputSchema?.required, ['repo']);
-      assertEquals(deploy.outputSchema?.type, 'object');
+      assertEquals(deploy.inputSchema?.required, ["repo"]);
+      assertEquals(deploy.outputSchema?.type, "object");
       assertEquals(deploy.annotations?.readOnlyHint, false);
       assertEquals(deploy.annotations?.destructiveHint, true);
       assertEquals(deploy.pricing?.defaultCallPrice?.light, 3);
       assertEquals(deploy.accessPolicy?.configured, true);
-      assertEquals(deploy.accessPolicy?.mode, 'module');
-      assertEquals(deploy.accessPolicy?.module, 'policy.ts');
-      assertEquals(deploy.accessPolicy?.exportName, 'planAccess');
-      assertEquals(deploy.accessPolicy?.execution, 'runtime_policy');
-      assertEquals(deploy.agentPermission?.policy, 'always');
-      assertEquals(deploy.agentPermission?.source, 'explicit');
+      assertEquals(deploy.accessPolicy?.mode, "module");
+      assertEquals(deploy.accessPolicy?.module, "policy.ts");
+      assertEquals(deploy.accessPolicy?.exportName, "planAccess");
+      assertEquals(deploy.accessPolicy?.execution, "runtime_policy");
+      assertEquals(deploy.agentPermission?.policy, "always");
+      assertEquals(deploy.agentPermission?.source, "explicit");
     },
     async (input) => {
       const url = input instanceof Request ? input.url : String(input);
-      if (url === 'https://supabase.test/auth/v1/user') {
+      if (url === "https://supabase.test/auth/v1/user") {
         return jsonResponse({
-          id: 'user-1',
-          email: 'founder@example.com',
+          id: "user-1",
+          email: "founder@example.com",
           user_metadata: {},
         });
       }
-      if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
-        return jsonResponse([{ id: 'user-1' }]);
+      if (url.includes("/rest/v1/users?") && url.includes("select=id")) {
+        return jsonResponse([{ id: "user-1" }]);
       }
-      if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
-        return jsonResponse([{ tier: 'free' }]);
+      if (url.includes("/rest/v1/users?") && url.includes("select=tier")) {
+        return jsonResponse([{ tier: "free" }]);
       }
-      if (url.startsWith('https://supabase.test/rest/v1/user_app_library?')) {
+      if (url.startsWith("https://supabase.test/rest/v1/user_app_library?")) {
         return jsonResponse([]);
       }
-      if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
-        if (url.includes('owner_id=eq.user-1')) return jsonResponse([]);
+      if (url.startsWith("https://supabase.test/rest/v1/apps?")) {
+        if (url.includes("owner_id=eq.user-1")) return jsonResponse([]);
         return jsonResponse([launchPermissionTestApp()]);
       }
       if (
         url.startsWith(
-          'https://supabase.test/rest/v1/user_agent_permission_defaults?',
+          "https://supabase.test/rest/v1/user_agent_permission_defaults?",
         )
       ) {
-        return jsonResponse([{ user_id: 'user-1', default_policy: 'ask' }]);
+        return jsonResponse([{ user_id: "user-1", default_policy: "ask" }]);
       }
       if (
         url.startsWith(
-          'https://supabase.test/rest/v1/user_agent_function_permissions?',
+          "https://supabase.test/rest/v1/user_agent_function_permissions?",
         )
       ) {
         return jsonResponse([{
-          app_id: 'app-1',
-          function_name: 'deploy',
-          policy: 'always',
+          app_id: "app-1",
+          function_name: "deploy",
+          policy: "always",
         }]);
       }
-      if (url.startsWith('https://supabase.test/rest/v1/users?')) {
+      if (url.startsWith("https://supabase.test/rest/v1/users?")) {
         return jsonResponse([
           {
-            id: 'owner-1',
-            display_name: 'Ada',
-            profile_slug: 'ada',
+            id: "owner-1",
+            display_name: "Ada",
+            profile_slug: "ada",
             avatar_url: null,
           },
         ]);
@@ -1790,28 +2409,28 @@ Deno.test('launch facade: tool functions expose pricing, schemas, and policy', a
   );
 });
 
-Deno.test('launch facade: function run requires authentication', async () => {
+Deno.test("launch facade: function run requires authentication", async () => {
   await withLaunchEnv(async () => {
     const response = await handleLaunch(
       new Request(
-        'https://ultralight.test/api/launch/tools/deploy-helper/functions/deploy/run',
-        { method: 'POST', body: JSON.stringify({ args: {} }) },
+        "https://ultralight.test/api/launch/tools/deploy-helper/functions/deploy/run",
+        { method: "POST", body: JSON.stringify({ args: {} }) },
       ),
     );
     const body = await response.json() as { error?: string };
 
     assertEquals(response.status, 401);
-    assertEquals(body.error, 'Authentication required');
+    assertEquals(body.error, "Authentication required");
   });
 });
 
-Deno.test('launch facade: agent permissions list tool functions and policies', async () => {
+Deno.test("launch facade: agent permissions list tool functions and policies", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/tools/deploy-helper/agent-permissions',
-          { headers: { Authorization: 'Bearer browser-session-token' } },
+          "https://ultralight.test/api/launch/tools/deploy-helper/agent-permissions",
+          { headers: { Authorization: "Bearer browser-session-token" } },
         ),
       );
       const body = await response.json() as {
@@ -1825,65 +2444,65 @@ Deno.test('launch facade: agent permissions list tool functions and policies', a
       };
 
       assertEquals(response.status, 200);
-      assertEquals(body.tool.slug, 'deploy-helper');
-      assertEquals(body.defaultPolicy, 'ask');
+      assertEquals(body.tool.slug, "deploy-helper");
+      assertEquals(body.defaultPolicy, "ask");
       assertEquals(body.permissions.map((entry) => entry.functionName), [
-        'deploy',
-        'inspect',
-        'widget_ops_data',
-        'widget_ops_ui',
+        "deploy",
+        "inspect",
+        "widget_ops_data",
+        "widget_ops_ui",
       ]);
-      assertEquals(body.permissions[0].policy, 'always');
-      assertEquals(body.permissions[0].source, 'explicit');
-      assertEquals(body.permissions[1].policy, 'ask');
-      assertEquals(body.permissions[1].source, 'default');
+      assertEquals(body.permissions[0].policy, "always");
+      assertEquals(body.permissions[0].source, "explicit");
+      assertEquals(body.permissions[1].policy, "ask");
+      assertEquals(body.permissions[1].source, "default");
     },
     async (input) => {
       const url = input instanceof Request ? input.url : String(input);
-      if (url === 'https://supabase.test/auth/v1/user') {
+      if (url === "https://supabase.test/auth/v1/user") {
         return jsonResponse({
-          id: 'user-1',
-          email: 'founder@example.com',
+          id: "user-1",
+          email: "founder@example.com",
           user_metadata: {},
         });
       }
-      if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
-        return jsonResponse([{ id: 'user-1' }]);
+      if (url.includes("/rest/v1/users?") && url.includes("select=id")) {
+        return jsonResponse([{ id: "user-1" }]);
       }
-      if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
-        return jsonResponse([{ tier: 'free' }]);
+      if (url.includes("/rest/v1/users?") && url.includes("select=tier")) {
+        return jsonResponse([{ tier: "free" }]);
       }
-      if (url.startsWith('https://supabase.test/rest/v1/user_app_library?')) {
+      if (url.startsWith("https://supabase.test/rest/v1/user_app_library?")) {
         return jsonResponse([]);
       }
-      if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
-        if (url.includes('owner_id=eq.user-1')) return jsonResponse([]);
+      if (url.startsWith("https://supabase.test/rest/v1/apps?")) {
+        if (url.includes("owner_id=eq.user-1")) return jsonResponse([]);
         return jsonResponse([launchPermissionTestApp()]);
       }
       if (
         url.startsWith(
-          'https://supabase.test/rest/v1/user_agent_permission_defaults?',
+          "https://supabase.test/rest/v1/user_agent_permission_defaults?",
         )
       ) {
-        return jsonResponse([{ user_id: 'user-1', default_policy: 'ask' }]);
+        return jsonResponse([{ user_id: "user-1", default_policy: "ask" }]);
       }
       if (
         url.startsWith(
-          'https://supabase.test/rest/v1/user_agent_function_permissions?',
+          "https://supabase.test/rest/v1/user_agent_function_permissions?",
         )
       ) {
         return jsonResponse([{
-          app_id: 'app-1',
-          function_name: 'deploy',
-          policy: 'always',
+          app_id: "app-1",
+          function_name: "deploy",
+          policy: "always",
         }]);
       }
-      if (url.startsWith('https://supabase.test/rest/v1/users?')) {
+      if (url.startsWith("https://supabase.test/rest/v1/users?")) {
         return jsonResponse([
           {
-            id: 'owner-1',
-            display_name: 'Ada',
-            profile_slug: 'ada',
+            id: "owner-1",
+            display_name: "Ada",
+            profile_slug: "ada",
             avatar_url: null,
           },
         ]);
@@ -1893,22 +2512,22 @@ Deno.test('launch facade: agent permissions list tool functions and policies', a
   );
 });
 
-Deno.test('launch facade: agent permissions patch upserts policy rows', async () => {
+Deno.test("launch facade: agent permissions patch upserts policy rows", async () => {
   const writes: Array<{ url: string; body: unknown }> = [];
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/tools/deploy-helper/agent-permissions',
+          "https://ultralight.test/api/launch/tools/deploy-helper/agent-permissions",
           {
-            method: 'PATCH',
+            method: "PATCH",
             headers: {
-              Authorization: 'Bearer browser-session-token',
-              'Content-Type': 'application/json',
+              Authorization: "Bearer browser-session-token",
+              "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              defaultPolicy: 'ask',
-              permissions: [{ functionName: 'deploy', policy: 'always' }],
+              defaultPolicy: "ask",
+              permissions: [{ functionName: "deploy", policy: "always" }],
             }),
           },
         ),
@@ -1919,71 +2538,71 @@ Deno.test('launch facade: agent permissions patch upserts policy rows', async ()
       };
 
       assertEquals(response.status, 200);
-      assertEquals(body.defaultPolicy, 'ask');
-      assertEquals(body.permissions[0].policy, 'always');
+      assertEquals(body.defaultPolicy, "ask");
+      assertEquals(body.permissions[0].policy, "always");
       assertEquals(writes.length, 2);
       assertEquals(
         writes[0].url,
-        'https://supabase.test/rest/v1/user_agent_permission_defaults?on_conflict=user_id',
+        "https://supabase.test/rest/v1/user_agent_permission_defaults?on_conflict=user_id",
       );
       assertEquals(
         writes[1].url,
-        'https://supabase.test/rest/v1/user_agent_function_permissions?on_conflict=user_id,app_id,function_name',
+        "https://supabase.test/rest/v1/user_agent_function_permissions?on_conflict=user_id,app_id,function_name",
       );
     },
     async (input, init) => {
       const url = input instanceof Request ? input.url : String(input);
-      if (init?.method === 'POST') {
+      if (init?.method === "POST") {
         writes.push({
           url,
           body: JSON.parse(String(init.body)),
         });
         return new Response(null, { status: 204 });
       }
-      if (url === 'https://supabase.test/auth/v1/user') {
+      if (url === "https://supabase.test/auth/v1/user") {
         return jsonResponse({
-          id: 'user-1',
-          email: 'founder@example.com',
+          id: "user-1",
+          email: "founder@example.com",
           user_metadata: {},
         });
       }
-      if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
-        return jsonResponse([{ id: 'user-1' }]);
+      if (url.includes("/rest/v1/users?") && url.includes("select=id")) {
+        return jsonResponse([{ id: "user-1" }]);
       }
-      if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
-        return jsonResponse([{ tier: 'free' }]);
+      if (url.includes("/rest/v1/users?") && url.includes("select=tier")) {
+        return jsonResponse([{ tier: "free" }]);
       }
-      if (url.startsWith('https://supabase.test/rest/v1/user_app_library?')) {
+      if (url.startsWith("https://supabase.test/rest/v1/user_app_library?")) {
         return jsonResponse([]);
       }
-      if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
-        if (url.includes('owner_id=eq.user-1')) return jsonResponse([]);
+      if (url.startsWith("https://supabase.test/rest/v1/apps?")) {
+        if (url.includes("owner_id=eq.user-1")) return jsonResponse([]);
         return jsonResponse([launchPermissionTestApp()]);
       }
       if (
         url.startsWith(
-          'https://supabase.test/rest/v1/user_agent_permission_defaults?',
+          "https://supabase.test/rest/v1/user_agent_permission_defaults?",
         )
       ) {
-        return jsonResponse([{ user_id: 'user-1', default_policy: 'ask' }]);
+        return jsonResponse([{ user_id: "user-1", default_policy: "ask" }]);
       }
       if (
         url.startsWith(
-          'https://supabase.test/rest/v1/user_agent_function_permissions?',
+          "https://supabase.test/rest/v1/user_agent_function_permissions?",
         )
       ) {
         return jsonResponse([{
-          app_id: 'app-1',
-          function_name: 'deploy',
-          policy: 'always',
+          app_id: "app-1",
+          function_name: "deploy",
+          policy: "always",
         }]);
       }
-      if (url.startsWith('https://supabase.test/rest/v1/users?')) {
+      if (url.startsWith("https://supabase.test/rest/v1/users?")) {
         return jsonResponse([
           {
-            id: 'owner-1',
-            display_name: 'Ada',
-            profile_slug: 'ada',
+            id: "owner-1",
+            display_name: "Ada",
+            profile_slug: "ada",
             avatar_url: null,
           },
         ]);
@@ -1993,51 +2612,57 @@ Deno.test('launch facade: agent permissions patch upserts policy rows', async ()
   );
 });
 
-Deno.test('launch facade: API key metadata requires authentication', async () => {
+Deno.test("launch facade: API key metadata requires authentication", async () => {
   await withLaunchEnv(async () => {
     const response = await handleLaunch(
-      new Request('https://ultralight.test/api/launch/api-keys'),
+      new Request("https://ultralight.test/api/launch/api-keys"),
     );
     const body = await response.json() as { error?: string };
 
     assertEquals(response.status, 401);
-    assertEquals(body.error, 'Authentication required');
+    assertEquals(body.error, "Authentication required");
   });
 });
 
-Deno.test('launch handoff: structural work requires a description and a matching target', () => {
+Deno.test("launch handoff: structural work requires a description and a matching target", () => {
   assertEquals(
     parseLaunchHandoffCreateRequest(
-      { intent: 'interface', description: 'A mobile approval queue.' },
-      'agent',
+      { intent: "interface", description: "A mobile approval queue." },
+      "agent",
     ),
-    { intent: 'interface', description: 'A mobile approval queue.' },
+    { intent: "interface", description: "A mobile approval queue." },
   );
   assertEquals(
     parseLaunchHandoffCreateRequest(
-      { intent: 'connect', description: '' },
-      'workspace',
+      { intent: "connect", description: "" },
+      "workspace",
     ),
-    { intent: 'connect', description: '' },
+    { intent: "connect", description: "" },
+  );
+  assertEquals(
+    parseLaunchHandoffCreateRequest(
+      { intent: "agent", description: "Watch the shared inbox." },
+      "workspace",
+    ),
+    { intent: "agent", description: "Watch the shared inbox." },
   );
 
   for (
     const [body, target] of [
-      [{ intent: 'interface', description: '' }, 'agent'],
-      [{ intent: 'interface', description: 'A queue.' }, 'workspace'],
-      [{ intent: 'agent', description: 'A watcher.' }, 'workspace'],
-      [{ intent: 'agent', description: 'A watcher.' }, 'agent'],
+      [{ intent: "interface", description: "" }, "agent"],
+      [{ intent: "interface", description: "A queue." }, "workspace"],
+      [{ intent: "agent", description: "A watcher." }, "agent"],
       [
         {
-          intent: 'routine',
-          description: 'Every morning.',
-          scopes: ['*'],
+          intent: "routine",
+          description: "Every morning.",
+          scopes: ["*"],
         },
-        'agent',
+        "agent",
       ],
     ] as const
   ) {
-    let message = '';
+    let message = "";
     try {
       parseLaunchHandoffCreateRequest(
         body as Record<string, unknown>,
@@ -2050,47 +2675,350 @@ Deno.test('launch handoff: structural work requires a description and a matching
   }
 });
 
-Deno.test('launch handoff: reserved scopes cannot be minted as general API keys', () => {
-  let message = '';
+Deno.test("launch handoff: reserved scopes cannot be minted as general API keys", () => {
+  let message = "";
   try {
     parseLaunchApiKeyCreateRequest({
-      name: 'Spoofed handoff',
-      scopes: ['apps:read', 'agents:build', 'handoff:interface'],
+      name: "Spoofed handoff",
+      scopes: ["apps:read", "agents:build", "handoff:interface"],
     });
   } catch (reason) {
     message = reason instanceof Error ? reason.message : String(reason);
   }
-  assertStringIncludes(message, 'reserved');
+  assertStringIncludes(message, "reserved");
 });
 
-Deno.test('launch handoff: credential creation requires an account session', async () => {
-  await withLaunchEnv(async () => {
-    const response = await handleLaunch(
-      new Request('https://ultralight.test/api/launch/handoffs', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${TEST_API_TOKEN}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          intent: 'agent',
-          description: 'Watch the shared inbox.',
+Deno.test({
+  name: "launch handoff: credential creation requires an account session",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    await withLaunchEnv(async () => {
+      const response = await handleLaunch(
+        new Request("https://ultralight.test/api/launch/handoffs", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${TEST_API_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            intent: "agent",
+            description: "Watch the shared inbox.",
+          }),
         }),
-      }),
-    );
-    const body = await response.json() as { error?: string };
-    assertEquals(response.status, 403);
-    assertStringIncludes(body.error || '', 'account session');
-  }, apiTokenAuthMock());
+      );
+      const body = await response.json() as { error?: string };
+      assertEquals(response.status, 403);
+      assertStringIncludes(body.error || "", "account session");
+    }, apiTokenAuthMock());
+  },
 });
 
-Deno.test('launch facade: wallet top-up is retired from the launch surface', async () => {
+function createdBuilderHandoffRpcRow(
+  body: Record<string, unknown>,
+): Record<string, unknown> {
+  const createdAt = String(body.p_now);
+  const expiresAt = new Date(
+    Date.parse(createdAt) + 60 * 60 * 1000,
+  ).toISOString();
+  return {
+    id: body.p_session_id,
+    token_id: body.p_session_id,
+    owner_id: body.p_owner_id,
+    candidate_set_id: body.p_candidate_set_id,
+    intent: body.p_intent,
+    target_app_id: body.p_target_app_id,
+    status: "created",
+    status_version: 0,
+    lineage_revision: 0,
+    description_sha256: body.p_description_sha256,
+    bundle_id: null,
+    source_hash: null,
+    attestation_id: null,
+    attestation_digest: null,
+    document_digest: null,
+    report_digest: null,
+    release_digest: null,
+    candidate_archive_digest: null,
+    candidate_archive_bytes: null,
+    candidate_archive_objects: null,
+    uploaded_app_id: null,
+    uploaded_version: null,
+    base_version: null,
+    base_source_hash: null,
+    base_release_digest: null,
+    base_state_digest: null,
+    base_release_generation: null,
+    created_at: createdAt,
+    expires_at: expiresAt,
+    updated_at: createdAt,
+    connected_at: null,
+    staged_at: null,
+    tested_at: null,
+    uploaded_at: null,
+    promoted_at: null,
+    credential_revoked_at: null,
+    terminal_at: null,
+  };
+}
+
+Deno.test("launch handoff: confirmed sign-in-link email is required before durable creation", async () => {
+  let createRpcCalled = false;
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(
+        new Request("https://ultralight.test/api/launch/handoffs", {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer browser-session-token",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            intent: "agent",
+            description: "Watch the shared inbox.",
+          }),
+        }),
+      );
+      const body = await response.json() as { error?: string };
+      assertEquals(response.status, 403);
+      assertStringIncludes(body.error || "", "sign-in link");
+      assertEquals(createRpcCalled, false);
+    },
+    async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === "https://supabase.test/auth/v1/user") {
+        return jsonResponse({
+          id: "11111111-1111-4111-8111-111111111111",
+          email: "founder@example.com",
+          email_confirmed_at: null,
+          user_metadata: {},
+        });
+      }
+      if (url.startsWith("https://supabase.test/rest/v1/users?")) {
+        return jsonResponse([{
+          id: "11111111-1111-4111-8111-111111111111",
+          tier: "free",
+        }]);
+      }
+      if (
+        url.endsWith("/rest/v1/rpc/create_builder_handoff_session")
+      ) {
+        createRpcCalled = true;
+      }
+      return jsonResponse([]);
+    },
+    { PRO_SUBSCRIPTION_REQUIRED: "0" },
+  );
+});
+
+Deno.test({
+  name: "launch handoff: reveal-once credentials expire in exactly 60 minutes",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    let createRpcBody: Record<string, unknown> | null = null;
+    await withLaunchEnv(
+      async () => {
+        const response = await handleLaunch(
+          new Request("https://ultralight.test/api/launch/handoffs", {
+            method: "POST",
+            headers: {
+              Authorization: "Bearer browser-session-token",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              intent: "agent",
+              description: "Watch the shared inbox.",
+            }),
+          }),
+        );
+        const body = await response.json() as {
+          credential?: {
+            createdAt?: string;
+            expiresAt?: string;
+            plaintextToken?: string;
+            scopes?: string[];
+            appIds?: string[] | null;
+          };
+          generatedAt?: string;
+          handoff?: {
+            createdAt?: string;
+            expiresAt?: string;
+            intent?: string;
+            target?: {
+              kind?: string;
+              reservedAgentId?: string;
+              maxAgents?: number;
+            };
+          };
+          message?: string;
+        };
+        assertEquals(response.status, 200, JSON.stringify(body));
+        assertEquals(body.handoff?.intent, "agent");
+        assertEquals(body.handoff?.createdAt, body.credential?.createdAt);
+        assertEquals(body.handoff?.expiresAt, body.credential?.expiresAt);
+        assertEquals(
+          Date.parse(body.credential?.expiresAt || "") -
+            Date.parse(body.credential?.createdAt || ""),
+          60 * 60 * 1000,
+        );
+        assertEquals(body.handoff?.target?.kind, "new_agent");
+        assertEquals(
+          body.handoff?.target?.reservedAgentId,
+          createRpcBody?.p_target_app_id,
+        );
+        assertEquals(body.handoff?.target?.maxAgents, 1);
+        assertEquals(body.credential?.appIds, [
+          createRpcBody?.p_target_app_id,
+        ]);
+        assertEquals(body.credential?.scopes, [
+          "apps:read",
+          "agents:build",
+          "handoff:agent",
+        ]);
+        assertEquals(body.credential?.plaintextToken?.startsWith("gx_"), true);
+        assertEquals(body.credential?.plaintextToken?.length, 35);
+        assertEquals(createRpcBody?.p_intent, "agent");
+        assertEquals(
+          typeof createRpcBody?.p_description_sha256,
+          "string",
+        );
+        assertStringIncludes(body.message || "", "expires in 60 minutes");
+        assertEquals((body.message || "").includes("30 minutes"), false);
+      },
+      async (input, init) => {
+        const request = input instanceof Request ? input : null;
+        const url = request?.url || String(input);
+        const method = init?.method || request?.method || "GET";
+        if (url === "https://supabase.test/auth/v1/user") {
+          return jsonResponse({
+            id: "11111111-1111-4111-8111-111111111111",
+            email: "founder@example.com",
+            email_confirmed_at: "2026-07-30T19:00:00.000Z",
+            user_metadata: {},
+          });
+        }
+        if (url.includes("/rest/v1/users?") && url.includes("select=id")) {
+          return jsonResponse([{
+            id: "11111111-1111-4111-8111-111111111111",
+          }]);
+        }
+        if (url.endsWith("/rest/v1/rpc/check_rate_limit")) {
+          return jsonResponse(true);
+        }
+        if (
+          url.endsWith("/rest/v1/rpc/create_builder_handoff_session") &&
+          method === "POST"
+        ) {
+          const rawBody = init?.body ??
+            (request ? await request.clone().text() : "{}");
+          createRpcBody = JSON.parse(String(rawBody)) as Record<
+            string,
+            unknown
+          >;
+          return jsonResponse([createdBuilderHandoffRpcRow(createRpcBody)]);
+        }
+        return jsonResponse([]);
+      },
+      { PRO_SUBSCRIPTION_REQUIRED: "0" },
+    );
+  },
+});
+
+Deno.test("launch handoff: DELETE durably cancels and revokes the temporary credential", async () => {
+  const handoffId = "77777777-7777-4777-8777-777777777777";
+  let terminateRpcBody: Record<string, unknown> | null = null;
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/wallet/topup/quote?amount_credits=10000&method=ach',
-          { headers: { Authorization: 'Bearer browser-session-token' } },
+          `https://ultralight.test/api/launch/handoffs/${handoffId}`,
+          {
+            method: "DELETE",
+            headers: {
+              Authorization: "Bearer browser-session-token",
+            },
+          },
+        ),
+      );
+      const body = await response.json() as {
+        success?: boolean;
+        handoff?: { id?: string; status?: string; updatedAt?: string };
+        message?: string;
+      };
+      assertEquals(response.status, 200, JSON.stringify(body));
+      assertEquals(body.success, true);
+      assertEquals(body.handoff?.id, handoffId);
+      assertEquals(body.handoff?.status, "cancelled");
+      assertEquals(body.handoff?.updatedAt, terminateRpcBody?.p_now);
+      assertStringIncludes(body.message || "", "can no longer be used");
+      assertEquals(
+        terminateRpcBody?.p_owner_id,
+        "11111111-1111-4111-8111-111111111111",
+      );
+      assertEquals(terminateRpcBody?.p_token_id, handoffId);
+      assertEquals(terminateRpcBody?.p_status, "cancelled");
+    },
+    async (input, init) => {
+      const request = input instanceof Request ? input : null;
+      const url = request?.url || String(input);
+      if (url === "https://supabase.test/auth/v1/user") {
+        return jsonResponse({
+          id: "11111111-1111-4111-8111-111111111111",
+          email: "founder@example.com",
+          email_confirmed_at: "2026-07-30T19:00:00.000Z",
+          user_metadata: {},
+        });
+      }
+      if (url.startsWith("https://supabase.test/rest/v1/users?")) {
+        return jsonResponse([{
+          id: "11111111-1111-4111-8111-111111111111",
+          tier: "free",
+        }]);
+      }
+      if (
+        url.endsWith("/rest/v1/rpc/terminate_builder_handoff_session")
+      ) {
+        const rawBody = init?.body ??
+          (request ? await request.clone().text() : "{}");
+        terminateRpcBody = JSON.parse(String(rawBody)) as Record<
+          string,
+          unknown
+        >;
+        const terminalAt = String(terminateRpcBody.p_now);
+        const createdAt = new Date(
+          Date.parse(terminalAt) - 10 * 60 * 1000,
+        ).toISOString();
+        return jsonResponse([{
+          ...createdBuilderHandoffRpcRow({
+            p_session_id: handoffId,
+            p_owner_id: terminateRpcBody.p_owner_id,
+            p_candidate_set_id: "88888888-8888-4888-8888-888888888888",
+            p_intent: "agent",
+            p_target_app_id: "99999999-9999-4999-8999-999999999999",
+            p_description_sha256: "a".repeat(64),
+            p_now: createdAt,
+          }),
+          status: "cancelled",
+          status_version: 1,
+          updated_at: terminalAt,
+          credential_revoked_at: terminalAt,
+          terminal_at: terminalAt,
+        }]);
+      }
+      return jsonResponse([]);
+    },
+    { PRO_SUBSCRIPTION_REQUIRED: "0" },
+  );
+});
+
+Deno.test("launch facade: wallet top-up is retired from the launch surface", async () => {
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(
+        new Request(
+          "https://ultralight.test/api/launch/wallet/topup/quote?amount_credits=10000&method=ach",
+          { headers: { Authorization: "Bearer browser-session-token" } },
         ),
       );
       assertEquals(response.status, 410);
@@ -2111,8 +3039,8 @@ Deno.test('launch facade: wallet top-up is retired from the launch surface', asy
       };
 
       assertEquals(response.status, 200);
-      assertEquals(body.quote.method, 'ach');
-      assertEquals(body.quote.methodLabel, 'Bank (ACH)');
+      assertEquals(body.quote.method, "ach");
+      assertEquals(body.quote.methodLabel, "Bank (ACH)");
       assertEquals(body.quote.amountCredits, 10000);
       assertEquals(body.quote.amountLight, 10000);
       assertEquals(body.quote.creditsPerDollar, 100);
@@ -2129,32 +3057,32 @@ Deno.test('launch facade: wallet top-up is retired from the launch surface', asy
     },
     async (input) => {
       const url = input instanceof Request ? input.url : String(input);
-      if (url === 'https://supabase.test/auth/v1/user') {
+      if (url === "https://supabase.test/auth/v1/user") {
         return jsonResponse({
-          id: 'user-1',
-          email: 'founder@example.com',
+          id: "user-1",
+          email: "founder@example.com",
           user_metadata: {},
         });
       }
-      if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
-        return jsonResponse([{ id: 'user-1' }]);
+      if (url.includes("/rest/v1/users?") && url.includes("select=id")) {
+        return jsonResponse([{ id: "user-1" }]);
       }
-      if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
-        return jsonResponse([{ tier: 'free' }]);
+      if (url.includes("/rest/v1/users?") && url.includes("select=tier")) {
+        return jsonResponse([{ tier: "free" }]);
       }
       return jsonResponse([]);
     },
   );
 });
 
-Deno.test('launch facade: wallet transactions are retired from the launch surface', async () => {
+Deno.test("launch facade: wallet transactions are retired from the launch surface", async () => {
   const transactionUrls: string[] = [];
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/wallet/transactions?limit=2&cursor=2026-06-06T10:00:00.000Z',
-          { headers: { Authorization: 'Bearer browser-session-token' } },
+          "https://ultralight.test/api/launch/wallet/transactions?limit=2&cursor=2026-06-06T10:00:00.000Z",
+          { headers: { Authorization: "Bearer browser-session-token" } },
         ),
       );
       assertEquals(response.status, 410);
@@ -2170,78 +3098,78 @@ Deno.test('launch facade: wallet transactions are retired from the launch surfac
       };
 
       assertEquals(response.status, 200);
-      assertEquals(body.kind, 'transactions');
-      assertEquals(body.items.map((item) => item.id), ['tx-1', 'tx-2']);
+      assertEquals(body.kind, "transactions");
+      assertEquals(body.items.map((item) => item.id), ["tx-1", "tx-2"]);
       assertEquals(body.items[0].amount, {
         credits: 1000,
         light: 1000,
-        display: '1,000 credits',
+        display: "1,000 credits",
       });
       assertEquals(body.items[1].amount.credits, body.items[1].amount.light);
       assertEquals(body.page.limit, 2);
       assertEquals(body.page.hasMore, true);
-      assertEquals(body.page.nextCursor, '2026-06-06T09:58:00.000Z');
-      assertStringIncludes(transactionUrls[0], 'limit=3');
+      assertEquals(body.page.nextCursor, "2026-06-06T09:58:00.000Z");
+      assertStringIncludes(transactionUrls[0], "limit=3");
       assertStringIncludes(
         transactionUrls[0],
-        'created_at=lt.2026-06-06T10:00:00.000Z',
+        "created_at=lt.2026-06-06T10:00:00.000Z",
       );
     },
     async (input) => {
       const url = input instanceof Request ? input.url : String(input);
       const decodedUrl = decodeURIComponent(url);
-      if (url === 'https://supabase.test/auth/v1/user') {
+      if (url === "https://supabase.test/auth/v1/user") {
         return jsonResponse({
-          id: 'user-1',
-          email: 'founder@example.com',
+          id: "user-1",
+          email: "founder@example.com",
           user_metadata: {},
         });
       }
-      if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
-        return jsonResponse([{ id: 'user-1' }]);
+      if (url.includes("/rest/v1/users?") && url.includes("select=id")) {
+        return jsonResponse([{ id: "user-1" }]);
       }
-      if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
-        return jsonResponse([{ tier: 'free' }]);
+      if (url.includes("/rest/v1/users?") && url.includes("select=tier")) {
+        return jsonResponse([{ tier: "free" }]);
       }
       if (
         decodedUrl.startsWith(
-          'https://supabase.test/rest/v1/billing_transactions?',
+          "https://supabase.test/rest/v1/billing_transactions?",
         )
       ) {
         transactionUrls.push(decodedUrl);
         return jsonResponse([
           {
-            id: 'tx-1',
-            type: 'credit',
-            category: 'topup',
-            description: 'Added Light',
+            id: "tx-1",
+            type: "credit",
+            category: "topup",
+            description: "Added Light",
             amount_light: 1000,
             balance_after_light: 5000,
             app_id: null,
             app_name: null,
-            created_at: '2026-06-06T09:59:00.000Z',
+            created_at: "2026-06-06T09:59:00.000Z",
           },
           {
-            id: 'tx-2',
-            type: 'debit',
-            category: 'tool_call',
-            description: 'Tool call',
+            id: "tx-2",
+            type: "debit",
+            category: "tool_call",
+            description: "Tool call",
             amount_light: -5,
             balance_after_light: 4995,
-            app_id: 'app-1',
-            app_name: 'Deploy Helper',
-            created_at: '2026-06-06T09:58:00.000Z',
+            app_id: "app-1",
+            app_name: "Deploy Helper",
+            created_at: "2026-06-06T09:58:00.000Z",
           },
           {
-            id: 'tx-3',
-            type: 'debit',
-            category: 'tool_call',
-            description: 'Older tool call',
+            id: "tx-3",
+            type: "debit",
+            category: "tool_call",
+            description: "Older tool call",
             amount_light: -2,
             balance_after_light: 4993,
-            app_id: 'app-2',
-            app_name: 'Inspect Helper',
-            created_at: '2026-06-06T09:57:00.000Z',
+            app_id: "app-2",
+            app_name: "Inspect Helper",
+            created_at: "2026-06-06T09:57:00.000Z",
           },
         ]);
       }
@@ -2250,14 +3178,14 @@ Deno.test('launch facade: wallet transactions are retired from the launch surfac
   );
 });
 
-Deno.test('launch facade: wallet earnings are retired from the launch surface', async () => {
+Deno.test("launch facade: wallet earnings are retired from the launch surface", async () => {
   const transferUrls: string[] = [];
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/wallet/earnings?tool=app-1&limit=2',
-          { headers: { Authorization: 'Bearer browser-session-token' } },
+          "https://ultralight.test/api/launch/wallet/earnings?tool=app-1&limit=2",
+          { headers: { Authorization: "Bearer browser-session-token" } },
         ),
       );
       assertEquals(response.status, 410);
@@ -2269,43 +3197,43 @@ Deno.test('launch facade: wallet earnings are retired from the launch surface', 
       };
 
       assertEquals(response.status, 200);
-      assertEquals(body.kind, 'earnings');
+      assertEquals(body.kind, "earnings");
       assertEquals(body.items.length, 1);
-      assertEquals(body.items[0].appId, 'app-1');
-      assertEquals(body.items[0].reason, 'app_call');
+      assertEquals(body.items[0].appId, "app-1");
+      assertEquals(body.items[0].reason, "app_call");
       assertEquals(body.page.limit, 2);
       assertEquals(body.page.hasMore, false);
-      assertStringIncludes(transferUrls[0], 'app_id=eq.app-1');
+      assertStringIncludes(transferUrls[0], "app_id=eq.app-1");
       assertStringIncludes(
         transferUrls[0],
-        'reason=not.in.(withdrawal,withdrawal_refund)',
+        "reason=not.in.(withdrawal,withdrawal_refund)",
       );
     },
     async (input) => {
       const url = input instanceof Request ? input.url : String(input);
       const decodedUrl = decodeURIComponent(url);
-      if (url === 'https://supabase.test/auth/v1/user') {
+      if (url === "https://supabase.test/auth/v1/user") {
         return jsonResponse({
-          id: 'user-1',
-          email: 'founder@example.com',
+          id: "user-1",
+          email: "founder@example.com",
           user_metadata: {},
         });
       }
-      if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
-        return jsonResponse([{ id: 'user-1' }]);
+      if (url.includes("/rest/v1/users?") && url.includes("select=id")) {
+        return jsonResponse([{ id: "user-1" }]);
       }
-      if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
-        return jsonResponse([{ tier: 'free' }]);
+      if (url.includes("/rest/v1/users?") && url.includes("select=tier")) {
+        return jsonResponse([{ tier: "free" }]);
       }
-      if (decodedUrl.startsWith('https://supabase.test/rest/v1/transfers?')) {
+      if (decodedUrl.startsWith("https://supabase.test/rest/v1/transfers?")) {
         transferUrls.push(decodedUrl);
         return jsonResponse([
           {
             amount_light: 7,
-            app_id: 'app-1',
-            function_name: 'deploy',
-            reason: 'app_call',
-            created_at: '2026-06-06T09:59:00.000Z',
+            app_id: "app-1",
+            function_name: "deploy",
+            reason: "app_call",
+            created_at: "2026-06-06T09:59:00.000Z",
           },
         ]);
       }
@@ -2314,11 +3242,11 @@ Deno.test('launch facade: wallet earnings are retired from the launch surface', 
   );
 });
 
-Deno.test('launch facade: platform primitives can be query-filtered', async () => {
+Deno.test("launch facade: platform primitives can be query-filtered", async () => {
   await withLaunchEnv(async () => {
     const response = await handleLaunch(
       new Request(
-        'https://ultralight.test/api/launch/platform-primitives?q=deploy',
+        "https://ultralight.test/api/launch/platform-primitives?q=deploy",
       ),
     );
     const body = await response.json() as {
@@ -2326,11 +3254,11 @@ Deno.test('launch facade: platform primitives can be query-filtered', async () =
     };
 
     assertEquals(response.status, 200);
-    assertEquals(body.suggestions[0].primitive, 'deploy');
+    assertEquals(body.suggestions[0].primitive, "deploy");
   });
 });
 
-Deno.test('launch facade: builder leaderboard maps request into RPC payload', async () => {
+Deno.test("launch facade: builder leaderboard maps request into RPC payload", async () => {
   const calls: Array<{
     url: string;
     method?: string;
@@ -2341,7 +3269,7 @@ Deno.test('launch facade: builder leaderboard maps request into RPC payload', as
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/leaderboard?kind=builder&period=90d&limit=2',
+          "https://ultralight.test/api/launch/leaderboard?kind=builder&period=90d&limit=2",
         ),
       );
       const body = await response.json() as {
@@ -2359,49 +3287,49 @@ Deno.test('launch facade: builder leaderboard maps request into RPC payload', as
       assertEquals(response.status, 200);
       assertEquals(
         calls[0].url,
-        'https://supabase.test/rest/v1/rpc/get_leaderboard',
+        "https://supabase.test/rest/v1/rpc/get_leaderboard",
       );
-      assertEquals(calls[0].method, 'POST');
+      assertEquals(calls[0].method, "POST");
       assertEquals(calls[0].body, {
-        p_interval: '90d',
+        p_interval: "90d",
         p_limit: 2,
       });
-      assertEquals(body.kind, 'builder');
-      assertEquals(body.period, '90d');
-      assertEquals(body.entries[0].userId, 'user-1');
-      assertEquals(body.entries[0].displayName, 'Ada');
+      assertEquals(body.kind, "builder");
+      assertEquals(body.period, "90d");
+      assertEquals(body.entries[0].userId, "user-1");
+      assertEquals(body.entries[0].displayName, "Ada");
       assertEquals(body.entries[0].value, {
         credits: 123,
         light: 123,
-        display: '123 credits',
+        display: "123 credits",
       });
       assertEquals(body.entries[0].eventCount, 7);
-      assertEquals(body.entries[0].featuredTool?.slug, 'deploy-helper');
+      assertEquals(body.entries[0].featuredTool?.slug, "deploy-helper");
     },
     async (input, init) => {
       const url = input instanceof Request ? input.url : String(input);
       calls.push({
         url,
         method: init?.method,
-        body: JSON.parse(String(init?.body || '{}')),
+        body: JSON.parse(String(init?.body || "{}")),
       });
       return jsonResponse([
         {
           rank: 1,
-          user_id: 'user-1',
-          display_name: 'Ada',
-          profile_slug: 'ada',
+          user_id: "user-1",
+          display_name: "Ada",
+          profile_slug: "ada",
           earnings_light: 123,
           event_count: 7,
-          featured_app_slug: 'deploy-helper',
-          featured_app_name: 'Deploy Helper',
+          featured_app_slug: "deploy-helper",
+          featured_app_name: "Deploy Helper",
         },
       ]);
     },
   );
 });
 
-Deno.test('launch facade: store uses semantic app and platform primitive embeddings', async () => {
+Deno.test("launch facade: store uses semantic app and platform primitive embeddings", async () => {
   const calls: Array<{
     url: string;
     method?: string;
@@ -2412,7 +3340,7 @@ Deno.test('launch facade: store uses semantic app and platform primitive embeddi
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/store?query=deploy&limit=1',
+          "https://ultralight.test/api/launch/store?query=deploy&limit=1",
         ),
       );
       const body = await response.json() as {
@@ -2434,37 +3362,37 @@ Deno.test('launch facade: store uses semantic app and platform primitive embeddi
 
       assertEquals(response.status, 200);
       const searchCall = calls.find((call) =>
-        call.url === 'https://supabase.test/rest/v1/rpc/search_apps'
+        call.url === "https://supabase.test/rest/v1/rpc/search_apps"
       );
-      assertEquals(searchCall?.method, 'POST');
+      assertEquals(searchCall?.method, "POST");
       assertEquals(searchCall?.body, {
-        p_query_embedding: '[1,0]',
-        p_user_id: '00000000-0000-0000-0000-000000000000',
+        p_query_embedding: "[1,0]",
+        p_user_id: "00000000-0000-0000-0000-000000000000",
         p_limit: 40,
         p_offset: 0,
       });
-      assertEquals(body.retrieval.mode, 'semantic');
-      assertEquals(body.retrieval.embeddingModel, 'test-embedding');
+      assertEquals(body.retrieval.mode, "semantic");
+      assertEquals(body.retrieval.embeddingModel, "test-embedding");
       assertEquals(body.retrieval.embeddedSources, [
-        'tools',
-        'platform_primitives',
-        'install_docs',
+        "tools",
+        "platform_primitives",
+        "install_docs",
       ]);
       assertEquals(body.retrieval.fallbackSources, []);
-      assertEquals(body.results[0].id, 'app-1');
-      assertEquals('widgets' in body.results[0], false);
-      assertEquals(body.results[0].relevance?.source, 'semantic');
+      assertEquals(body.results[0].id, "app-1");
+      assertEquals("widgets" in body.results[0], false);
+      assertEquals(body.results[0].relevance?.source, "semantic");
       assertEquals(body.results[0].relevance?.score, 0.91);
-      assertEquals(body.platformPrimitives[0].primitive, 'deploy');
-      assertEquals(body.platformPrimitives[0].relevance?.source, 'semantic');
+      assertEquals(body.platformPrimitives[0].primitive, "deploy");
+      assertEquals(body.platformPrimitives[0].relevance?.source, "semantic");
     },
     async (input, init) => {
       const url = input instanceof Request ? input.url : String(input);
       const body = parseJsonBody(init?.body);
       calls.push({ url, method: init?.method, body });
 
-      if (url === 'https://openrouter.ai/api/v1/embeddings') {
-        const model = 'test-embedding';
+      if (url === "https://openrouter.ai/api/v1/embeddings") {
+        const model = "test-embedding";
         const embedding = Array.isArray(body.input)
           ? (body.input as unknown[]).map((_, index) => ({
             embedding: index === 1 ? [1, 0] : [0, 1],
@@ -2478,32 +3406,32 @@ Deno.test('launch facade: store uses semantic app and platform primitive embeddi
         });
       }
 
-      if (url === 'https://supabase.test/rest/v1/rpc/search_apps') {
-        return jsonResponse([{ id: 'app-1', similarity: 0.91 }]);
+      if (url === "https://supabase.test/rest/v1/rpc/search_apps") {
+        return jsonResponse([{ id: "app-1", similarity: 0.91 }]);
       }
 
-      if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
+      if (url.startsWith("https://supabase.test/rest/v1/apps?")) {
         return jsonResponse([
           {
-            id: 'app-1',
-            owner_id: 'owner-1',
-            slug: 'deploy-helper',
-            name: 'Deploy Helper',
-            description: 'Deploy tools for existing agents',
-            visibility: 'public',
-            download_access: 'public',
-            current_version: 'v1',
+            id: "app-1",
+            owner_id: "owner-1",
+            slug: "deploy-helper",
+            name: "Deploy Helper",
+            description: "Deploy tools for existing agents",
+            visibility: "public",
+            download_access: "public",
+            current_version: "v1",
             manifest: { widgets: [] },
-            exports: ['deploy'],
+            exports: ["deploy"],
             pricing_config: {},
             gpu_pricing_config: null,
-            runtime: 'deno',
+            runtime: "deno",
             gpu_status: null,
             gpu_type: null,
             version_metadata: [],
             env_schema: {},
-            tags: ['deploy'],
-            category: 'devtools',
+            tags: ["deploy"],
+            category: "devtools",
             likes: 0,
             dislikes: 0,
             weighted_likes: 0,
@@ -2511,18 +3439,18 @@ Deno.test('launch facade: store uses semantic app and platform primitive embeddi
             total_runs: 0,
             runs_30d: 0,
             hosting_suspended: false,
-            updated_at: '2026-06-01T00:00:00.000Z',
-            created_at: '2026-06-01T00:00:00.000Z',
+            updated_at: "2026-06-01T00:00:00.000Z",
+            created_at: "2026-06-01T00:00:00.000Z",
           },
         ]);
       }
 
-      if (url.startsWith('https://supabase.test/rest/v1/users?')) {
+      if (url.startsWith("https://supabase.test/rest/v1/users?")) {
         return jsonResponse([
           {
-            id: 'owner-1',
-            display_name: 'Ada',
-            profile_slug: 'ada',
+            id: "owner-1",
+            display_name: "Ada",
+            profile_slug: "ada",
             avatar_url: null,
           },
         ]);
@@ -2530,16 +3458,16 @@ Deno.test('launch facade: store uses semantic app and platform primitive embeddi
 
       return jsonResponse([]);
     },
-    { OPENROUTER_EMBEDDING_KEY: 'embedding-key' },
+    { OPENROUTER_EMBEDDING_KEY: "embedding-key" },
   );
 });
 
-Deno.test('launch facade: discover remains a compatibility alias for store', async () => {
+Deno.test("launch facade: discover remains a compatibility alias for store", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/discover?query=deploy&limit=1',
+          "https://ultralight.test/api/launch/discover?query=deploy&limit=1",
         ),
       );
       const body = await response.json() as {
@@ -2548,33 +3476,33 @@ Deno.test('launch facade: discover remains a compatibility alias for store', asy
       };
 
       assertEquals(response.status, 200);
-      assertEquals(body.query, 'deploy');
-      assertEquals(body.results[0].id, 'app-1');
+      assertEquals(body.query, "deploy");
+      assertEquals(body.results[0].id, "app-1");
     },
     async (input) => {
       const url = input instanceof Request ? input.url : String(input);
-      if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
+      if (url.startsWith("https://supabase.test/rest/v1/apps?")) {
         return jsonResponse([
           {
-            id: 'app-1',
-            owner_id: 'owner-1',
-            slug: 'deploy-helper',
-            name: 'Deploy Helper',
-            description: 'Deploy tools for existing agents',
-            visibility: 'public',
-            download_access: 'public',
-            current_version: 'v1',
+            id: "app-1",
+            owner_id: "owner-1",
+            slug: "deploy-helper",
+            name: "Deploy Helper",
+            description: "Deploy tools for existing agents",
+            visibility: "public",
+            download_access: "public",
+            current_version: "v1",
             manifest: { widgets: [] },
-            exports: ['deploy'],
+            exports: ["deploy"],
             pricing_config: {},
             gpu_pricing_config: null,
-            runtime: 'deno',
+            runtime: "deno",
             gpu_status: null,
             gpu_type: null,
             version_metadata: [],
             env_schema: {},
-            tags: ['deploy'],
-            category: 'devtools',
+            tags: ["deploy"],
+            category: "devtools",
             likes: 0,
             dislikes: 0,
             weighted_likes: 0,
@@ -2582,18 +3510,18 @@ Deno.test('launch facade: discover remains a compatibility alias for store', asy
             total_runs: 0,
             runs_30d: 0,
             hosting_suspended: false,
-            updated_at: '2026-06-01T00:00:00.000Z',
-            created_at: '2026-06-01T00:00:00.000Z',
+            updated_at: "2026-06-01T00:00:00.000Z",
+            created_at: "2026-06-01T00:00:00.000Z",
           },
         ]);
       }
 
-      if (url.startsWith('https://supabase.test/rest/v1/users?')) {
+      if (url.startsWith("https://supabase.test/rest/v1/users?")) {
         return jsonResponse([
           {
-            id: 'owner-1',
-            display_name: 'Ada',
-            profile_slug: 'ada',
+            id: "owner-1",
+            display_name: "Ada",
+            profile_slug: "ada",
             avatar_url: null,
           },
         ]);
@@ -2604,11 +3532,11 @@ Deno.test('launch facade: discover remains a compatibility alias for store', asy
   );
 });
 
-Deno.test('launch facade: mutation methods are rejected', async () => {
+Deno.test("launch facade: mutation methods are rejected", async () => {
   await withLaunchEnv(async () => {
     const response = await handleLaunch(
-      new Request('https://ultralight.test/api/launch/install', {
-        method: 'POST',
+      new Request("https://ultralight.test/api/launch/install", {
+        method: "POST",
       }),
     );
 
@@ -2616,13 +3544,13 @@ Deno.test('launch facade: mutation methods are rejected', async () => {
   });
 });
 
-Deno.test('launch facade: deprecated wallet aliases are retired too', async () => {
+Deno.test("launch facade: deprecated wallet aliases are retired too", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/wallet/topup/quote?amount_light=2500&method=card',
-          { headers: { Authorization: 'Bearer browser-session-token' } },
+          "https://ultralight.test/api/launch/wallet/topup/quote?amount_light=2500&method=card",
+          { headers: { Authorization: "Bearer browser-session-token" } },
         ),
       );
       assertEquals(response.status, 410);
@@ -2641,7 +3569,7 @@ Deno.test('launch facade: deprecated wallet aliases are retired too', async () =
 
 Deno.test({
   name:
-    'launch facade: byok and inference endpoints require an account session',
+    "launch facade: byok and inference endpoints require an account session",
   // The api_token auth path constructs a supabase-js client whose auth
   // auto-refresh interval cannot be stopped from test code.
   sanitizeOps: false,
@@ -2650,25 +3578,25 @@ Deno.test({
     await withLaunchEnv(
       async () => {
         const attempts: Array<{ path: string; init?: RequestInit }> = [
-          { path: '/api/launch/byok' },
+          { path: "/api/launch/byok" },
           {
-            path: '/api/launch/byok/openrouter',
+            path: "/api/launch/byok/openrouter",
             init: {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ apiKey: 'sk-or-test', validate: false }),
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ apiKey: "sk-or-test", validate: false }),
             },
           },
-          { path: '/api/launch/byok/openrouter', init: { method: 'DELETE' } },
+          { path: "/api/launch/byok/openrouter", init: { method: "DELETE" } },
           {
-            path: '/api/launch/byok/primary',
+            path: "/api/launch/byok/primary",
             init: {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ provider: 'openrouter' }),
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ provider: "openrouter" }),
             },
           },
-          { path: '/api/launch/inference-options' },
+          { path: "/api/launch/inference-options" },
         ];
 
         for (const attempt of attempts) {
@@ -2686,8 +3614,8 @@ Deno.test({
 
           assertEquals(response.status, 403, attempt.path);
           assertStringIncludes(
-            body.error || '',
-            'account session',
+            body.error || "",
+            "account session",
             attempt.path,
           );
         }
@@ -2698,25 +3626,25 @@ Deno.test({
 });
 
 Deno.test({
-  name: 'launch facade: routine lifecycle rejects connected-agent API keys',
+  name: "launch facade: routine lifecycle rejects connected-agent API keys",
   sanitizeOps: false,
   sanitizeResources: false,
   fn: async () => {
     await withLaunchEnv(
       async () => {
         const attempts: Array<{ method: string; body?: unknown }> = [
-          { method: 'GET' },
+          { method: "GET" },
           {
-            method: 'PATCH',
-            body: { mission: 'Silently widen authority' },
+            method: "PATCH",
+            body: { mission: "Silently widen authority" },
           },
           {
-            method: 'POST',
-            body: { action: 'activate' },
+            method: "POST",
+            body: { action: "activate" },
           },
         ];
         for (const attempt of attempts) {
-          const suffix = attempt.method === 'POST' ? '/actions' : '';
+          const suffix = attempt.method === "POST" ? "/actions" : "";
           const response = await handleLaunch(
             new Request(
               `https://ultralight.test/api/launch/agents/private-helper/routine${suffix}`,
@@ -2724,7 +3652,7 @@ Deno.test({
                 method: attempt.method,
                 headers: {
                   Authorization: `Bearer ${TEST_API_TOKEN}`,
-                  'Content-Type': 'application/json',
+                  "Content-Type": "application/json",
                 },
                 ...(attempt.body ? { body: JSON.stringify(attempt.body) } : {}),
               },
@@ -2732,7 +3660,7 @@ Deno.test({
           );
           const body = await response.json() as { error?: string };
           assertEquals(response.status, 403, attempt.method);
-          assertStringIncludes(body.error || '', 'account session');
+          assertStringIncludes(body.error || "", "account session");
         }
       },
       apiTokenAuthMock(),
@@ -2742,7 +3670,7 @@ Deno.test({
 
 Deno.test({
   name:
-    'launch Agent Home: every route is account-session only and private/no-store',
+    "launch Agent Home: every route is account-session only and private/no-store",
   sanitizeOps: false,
   sanitizeResources: false,
   fn: async () => {
@@ -2751,40 +3679,40 @@ Deno.test({
         const attempts: Array<
           { path: string; method: string; body?: unknown }
         > = [
-          { path: '/api/launch/agents/private-helper/home', method: 'GET' },
+          { path: "/api/launch/agents/private-helper/home", method: "GET" },
           {
             path:
-              '/api/launch/agents/private-helper/routine-runs/11111111-1111-4111-8111-111111111111',
-            method: 'GET',
+              "/api/launch/agents/private-helper/routine-runs/11111111-1111-4111-8111-111111111111",
+            method: "GET",
           },
           {
             path:
-              '/api/launch/agents/private-helper/routine-runs/11111111-1111-4111-8111-111111111111/logs/22222222-2222-4222-8222-222222222222',
-            method: 'GET',
+              "/api/launch/agents/private-helper/routine-runs/11111111-1111-4111-8111-111111111111/logs/22222222-2222-4222-8222-222222222222",
+            method: "GET",
           },
           {
-            path: '/api/launch/agents/private-helper/home/identity',
-            method: 'PATCH',
-            body: { expectedRevision: 'opaque', name: 'Compromised' },
+            path: "/api/launch/agents/private-helper/home/identity",
+            method: "PATCH",
+            body: { expectedRevision: "opaque", name: "Compromised" },
           },
           {
-            path: '/api/launch/agents/private-helper/home/routine',
-            method: 'PATCH',
-            body: { expectedRevision: 'opaque', mission: 'Compromised' },
+            path: "/api/launch/agents/private-helper/home/routine",
+            method: "PATCH",
+            body: { expectedRevision: "opaque", mission: "Compromised" },
           },
           {
-            path: '/api/launch/agents/private-helper/home/settings',
-            method: 'PUT',
-            body: { expectedRevision: 'opaque', values: { API_KEY: 'stolen' } },
+            path: "/api/launch/agents/private-helper/home/settings",
+            method: "PUT",
+            body: { expectedRevision: "opaque", values: { API_KEY: "stolen" } },
           },
           {
-            path: '/api/launch/agents/private-helper/home/actions',
-            method: 'POST',
-            body: { expectedRevision: 'opaque', action: 'activate' },
+            path: "/api/launch/agents/private-helper/home/actions",
+            method: "POST",
+            body: { expectedRevision: "opaque", action: "activate" },
           },
           {
-            path: '/api/launch/agents/private-helper/home/pause',
-            method: 'POST',
+            path: "/api/launch/agents/private-helper/home/pause",
+            method: "POST",
           },
         ];
         for (const attempt of attempts) {
@@ -2793,7 +3721,7 @@ Deno.test({
               method: attempt.method,
               headers: {
                 Authorization: `Bearer ${TEST_API_TOKEN}`,
-                'Content-Type': 'application/json',
+                "Content-Type": "application/json",
               },
               ...(attempt.body ? { body: JSON.stringify(attempt.body) } : {}),
             }),
@@ -2804,29 +3732,29 @@ Deno.test({
             403,
             `${attempt.method} ${attempt.path}`,
           );
-          assertStringIncludes(body.error || '', 'account session');
+          assertStringIncludes(body.error || "", "account session");
           assertEquals(
-            response.headers.get('cache-control'),
-            'private, no-store',
+            response.headers.get("cache-control"),
+            "private, no-store",
           );
-          assertEquals(response.headers.get('vary'), 'Cookie, Authorization');
+          assertEquals(response.headers.get("vary"), "Cookie, Authorization");
         }
 
         const methodRejected = await handleLaunch(
           new Request(
-            'https://ultralight.test/api/launch/agents/private-helper/home',
-            { method: 'DELETE' },
+            "https://ultralight.test/api/launch/agents/private-helper/home",
+            { method: "DELETE" },
           ),
         );
         await methodRejected.body?.cancel();
         assertEquals(methodRejected.status, 405);
         assertEquals(
-          methodRejected.headers.get('cache-control'),
-          'private, no-store',
+          methodRejected.headers.get("cache-control"),
+          "private, no-store",
         );
         assertEquals(
-          methodRejected.headers.get('vary'),
-          'Cookie, Authorization',
+          methodRejected.headers.get("vary"),
+          "Cookie, Authorization",
         );
       },
       apiTokenAuthMock(),
@@ -2834,19 +3762,19 @@ Deno.test({
   },
 });
 
-Deno.test('launch Agent Home: canonical snapshot is secret-free and its revision is stable across wakes', async () => {
+Deno.test("launch Agent Home: canonical snapshot is secret-free and its revision is stable across wakes", async () => {
   let runRead = 0;
-  let ownerCiphertext = '';
-  let userCiphertext = '';
+  let ownerCiphertext = "";
+  let userCiphertext = "";
   await withLaunchEnv(
     async () => {
-      ownerCiphertext = await encryptEnvVar('owner-secret-sentinel');
-      userCiphertext = await encryptEnvVar('per-user-secret-sentinel');
+      ownerCiphertext = await encryptEnvVar("owner-secret-sentinel");
+      userCiphertext = await encryptEnvVar("per-user-secret-sentinel");
       const readHome = async () => {
         const response = await handleLaunch(
           new Request(
-            'https://ultralight.test/api/launch/agents/home-agent/home',
-            { headers: { Authorization: 'Bearer browser-session-token' } },
+            "https://ultralight.test/api/launch/agents/home-agent/home",
+            { headers: { Authorization: "Bearer browser-session-token" } },
           ),
         );
         const raw = await response.text();
@@ -2887,15 +3815,15 @@ Deno.test('launch Agent Home: canonical snapshot is secret-free and its revision
       assertEquals(first.response.status, 200, first.raw);
       assertEquals(second.response.status, 200, second.raw);
       assertEquals(
-        first.response.headers.get('cache-control'),
-        'private, no-store',
+        first.response.headers.get("cache-control"),
+        "private, no-store",
       );
-      assertEquals(first.response.headers.get('vary'), 'Cookie, Authorization');
-      assertEquals(first.body.contractVersion, '2026-07-23.operator.1');
+      assertEquals(first.response.headers.get("vary"), "Cookie, Authorization");
+      assertEquals(first.body.contractVersion, "2026-07-23.operator.1");
       assertEquals(first.body.revision, `ah1:${HOME_APP_ID}:7`);
       // Run progress and usage deliberately do not churn the owner-config CAS.
       assertEquals(second.body.revision, first.body.revision);
-      assertEquals(first.body.recentRuns[0]?.summary, 'Wake 1');
+      assertEquals(first.body.recentRuns[0]?.summary, "Wake 1");
       assertEquals(
         second.body.recentRuns[0]?.summary ===
           first.body.recentRuns[0]?.summary,
@@ -2905,7 +3833,7 @@ Deno.test('launch Agent Home: canonical snapshot is secret-free and its revision
       assertEquals(first.body.responsibility.reporting.configured, true);
       assertEquals(
         first.body.authority.items.find((item) =>
-          item.label === 'unknown:scope'
+          item.label === "unknown:scope"
         )
           ?.effective,
         false,
@@ -2915,10 +3843,10 @@ Deno.test('launch Agent Home: canonical snapshot is secret-free and its revision
         lastRunCalls: 4,
         daily: 4,
         monthly: 10,
-        dayStartedAt: '2026-07-14T00:00:00.000Z',
-        monthStartedAt: '2026-07-01T00:00:00.000Z',
+        dayStartedAt: "2026-07-14T00:00:00.000Z",
+        monthStartedAt: "2026-07-01T00:00:00.000Z",
       });
-      for (const key of ['OWNER_TOKEN', 'USER_TOKEN']) {
+      for (const key of ["OWNER_TOKEN", "USER_TOKEN"]) {
         assertEquals(
           first.body.setup.requirements.find((item) => item.settingKey === key)
             ?.configured,
@@ -2927,18 +3855,18 @@ Deno.test('launch Agent Home: canonical snapshot is secret-free and its revision
       }
       assertEquals(
         first.body.state.blockers.some((item) =>
-          item.code === 'live_release_required'
+          item.code === "live_release_required"
         ),
         true,
       );
       for (
         const sentinel of [
-          'owner-secret-sentinel',
-          'per-user-secret-sentinel',
-          'must-not-leak',
-          'secret_value',
-          'run_config',
-          'value_encrypted',
+          "owner-secret-sentinel",
+          "per-user-secret-sentinel",
+          "must-not-leak",
+          "secret_value",
+          "run_config",
+          "value_encrypted",
         ]
       ) {
         assertEquals(first.raw.includes(sentinel), false, sentinel);
@@ -2947,8 +3875,8 @@ Deno.test('launch Agent Home: canonical snapshot is secret-free and its revision
     agentHomeFetchMock({
       agentEnvVars: () => ({ OWNER_TOKEN: ownerCiphertext }),
       userSecretRows: () => [{
-        key: 'USER_TOKEN',
-        updated_at: '2026-07-14T10:10:00.000Z',
+        key: "USER_TOKEN",
+        updated_at: "2026-07-14T10:10:00.000Z",
         value_encrypted: userCiphertext,
       }],
       runs: () => {
@@ -2956,19 +3884,19 @@ Deno.test('launch Agent Home: canonical snapshot is secret-free and its revision
         return [agentHomeRunRow({ summary: `Wake ${runRead}` })];
       },
     }),
-    { ENV_VARS_ENCRYPTION_KEY: 'agent-home-test-encryption-key' },
+    { ENV_VARS_ENCRYPTION_KEY: "agent-home-test-encryption-key" },
   );
 });
 
-Deno.test('launch Agent Home: revision bracketing retries a concurrent config commit', async () => {
+Deno.test("launch Agent Home: revision bracketing retries a concurrent config commit", async () => {
   let revisionReads = 0;
-  let currentName = 'Before commit';
+  let currentName = "Before commit";
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/agents/home-agent/home',
-          { headers: { Authorization: 'Bearer browser-session-token' } },
+          "https://ultralight.test/api/launch/agents/home-agent/home",
+          { headers: { Authorization: "Bearer browser-session-token" } },
         ),
       );
       const body = await response.json() as {
@@ -2976,22 +3904,22 @@ Deno.test('launch Agent Home: revision bracketing retries a concurrent config co
         agent?: { name?: string };
         error?: string;
       };
-      assertEquals(response.status, 200, body.error || '');
+      assertEquals(response.status, 200, body.error || "");
       assertEquals(revisionReads, 4);
       assertEquals(body.revision, `ah1:${HOME_APP_ID}:8`);
-      assertEquals(body.agent?.name, 'After commit');
+      assertEquals(body.agent?.name, "After commit");
     },
     agentHomeFetchMock({
       app: () => agentHomeTestApp({ name: currentName }),
       rpc: (name) => {
-        if (name !== 'get_agent_home_revision') return undefined;
+        if (name !== "get_agent_home_revision") return undefined;
         revisionReads += 1;
-        if (revisionReads === 1) return jsonResponse('7');
+        if (revisionReads === 1) return jsonResponse("7");
         if (revisionReads === 2) {
-          currentName = 'After commit';
-          return jsonResponse('8');
+          currentName = "After commit";
+          return jsonResponse("8");
         }
-        return jsonResponse('8');
+        return jsonResponse("8");
       },
     }),
   );
@@ -2999,7 +3927,7 @@ Deno.test('launch Agent Home: revision bracketing retries a concurrent config co
 
 Deno.test({
   name:
-    'launch Agent Home: bearer API key cannot escalate through a valid session cookie',
+    "launch Agent Home: bearer API key cannot escalate through a valid session cookie",
   sanitizeOps: false,
   sanitizeResources: false,
   fn: async () => {
@@ -3008,29 +3936,29 @@ Deno.test({
       async () => {
         const response = await handleLaunch(
           new Request(
-            'https://ultralight.test/api/launch/agents/home-agent/home',
+            "https://ultralight.test/api/launch/agents/home-agent/home",
             {
               headers: {
                 Authorization: `Bearer ${TEST_API_TOKEN}`,
-                Cookie: '__Host-ul_session=browser-session-token',
+                Cookie: "__Host-ul_session=browser-session-token",
               },
             },
           ),
         );
         const body = await response.json() as { error?: string };
         assertEquals(response.status, 403);
-        assertStringIncludes(body.error || '', 'account session');
+        assertStringIncludes(body.error || "", "account session");
         assertEquals(
-          response.headers.get('cache-control'),
-          'private, no-store',
+          response.headers.get("cache-control"),
+          "private, no-store",
         );
       },
       async (input, init) => {
         const url = input instanceof Request ? input.url : String(input);
-        if (url === 'https://supabase.test/auth/v1/user') {
+        if (url === "https://supabase.test/auth/v1/user") {
           return jsonResponse({
-            id: 'user-1',
-            email: 'founder@example.com',
+            id: "user-1",
+            email: "founder@example.com",
             user_metadata: {},
           });
         }
@@ -3040,63 +3968,63 @@ Deno.test({
   },
 });
 
-Deno.test('launch Agent Home: non-owner public and private locators are indistinguishable 404s', async () => {
+Deno.test("launch Agent Home: non-owner public and private locators are indistinguishable 404s", async () => {
   await withLaunchEnv(
     async () => {
       const bodies: string[] = [];
-      for (const locator of ['someone-private', 'someone-public']) {
+      for (const locator of ["someone-private", "someone-public"]) {
         const response = await handleLaunch(
           new Request(
             `https://ultralight.test/api/launch/agents/${locator}/home`,
-            { headers: { Authorization: 'Bearer browser-session-token' } },
+            { headers: { Authorization: "Bearer browser-session-token" } },
           ),
         );
         bodies.push(await response.text());
         assertEquals(response.status, 404);
         assertEquals(
-          response.headers.get('cache-control'),
-          'private, no-store',
+          response.headers.get("cache-control"),
+          "private, no-store",
         );
       }
       assertEquals(bodies[0], bodies[1]);
-      assertEquals(JSON.parse(bodies[0]).error, 'Agent not found');
+      assertEquals(JSON.parse(bodies[0]).error, "Agent not found");
     },
     async (input) => {
       const url = input instanceof Request ? input.url : String(input);
-      if (url === 'https://supabase.test/auth/v1/user') {
+      if (url === "https://supabase.test/auth/v1/user") {
         return jsonResponse({
-          id: 'user-1',
-          email: 'founder@example.com',
+          id: "user-1",
+          email: "founder@example.com",
           user_metadata: {},
         });
       }
-      if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
-        return jsonResponse([{ id: 'user-1' }]);
+      if (url.includes("/rest/v1/users?") && url.includes("select=id")) {
+        return jsonResponse([{ id: "user-1" }]);
       }
-      if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
-        return jsonResponse([{ tier: 'free' }]);
+      if (url.includes("/rest/v1/users?") && url.includes("select=tier")) {
+        return jsonResponse([{ tier: "free" }]);
       }
       return jsonResponse([]);
     },
   );
 });
 
-Deno.test('launch Agent Home: stale identity CAS returns 412 with a fresh current snapshot', async () => {
+Deno.test("launch Agent Home: stale identity CAS returns 412 with a fresh current snapshot", async () => {
   let mutationBody: Record<string, unknown> | null = null;
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/agents/home-agent/home/identity',
+          "https://ultralight.test/api/launch/agents/home-agent/home/identity",
           {
-            method: 'PATCH',
+            method: "PATCH",
             headers: {
-              Authorization: 'Bearer browser-session-token',
-              'Content-Type': 'application/json',
+              Authorization: "Bearer browser-session-token",
+              "Content-Type": "application/json",
             },
             body: JSON.stringify({
               expectedRevision: `ah1:${HOME_APP_ID}:7`,
-              name: 'Stale write',
+              name: "Stale write",
             }),
           },
         ),
@@ -3107,23 +4035,23 @@ Deno.test('launch Agent Home: stale identity CAS returns 412 with a fresh curren
         current?: { revision?: string; agent?: { name?: string } };
       };
       assertEquals(response.status, 412);
-      assertEquals(body.code, 'AGENT_HOME_REVISION_CONFLICT');
+      assertEquals(body.code, "AGENT_HOME_REVISION_CONFLICT");
       assertEquals(body.currentRevision, `ah1:${HOME_APP_ID}:8`);
       assertEquals(body.current?.revision, body.currentRevision);
-      assertEquals(body.current?.agent?.name, 'Home Agent');
-      assertEquals(mutationBody?.p_expected_revision, '7');
-      assertEquals(response.headers.get('cache-control'), 'private, no-store');
+      assertEquals(body.current?.agent?.name, "Home Agent");
+      assertEquals(mutationBody?.p_expected_revision, "7");
+      assertEquals(response.headers.get("cache-control"), "private, no-store");
     },
     agentHomeFetchMock({
-      revisionSequence: ['8'],
+      revisionSequence: ["8"],
       rpc: (name, body) => {
-        if (name !== 'update_agent_home_identity') return undefined;
+        if (name !== "update_agent_home_identity") return undefined;
         mutationBody = body;
         return jsonResponse({
           details: JSON.stringify({
-            code: 'AGENT_HOME_REVISION_CONFLICT',
-            expectedRevision: '7',
-            actualRevision: '8',
+            code: "AGENT_HOME_REVISION_CONFLICT",
+            expectedRevision: "7",
+            actualRevision: "8",
           }),
         }, 409);
       },
@@ -3131,24 +4059,24 @@ Deno.test('launch Agent Home: stale identity CAS returns 412 with a fresh curren
   );
 });
 
-Deno.test('launch Agent Home: settings encrypt plaintext before the atomic mutation', async () => {
+Deno.test("launch Agent Home: settings encrypt plaintext before the atomic mutation", async () => {
   let mutationBody: Record<string, unknown> | null = null;
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/agents/home-agent/home/settings',
+          "https://ultralight.test/api/launch/agents/home-agent/home/settings",
           {
-            method: 'PUT',
+            method: "PUT",
             headers: {
-              Authorization: 'Bearer browser-session-token',
-              'Content-Type': 'application/json',
+              Authorization: "Bearer browser-session-token",
+              "Content-Type": "application/json",
             },
             body: JSON.stringify({
               expectedRevision: `ah1:${HOME_APP_ID}:7`,
               values: {
-                OWNER_TOKEN: 'universal-plaintext',
-                USER_TOKEN: 'user-plaintext',
+                OWNER_TOKEN: "universal-plaintext",
+                USER_TOKEN: "user-plaintext",
               },
             }),
           },
@@ -3157,44 +4085,226 @@ Deno.test('launch Agent Home: settings encrypt plaintext before the atomic mutat
       const raw = await response.text();
       assertEquals(response.status, 200, raw);
       const serializedMutation = JSON.stringify(mutationBody);
-      assertEquals(serializedMutation.includes('universal-plaintext'), false);
-      assertEquals(serializedMutation.includes('user-plaintext'), false);
-      assertStringIncludes(serializedMutation, 'p_agent_ciphertexts');
-      assertStringIncludes(serializedMutation, 'p_per_user_ciphertexts');
-      assertEquals(raw.includes('universal-plaintext'), false);
-      assertEquals(raw.includes('user-plaintext'), false);
-      assertEquals(response.headers.get('cache-control'), 'private, no-store');
+      assertEquals(serializedMutation.includes("universal-plaintext"), false);
+      assertEquals(serializedMutation.includes("user-plaintext"), false);
+      assertStringIncludes(serializedMutation, "p_agent_ciphertexts");
+      assertStringIncludes(serializedMutation, "p_per_user_ciphertexts");
+      assertEquals(raw.includes("universal-plaintext"), false);
+      assertEquals(raw.includes("user-plaintext"), false);
+      assertEquals(response.headers.get("cache-control"), "private, no-store");
     },
     agentHomeFetchMock({
-      revisionSequence: ['8'],
+      revisionSequence: ["8"],
       rpc: (name, body) => {
-        if (name !== 'update_agent_home_settings') return undefined;
+        if (name !== "update_agent_home_settings") return undefined;
         mutationBody = body;
-        return jsonResponse([{ new_revision: '8' }]);
+        return jsonResponse([{ new_revision: "8" }]);
       },
     }),
-    { ENV_VARS_ENCRYPTION_KEY: 'agent-home-test-encryption-key' },
+    { ENV_VARS_ENCRYPTION_KEY: "agent-home-test-encryption-key" },
   );
 });
 
-Deno.test('launch Agent Home: pending and failed action replays remain non-success responses', async () => {
-  const failedKey = '77777777-7777-4777-8777-777777777777';
+Deno.test("launch Agent Home: membership gates deployment and activation before claiming work", async () => {
+  let claimCalls = 0;
+  await withLaunchEnv(
+    async () => {
+      for (
+        const requestBody of [
+          {
+            expectedRevision: `ah1:${HOME_APP_ID}:7`,
+            idempotencyKey: HOME_IDEMPOTENCY_KEY,
+            action: "promote_candidate",
+            version: "1.1.0",
+          },
+          {
+            expectedRevision: `ah1:${HOME_APP_ID}:7`,
+            idempotencyKey: HOME_IDEMPOTENCY_KEY,
+            action: "activate",
+          },
+        ]
+      ) {
+        const response = await handleLaunch(
+          new Request(
+            "https://ultralight.test/api/launch/agents/home-agent/home/actions",
+            {
+              method: "POST",
+              headers: {
+                Authorization: "Bearer browser-session-token",
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify(requestBody),
+            },
+          ),
+        );
+        const body = await response.json() as {
+          code?: string;
+          error?: string;
+        };
+        assertEquals(response.status, 402);
+        assertEquals(body.code, "PRO_SUBSCRIPTION_REQUIRED");
+        assertStringIncludes(body.error || "", "$20/month");
+      }
+      assertEquals(claimCalls, 0);
+    },
+    agentHomeFetchMock({
+      rpc: (name) => {
+        if (name === "claim_agent_home_action") claimCalls += 1;
+        return undefined;
+      },
+    }),
+    { PRO_SUBSCRIPTION_REQUIRED: "1" },
+  );
+});
+
+Deno.test("launch Agent Home: setup activation atomically enables a qualified callable Agent with no routine", async () => {
+  let storedCode: string | null = null;
+  let storedMetadata: unknown = null;
+  let activationBody: Record<string, unknown> | null = null;
+  let completionBody: Record<string, unknown> | null = null;
+  const codeCache = {
+    put: async (
+      _key: string,
+      value: string,
+      options?: { metadata?: unknown },
+    ) => {
+      storedCode = value;
+      storedMetadata = options?.metadata ?? null;
+    },
+    getWithMetadata: () =>
+      Promise.resolve({ value: storedCode, metadata: storedMetadata }),
+  };
+  await withLaunchEnv(
+    async () => {
+      await putLiveExecutedBundle({
+        appId: HOME_APP_ID,
+        version: "1.0.0",
+        esmCode: "export const inspect = () => ({ ok: true });",
+      });
+      const response = await handleLaunch(
+        new Request(
+          "https://ultralight.test/api/launch/agents/home-agent/home/actions",
+          {
+            method: "POST",
+            headers: {
+              Authorization: "Bearer browser-session-token",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              expectedRevision: `ah1:${HOME_APP_ID}:7`,
+              idempotencyKey: HOME_IDEMPOTENCY_KEY,
+              action: "activate",
+            }),
+          },
+        ),
+      );
+      const raw = await response.text();
+      assertEquals(response.status, 200, raw);
+      assertEquals(activationBody, {
+        p_request: {
+          owner_id: "user-1",
+          app_id: HOME_APP_ID,
+          expected_release_generation: "1",
+          expected_agent_home_revision: "7",
+          routine_id: null,
+        },
+      });
+      assertEquals(completionBody?.p_status, "completed");
+      assertEquals(response.headers.get("cache-control"), "private, no-store");
+    },
+    agentHomeFetchMock({
+      activeProSubscription: true,
+      routine: () => null,
+      app: () =>
+        agentHomeTestApp({
+          current_version: "1.0.0",
+          current_version_promoted_at: "2026-07-30T20:00:00.000Z",
+          release_generation: 1,
+          deployment_state: "setup_required",
+          hosting_suspended: true,
+          versions: ["1.0.0"],
+          version_metadata: [{
+            version: "1.0.0",
+            size_bytes: 100,
+            created_at: "2026-07-30T20:00:00.000Z",
+            source_hash: "a".repeat(64),
+          }],
+          env_schema: {},
+          manifest: {
+            name: "Callable Agent",
+            version: "1.0.0",
+            type: "mcp",
+            entry: { functions: "index.ts" },
+            permissions: [],
+            functions: {
+              inspect: {
+                description: "Inspect on demand.",
+                annotations: { readOnlyHint: true },
+              },
+            },
+          },
+        }),
+      rpc: (name, body) => {
+        if (name === "claim_agent_home_action") {
+          return jsonResponse([{
+            request_id: HOME_ACTION_ID,
+            request_lease_token: HOME_ACTION_LEASE_TOKEN,
+            is_new: true,
+            request_status: "in_progress",
+            request_response: {},
+            request_fingerprint: "f".repeat(64),
+            current_revision: "7",
+          }]);
+        }
+        if (name === "activate_member_deployed_agent") {
+          activationBody = body;
+          return jsonResponse({
+            code: "activated",
+            app_id: HOME_APP_ID,
+            deployment_state: "ready",
+            release_generation: "1",
+            agent_home_revision: "8",
+            routine_id: null,
+            routine_status: null,
+            replayed: false,
+          });
+        }
+        if (name === "complete_agent_home_action") {
+          completionBody = body;
+          return jsonResponse([{
+            request_id: HOME_ACTION_ID,
+            request_status: "completed",
+            request_response: body.p_response,
+          }]);
+        }
+        return undefined;
+      },
+    }),
+    {
+      CODE_CACHE: codeCache,
+      TRUST_SIGNING_SECRET: "agent-home-test-trust-secret",
+    },
+  );
+});
+
+Deno.test("launch Agent Home: pending and failed action replays remain non-success responses", async () => {
+  const failedKey = "77777777-7777-4777-8777-777777777777";
   await withLaunchEnv(
     async () => {
       const invoke = async (idempotencyKey: string) => {
         const response = await handleLaunch(
           new Request(
-            'https://ultralight.test/api/launch/agents/home-agent/home/actions',
+            "https://ultralight.test/api/launch/agents/home-agent/home/actions",
             {
-              method: 'POST',
+              method: "POST",
               headers: {
-                Authorization: 'Bearer browser-session-token',
-                'Content-Type': 'application/json',
+                Authorization: "Bearer browser-session-token",
+                "Content-Type": "application/json",
               },
               body: JSON.stringify({
                 expectedRevision: `ah1:${HOME_APP_ID}:7`,
                 idempotencyKey,
-                action: 'activate',
+                action: "activate",
               }),
             },
           ),
@@ -3206,96 +4316,98 @@ Deno.test('launch Agent Home: pending and failed action replays remain non-succe
       };
       const pending = await invoke(HOME_IDEMPOTENCY_KEY);
       assertEquals(pending.response.status, 409);
-      assertEquals(pending.body.code, 'AGENT_HOME_ACTION_IN_PROGRESS');
-      assertEquals(pending.body.status, 'pending');
+      assertEquals(pending.body.code, "AGENT_HOME_ACTION_IN_PROGRESS");
+      assertEquals(pending.body.status, "pending");
       assertEquals(pending.body.terminal, false);
       assertEquals(pending.body.requestId, HOME_ACTION_ID);
       const failed = await invoke(failedKey);
       assertEquals(failed.response.status, 422);
-      assertEquals(failed.body.status, 'failed');
+      assertEquals(failed.body.status, "failed");
       assertEquals(failed.body.terminal, true);
-      assertEquals(failed.body.error, 'Previous activation failed');
+      assertEquals(failed.body.error, "Previous activation failed");
       assertEquals(
-        JSON.stringify(failed.body).includes('db-only-detail'),
+        JSON.stringify(failed.body).includes("db-only-detail"),
         false,
       );
     },
     agentHomeFetchMock({
+      activeProSubscription: true,
       rpc: (name, body) => {
-        if (name !== 'claim_agent_home_action') return undefined;
+        if (name !== "claim_agent_home_action") return undefined;
         const failed = body.p_idempotency_key === failedKey;
         return jsonResponse([{
           request_id: HOME_ACTION_ID,
           request_lease_token: HOME_ACTION_LEASE_TOKEN,
           is_new: false,
-          request_status: failed ? 'failed' : 'in_progress',
+          request_status: failed ? "failed" : "in_progress",
           request_response: failed
             ? {
-              error: 'Previous activation failed',
-              code: 'AGENT_HOME_ACTION_BLOCKED',
+              error: "Previous activation failed",
+              code: "AGENT_HOME_ACTION_BLOCKED",
               status: 422,
-              internal: 'db-only-detail',
+              internal: "db-only-detail",
             }
             : {},
-          request_fingerprint: 'a'.repeat(64),
-          current_revision: '7',
+          request_fingerprint: "a".repeat(64),
+          current_revision: "7",
         }]);
       },
     }),
   );
 });
 
-Deno.test('launch Agent Home: lost browser keys expose only owner-scoped recovery data', async () => {
-  const recoveryKey = '77777777-7777-4777-8777-777777777777';
+Deno.test("launch Agent Home: lost browser keys expose only owner-scoped recovery data", async () => {
+  const recoveryKey = "77777777-7777-4777-8777-777777777777";
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/agents/home-agent/home/actions',
+          "https://ultralight.test/api/launch/agents/home-agent/home/actions",
           {
-            method: 'POST',
+            method: "POST",
             headers: {
-              Authorization: 'Bearer browser-session-token',
-              'Content-Type': 'application/json',
+              Authorization: "Bearer browser-session-token",
+              "Content-Type": "application/json",
             },
             body: JSON.stringify({
               expectedRevision: `ah1:${HOME_APP_ID}:7`,
               idempotencyKey: HOME_IDEMPOTENCY_KEY,
-              action: 'activate',
+              action: "activate",
             }),
           },
         ),
       );
       const body = await response.json() as Record<string, unknown>;
       assertEquals(response.status, 409);
-      assertEquals(body.code, 'AGENT_HOME_ACTION_RECOVERY_REQUIRED');
+      assertEquals(body.code, "AGENT_HOME_ACTION_RECOVERY_REQUIRED");
       assertEquals(body.terminal, false);
       assertEquals(body.recovery, {
         requestId: HOME_ACTION_ID,
         idempotencyKey: recoveryKey,
-        action: 'promote_candidate',
+        action: "promote_candidate",
         requestPayload: {
-          action: 'promote_candidate',
+          action: "promote_candidate",
           capabilityIds: [],
-          version: '1.2.3',
+          version: "1.2.3",
         },
       });
-      assertEquals(response.headers.get('cache-control'), 'private, no-store');
+      assertEquals(response.headers.get("cache-control"), "private, no-store");
     },
     agentHomeFetchMock({
+      activeProSubscription: true,
       rpc: (name) => {
-        if (name !== 'claim_agent_home_action') return undefined;
+        if (name !== "claim_agent_home_action") return undefined;
         return jsonResponse({
-          code: 'P0001',
+          code: "P0001",
           details: JSON.stringify({
-            code: 'AGENT_HOME_ACTION_RECOVERY_REQUIRED',
+            code: "AGENT_HOME_ACTION_RECOVERY_REQUIRED",
             requestId: HOME_ACTION_ID,
             idempotencyKey: recoveryKey,
-            action: 'promote_candidate',
+            action: "promote_candidate",
             requestPayload: {
-              action: 'promote_candidate',
+              action: "promote_candidate",
               capabilityIds: [],
-              version: '1.2.3',
+              version: "1.2.3",
             },
           }),
         }, 400);
@@ -3304,31 +4416,31 @@ Deno.test('launch Agent Home: lost browser keys expose only owner-scoped recover
   );
 });
 
-Deno.test('launch Agent Home: a linked run reconciles a lost queue acknowledgement without duplication', async () => {
+Deno.test("launch Agent Home: a linked run reconciles a lost queue acknowledgement without duplication", async () => {
   let completionBody: Record<string, unknown> | null = null;
   let queueCalls = 0;
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/agents/home-agent/home/actions',
+          "https://ultralight.test/api/launch/agents/home-agent/home/actions",
           {
-            method: 'POST',
+            method: "POST",
             headers: {
-              Authorization: 'Bearer browser-session-token',
-              'Content-Type': 'application/json',
+              Authorization: "Bearer browser-session-token",
+              "Content-Type": "application/json",
             },
             body: JSON.stringify({
               expectedRevision: `ah1:${HOME_APP_ID}:7`,
               idempotencyKey: HOME_IDEMPOTENCY_KEY,
-              action: 'run_now',
+              action: "run_now",
             }),
           },
         ),
       );
       assertEquals(response.status, 200);
       assertEquals(queueCalls, 0);
-      assertEquals(completionBody?.p_status, 'completed');
+      assertEquals(completionBody?.p_status, "completed");
       assertEquals(completionBody?.p_lease_token, HOME_ACTION_LEASE_TOKEN);
     },
     agentHomeFetchMock({
@@ -3336,26 +4448,26 @@ Deno.test('launch Agent Home: a linked run reconciles a lost queue acknowledgeme
         agent_home_action_request_id: HOME_ACTION_ID,
       })],
       rpc: (name, body) => {
-        if (name === 'claim_agent_home_action') {
+        if (name === "claim_agent_home_action") {
           return jsonResponse([{
             request_id: HOME_ACTION_ID,
             request_lease_token: HOME_ACTION_LEASE_TOKEN,
             is_new: false,
-            request_status: 'in_progress',
+            request_status: "in_progress",
             request_response: {},
-            request_fingerprint: 'c'.repeat(64),
-            current_revision: '7',
+            request_fingerprint: "c".repeat(64),
+            current_revision: "7",
           }]);
         }
-        if (name === 'queue_agent_home_routine_run') {
+        if (name === "queue_agent_home_routine_run") {
           queueCalls += 1;
           return jsonResponse([{ run_id: HOME_RUN_ID, is_new: false }]);
         }
-        if (name === 'complete_agent_home_action') {
+        if (name === "complete_agent_home_action") {
           completionBody = body;
           return jsonResponse([{
             request_id: HOME_ACTION_ID,
-            request_status: 'completed',
+            request_status: "completed",
             request_response: body.p_response,
           }]);
         }
@@ -3365,56 +4477,57 @@ Deno.test('launch Agent Home: a linked run reconciles a lost queue acknowledgeme
   );
 });
 
-Deno.test('launch Agent Home: an ambiguous persistence failure stays nonterminal', async () => {
+Deno.test("launch Agent Home: an ambiguous persistence failure stays nonterminal", async () => {
   let completionBody: Record<string, unknown> | null = null;
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/agents/home-agent/home/actions',
+          "https://ultralight.test/api/launch/agents/home-agent/home/actions",
           {
-            method: 'POST',
+            method: "POST",
             headers: {
-              Authorization: 'Bearer browser-session-token',
-              'Content-Type': 'application/json',
+              Authorization: "Bearer browser-session-token",
+              "Content-Type": "application/json",
             },
             body: JSON.stringify({
               expectedRevision: `ah1:${HOME_APP_ID}:7`,
               idempotencyKey: HOME_IDEMPOTENCY_KEY,
-              action: 'activate',
+              action: "activate",
             }),
           },
         ),
       );
       const body = await response.json() as Record<string, unknown>;
       assertEquals(response.status, 503);
-      assertEquals(body.status, 'unknown');
+      assertEquals(body.status, "unknown");
       assertEquals(body.terminal, false);
       assertEquals(body.requestId, HOME_ACTION_ID);
-      assertEquals(body.code, 'AGENT_HOME_ACTION_STATUS_UNKNOWN');
+      assertEquals(body.code, "AGENT_HOME_ACTION_STATUS_UNKNOWN");
       assertEquals(completionBody, null);
     },
     agentHomeFetchMock({
+      activeProSubscription: true,
       rpc: (name, body) => {
-        if (name === 'claim_agent_home_action') {
+        if (name === "claim_agent_home_action") {
           return jsonResponse([{
             request_id: HOME_ACTION_ID,
             request_lease_token: HOME_ACTION_LEASE_TOKEN,
             is_new: true,
-            request_status: 'in_progress',
+            request_status: "in_progress",
             request_response: {},
-            request_fingerprint: 'd'.repeat(64),
-            current_revision: '7',
+            request_fingerprint: "d".repeat(64),
+            current_revision: "7",
           }]);
         }
-        if (name === 'get_agent_home_revision') {
-          return jsonResponse({ message: 'database unavailable' }, 500);
+        if (name === "get_agent_home_revision") {
+          return jsonResponse({ message: "database unavailable" }, 500);
         }
-        if (name === 'complete_agent_home_action') {
+        if (name === "complete_agent_home_action") {
           completionBody = body;
           return jsonResponse([{
             request_id: HOME_ACTION_ID,
-            request_status: 'failed',
+            request_status: "failed",
             request_response: body.p_response,
           }]);
         }
@@ -3424,17 +4537,17 @@ Deno.test('launch Agent Home: an ambiguous persistence failure stays nonterminal
   );
 });
 
-Deno.test('launch Agent Home: emergency pause bypasses aggregation and action serialization', async () => {
+Deno.test("launch Agent Home: emergency pause bypasses aggregation and action serialization", async () => {
   let lifecycleWrite = false;
   let budgetReads = 0;
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/agents/home-agent/home/pause',
+          "https://ultralight.test/api/launch/agents/home-agent/home/pause",
           {
-            method: 'POST',
-            headers: { Authorization: 'Bearer browser-session-token' },
+            method: "POST",
+            headers: { Authorization: "Bearer browser-session-token" },
           },
         ),
       );
@@ -3451,24 +4564,24 @@ Deno.test('launch Agent Home: emergency pause bypasses aggregation and action se
     agentHomeFetchMock({
       routine: () =>
         agentHomeRoutineRow({
-          status: lifecycleWrite ? 'paused' : 'active',
+          status: lifecycleWrite ? "paused" : "active",
         }),
       rpc: (name, body) => {
-        if (name === 'pause_agent_home_routine_emergency') {
+        if (name === "pause_agent_home_routine_emergency") {
           assertEquals(body, {
             p_app_id: HOME_APP_ID,
-            p_user_id: 'user-1',
+            p_user_id: "user-1",
           });
           lifecycleWrite = true;
           return jsonResponse([{
             routine_id: HOME_ROUTINE_ID,
-            routine_status: 'paused',
-            new_revision: '8',
+            routine_status: "paused",
+            new_revision: "8",
           }]);
         }
-        if (name === 'get_agent_home_budget_usage') {
+        if (name === "get_agent_home_budget_usage") {
           budgetReads += 1;
-          return jsonResponse({ message: 'budget ledger unavailable' }, 500);
+          return jsonResponse({ message: "budget ledger unavailable" }, 500);
         }
         return undefined;
       },
@@ -3476,24 +4589,24 @@ Deno.test('launch Agent Home: emergency pause bypasses aggregation and action se
   );
 });
 
-Deno.test('launch Agent Home: activation is durably failed before any lifecycle write when blockers remain', async () => {
+Deno.test("launch Agent Home: activation is durably failed before any lifecycle write when blockers remain", async () => {
   let completionBody: Record<string, unknown> | null = null;
   let lifecycleWrite = false;
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/agents/home-agent/home/actions',
+          "https://ultralight.test/api/launch/agents/home-agent/home/actions",
           {
-            method: 'POST',
+            method: "POST",
             headers: {
-              Authorization: 'Bearer browser-session-token',
-              'Content-Type': 'application/json',
+              Authorization: "Bearer browser-session-token",
+              "Content-Type": "application/json",
             },
             body: JSON.stringify({
               expectedRevision: `ah1:${HOME_APP_ID}:7`,
               idempotencyKey: HOME_IDEMPOTENCY_KEY,
-              action: 'activate',
+              action: "activate",
             }),
           },
         ),
@@ -3504,28 +4617,29 @@ Deno.test('launch Agent Home: activation is durably failed before any lifecycle 
       assertEquals(response.status, 409);
       assertEquals(
         body.blockers?.some((blocker) =>
-          blocker.code === 'live_release_required'
+          blocker.code === "live_release_required"
         ),
         true,
       );
       assertEquals(lifecycleWrite, false);
-      assertEquals(completionBody?.p_status, 'failed');
-      assertEquals(response.headers.get('cache-control'), 'private, no-store');
+      assertEquals(completionBody?.p_status, "failed");
+      assertEquals(response.headers.get("cache-control"), "private, no-store");
     },
     agentHomeFetchMock({
+      activeProSubscription: true,
       rpc: (name, body) => {
-        if (name === 'claim_agent_home_action') {
+        if (name === "claim_agent_home_action") {
           return jsonResponse([{
             request_id: HOME_ACTION_ID,
             request_lease_token: HOME_ACTION_LEASE_TOKEN,
             is_new: true,
-            request_status: 'in_progress',
+            request_status: "in_progress",
             request_response: {},
-            request_fingerprint: 'b'.repeat(64),
-            current_revision: '7',
+            request_fingerprint: "b".repeat(64),
+            current_revision: "7",
           }]);
         }
-        if (name === 'complete_agent_home_action') {
+        if (name === "complete_agent_home_action") {
           completionBody = body;
           assertEquals(body.p_lease_token, HOME_ACTION_LEASE_TOKEN);
           return jsonResponse([{
@@ -3534,9 +4648,9 @@ Deno.test('launch Agent Home: activation is durably failed before any lifecycle 
             request_response: body.p_response,
           }]);
         }
-        if (name === 'update_agent_home_routine_status') {
+        if (name === "update_agent_home_routine_status") {
           lifecycleWrite = true;
-          return jsonResponse([{ new_revision: '8' }]);
+          return jsonResponse([{ new_revision: "8" }]);
         }
         return undefined;
       },
@@ -3544,7 +4658,7 @@ Deno.test('launch Agent Home: activation is durably failed before any lifecycle 
   );
 });
 
-Deno.test('launch Agent Home: one bundle read rejects a correctly signed old executed version', async () => {
+Deno.test("launch Agent Home: one bundle read rejects a correctly signed old executed version", async () => {
   let storedCode: string | null = null;
   let storedMetadata: unknown = null;
   let bundleReads = 0;
@@ -3566,13 +4680,13 @@ Deno.test('launch Agent Home: one bundle read rejects a correctly signed old exe
     async () => {
       await putLiveExecutedBundle({
         appId: HOME_APP_ID,
-        version: '1.0.0',
+        version: "1.0.0",
         esmCode: 'export const inspect = () => "ok";',
       });
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/agents/home-agent/home',
-          { headers: { Authorization: 'Bearer browser-session-token' } },
+          "https://ultralight.test/api/launch/agents/home-agent/home",
+          { headers: { Authorization: "Bearer browser-session-token" } },
         ),
       );
       const body = await response.json() as {
@@ -3583,11 +4697,11 @@ Deno.test('launch Agent Home: one bundle read rejects a correctly signed old exe
       };
       assertEquals(response.status, 200);
       assertEquals(bundleReads, 1);
-      assertEquals(body.release?.live?.executedVersion, '1.0.0');
-      assertEquals(body.release?.live?.integrity, 'unverified');
+      assertEquals(body.release?.live?.executedVersion, "1.0.0");
+      assertEquals(body.release?.live?.integrity, "unverified");
       assertEquals(
         body.state?.blockers?.some((blocker) =>
-          blocker.code === 'executed_release_unverified'
+          blocker.code === "executed_release_unverified"
         ),
         true,
       );
@@ -3595,31 +4709,31 @@ Deno.test('launch Agent Home: one bundle read rejects a correctly signed old exe
     agentHomeFetchMock({
       app: () =>
         agentHomeTestApp({
-          current_version: '2.0.0',
-          current_version_promoted_at: '2026-07-14T12:30:00.000Z',
-          versions: ['2.0.0'],
+          current_version: "2.0.0",
+          current_version_promoted_at: "2026-07-14T12:30:00.000Z",
+          versions: ["2.0.0"],
           version_metadata: [{
-            version: '2.0.0',
+            version: "2.0.0",
             size_bytes: 100,
-            created_at: '2026-07-14T12:00:00.000Z',
-            source_hash: 'c'.repeat(64),
+            created_at: "2026-07-14T12:00:00.000Z",
+            source_hash: "c".repeat(64),
           }],
         }),
     }),
     {
       CODE_CACHE: codeCache,
-      TRUST_SIGNING_SECRET: 'agent-home-test-trust-secret',
+      TRUST_SIGNING_SECRET: "agent-home-test-trust-secret",
     },
   );
 });
 
-Deno.test('launch Agent Home: malformed persisted test proof is never a candidate', async () => {
+Deno.test("launch Agent Home: malformed persisted test proof is never a candidate", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/agents/home-agent/home',
-          { headers: { Authorization: 'Bearer browser-session-token' } },
+          "https://ultralight.test/api/launch/agents/home-agent/home",
+          { headers: { Authorization: "Bearer browser-session-token" } },
         ),
       );
       const body = await response.json() as {
@@ -3632,20 +4746,20 @@ Deno.test('launch Agent Home: malformed persisted test proof is never a candidat
     agentHomeFetchMock({
       app: () =>
         agentHomeTestApp({
-          versions: ['1.1.0'],
+          versions: ["1.1.0"],
           version_metadata: [{
-            version: '1.1.0',
+            version: "1.1.0",
             size_bytes: 100,
-            created_at: '2026-07-14T12:00:00.000Z',
-            source_hash: 'e'.repeat(64),
+            created_at: "2026-07-14T12:00:00.000Z",
+            source_hash: "e".repeat(64),
             test_attestation: {
               schema_version: 99,
-              attestation_id: 'malformed-but-truthy',
-              mode: 'deno_execution',
-              source_hash: 'e'.repeat(64),
-              tested_at: '2026-07-14T12:01:00.000Z',
-              token_expires_at: '2026-07-14T13:01:00.000Z',
-              verified_at: '2026-07-14T12:01:01.000Z',
+              attestation_id: "malformed-but-truthy",
+              mode: "deno_execution",
+              source_hash: "e".repeat(64),
+              tested_at: "2026-07-14T12:01:00.000Z",
+              token_expires_at: "2026-07-14T13:01:00.000Z",
+              verified_at: "2026-07-14T12:01:01.000Z",
             },
           }],
         }),
@@ -3653,7 +4767,323 @@ Deno.test('launch Agent Home: malformed persisted test proof is never a candidat
   );
 });
 
-Deno.test('launch Agent Home: superseded tested releases are history, not candidates', async () => {
+Deno.test("launch Agent Home: signed V2 trust cannot be downgraded into a legacy V1 candidate", async () => {
+  const version = "1.1.0";
+  const manifest = {
+    name: "Downgrade Probe",
+    version,
+    type: "mcp",
+    entry: { functions: "index.ts" },
+    functions: { inspect: { description: "Inspect the system." } },
+  };
+  let app = agentHomeTestApp();
+  await withLaunchEnv(
+    async () => {
+      const candidate = await agentHomeQualifiedCandidate({
+        manifest,
+        version,
+      });
+      const proof = candidate.test_attestation;
+      if (proof?.schema_version !== 2) {
+        throw new Error("Expected signed V2 candidate");
+      }
+      candidate.test_attestation = {
+        schema_version: 1,
+        attestation_id: proof.attestation_id,
+        mode: proof.mode,
+        source_hash: proof.source_hash,
+        tested_at: proof.tested_at,
+        token_expires_at: proof.token_expires_at,
+        verified_at: proof.verified_at,
+      };
+      app = agentHomeTestApp({
+        versions: [version],
+        version_metadata: [candidate],
+      });
+
+      const response = await handleLaunch(
+        new Request(
+          "https://ultralight.test/api/launch/agents/home-agent/home",
+          { headers: { Authorization: "Bearer browser-session-token" } },
+        ),
+      );
+      const body = await response.json() as {
+        release?: { candidate?: unknown; candidateCount?: number };
+      };
+      assertEquals(response.status, 200);
+      assertEquals(body.release?.candidate, null);
+      assertEquals(body.release?.candidateCount, 0);
+
+      if (!candidate.trust) throw new Error("Expected signed candidate trust");
+      candidate.trust = { ...candidate.trust };
+      delete candidate.trust.test_attestation_digest;
+      const markerRemovalResponse = await handleLaunch(
+        new Request(
+          "https://ultralight.test/api/launch/agents/home-agent/home",
+          { headers: { Authorization: "Bearer browser-session-token" } },
+        ),
+      );
+      const markerRemovalBody = await markerRemovalResponse.json() as {
+        release?: { candidate?: unknown; candidateCount?: number };
+      };
+      assertEquals(markerRemovalResponse.status, 200);
+      assertEquals(markerRemovalBody.release?.candidate, null);
+      assertEquals(markerRemovalBody.release?.candidateCount, 0);
+    },
+    agentHomeFetchMock({ app: () => app }),
+    { TRUST_SIGNING_SECRET: "agent-home-test-trust-secret" },
+  );
+});
+
+Deno.test("launch Agent Home: legitimately signed V1 evidence is historical-only", async () => {
+  const version = "1.1.0";
+  const sourceHash = "f".repeat(64);
+  const manifest = {
+    name: "Legacy Qualified Agent",
+    version,
+    type: "mcp",
+    entry: { functions: "index.ts" },
+    functions: { inspect: { description: "Inspect the system." } },
+  };
+  const testAttestation: VersionMetadata["test_attestation"] = {
+    schema_version: 1,
+    attestation_id: "legacy-historical-proof",
+    mode: "deno_execution",
+    source_hash: sourceHash,
+    tested_at: "2026-07-14T18:59:00.000Z",
+    token_expires_at: "2026-07-14T19:59:00.000Z",
+    verified_at: "2026-07-14T19:00:00.000Z",
+  };
+  const trust = await buildVersionTrustMetadata({
+    appId: HOME_APP_ID,
+    version,
+    runtime: "deno",
+    manifest,
+    files: [{ name: "index.ts", content: "export const inspect = true;" }],
+    executable: "export const inspect = true;",
+    testAttestation,
+  });
+
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(
+        new Request(
+          "https://ultralight.test/api/launch/agents/home-agent/home",
+          { headers: { Authorization: "Bearer browser-session-token" } },
+        ),
+      );
+      const body = await response.json() as {
+        release?: { candidate?: unknown; candidateCount?: number };
+      };
+      assertEquals(response.status, 200);
+      assertEquals(body.release?.candidate, null);
+      assertEquals(body.release?.candidateCount, 0);
+    },
+    agentHomeFetchMock({
+      app: () =>
+        agentHomeTestApp({
+          versions: [version],
+          version_metadata: [{
+            version,
+            size_bytes: 100,
+            created_at: "2026-07-14T19:00:00.000Z",
+            source_hash: sourceHash,
+            trust,
+            test_attestation: testAttestation,
+          }],
+        }),
+    }),
+    { TRUST_SIGNING_SECRET: "agent-home-test-trust-secret" },
+  );
+});
+
+Deno.test("launch Agent Home: a V2 galactic.yaml release uses its signed derived manifest", async () => {
+  const version = "1.1.0";
+  const derivedManifest = {
+    name: "Qualified Home Agent",
+    version,
+    type: "mcp",
+    entry: { functions: "index.ts" },
+    permissions: ["notify:owner", "net:fetch"],
+    functions: {
+      inspect: {
+        description: "Inspect the system.",
+        annotations: { readOnlyHint: true },
+      },
+      deliver: { description: "Deliver a result." },
+    },
+    network: {
+      allowed_destinations: [{ host: "api.example.com" }],
+    },
+  };
+  let app = agentHomeTestApp();
+  await withLaunchEnv(
+    async () => {
+      const candidate = await agentHomeQualifiedCandidate({
+        manifest: derivedManifest,
+        version,
+      });
+      app = agentHomeTestApp({
+        versions: [version],
+        version_metadata: [candidate],
+      });
+      const response = await handleLaunch(
+        new Request(
+          "https://ultralight.test/api/launch/agents/home-agent/home",
+          { headers: { Authorization: "Bearer browser-session-token" } },
+        ),
+      );
+      const body = await response.json() as {
+        release?: {
+          candidate?: {
+            version?: string;
+            qualification?: { status?: string } | null;
+            authorityChanges?: unknown[];
+            reviewStatus?: string;
+            canPromote?: boolean;
+          } | null;
+          candidateCount?: number;
+        };
+      };
+      assertEquals(response.status, 200);
+      assertEquals(body.release?.candidate?.version, version);
+      assertEquals(
+        body.release?.candidate?.qualification?.status,
+        "passed",
+      );
+      assertEquals(
+        (body.release?.candidate?.authorityChanges?.length || 0) > 0,
+        true,
+      );
+      assertEquals(
+        body.release?.candidate?.reviewStatus,
+        "owner_review_required",
+      );
+      assertEquals(body.release?.candidate?.canPromote, true);
+      assertEquals(body.release?.candidateCount, 1);
+    },
+    agentHomeFetchMock({ app: () => app }),
+    {
+      TRUST_SIGNING_SECRET: "agent-home-test-trust-secret",
+      R2_BUCKET: agentHomeR2({
+        [`apps/${HOME_APP_ID}/${version}/manifest.json`]: JSON.stringify(
+          derivedManifest,
+        ),
+      }),
+    },
+  );
+});
+
+Deno.test("launch Agent Home: a stale V2 contract revision is hidden from candidates", async () => {
+  const version = "1.1.0";
+  const derivedManifest = {
+    name: "Stale Home Agent",
+    version,
+    type: "mcp",
+    entry: { functions: "index.ts" },
+    functions: { inspect: { description: "Inspect the system." } },
+  };
+  let app = agentHomeTestApp();
+  await withLaunchEnv(
+    async () => {
+      const candidate = await agentHomeQualifiedCandidate({
+        manifest: derivedManifest,
+        version,
+        compilerRevision: "galactic-compiler/stale",
+      });
+      app = agentHomeTestApp({
+        versions: [version],
+        version_metadata: [candidate],
+      });
+      const response = await handleLaunch(
+        new Request(
+          "https://ultralight.test/api/launch/agents/home-agent/home",
+          { headers: { Authorization: "Bearer browser-session-token" } },
+        ),
+      );
+      const body = await response.json() as {
+        release?: { candidate?: unknown; candidateCount?: number };
+      };
+      assertEquals(response.status, 200);
+      assertEquals(body.release?.candidate, null);
+      assertEquals(body.release?.candidateCount, 0);
+    },
+    agentHomeFetchMock({ app: () => app }),
+    {
+      TRUST_SIGNING_SECRET: "agent-home-test-trust-secret",
+      R2_BUCKET: agentHomeR2({
+        [`apps/${HOME_APP_ID}/${version}/manifest.json`]: JSON.stringify(
+          derivedManifest,
+        ),
+      }),
+    },
+  );
+});
+
+Deno.test("launch Agent Home: a tampered derived manifest is never projected or promotable", async () => {
+  const version = "1.1.0";
+  const signedManifest = {
+    name: "Qualified Home Agent",
+    version,
+    type: "mcp",
+    entry: { functions: "index.ts" },
+    permissions: ["notify:owner"],
+    functions: { inspect: { description: "Inspect the system." } },
+  };
+  const tamperedManifest = {
+    ...signedManifest,
+    permissions: ["notify:owner", "net:fetch"],
+    network: {
+      allowed_destinations: [{ host: "attacker.example" }],
+    },
+  };
+  let app = agentHomeTestApp();
+  await withLaunchEnv(
+    async () => {
+      const candidate = await agentHomeQualifiedCandidate({
+        manifest: signedManifest,
+        version,
+      });
+      app = agentHomeTestApp({
+        versions: [version],
+        version_metadata: [candidate],
+      });
+      const response = await handleLaunch(
+        new Request(
+          "https://ultralight.test/api/launch/agents/home-agent/home",
+          { headers: { Authorization: "Bearer browser-session-token" } },
+        ),
+      );
+      const body = await response.json() as {
+        release?: {
+          candidate?: {
+            authorityChanges?: unknown[];
+            reviewStatus?: string;
+            canPromote?: boolean;
+          } | null;
+          candidateCount?: number;
+        };
+      };
+      assertEquals(response.status, 200);
+      assertEquals(body.release?.candidateCount, 1);
+      assertEquals(body.release?.candidate?.authorityChanges, []);
+      assertEquals(body.release?.candidate?.reviewStatus, "unavailable");
+      assertEquals(body.release?.candidate?.canPromote, false);
+      assertEquals(JSON.stringify(body).includes("attacker.example"), false);
+    },
+    agentHomeFetchMock({ app: () => app }),
+    {
+      TRUST_SIGNING_SECRET: "agent-home-test-trust-secret",
+      R2_BUCKET: agentHomeR2({
+        [`apps/${HOME_APP_ID}/${version}/manifest.json`]: JSON.stringify(
+          tamperedManifest,
+        ),
+      }),
+    },
+  );
+});
+
+Deno.test("launch Agent Home: superseded tested releases are history, not candidates", async () => {
   const proof = (version: string, createdAt: string, sourceHash: string) => ({
     version,
     size_bytes: 100,
@@ -3662,10 +5092,10 @@ Deno.test('launch Agent Home: superseded tested releases are history, not candid
     test_attestation: {
       schema_version: 1,
       attestation_id: crypto.randomUUID(),
-      mode: 'deno_execution',
+      mode: "deno_execution",
       source_hash: sourceHash,
       tested_at: createdAt,
-      token_expires_at: '2026-07-15T00:00:00.000Z',
+      token_expires_at: "2026-07-15T00:00:00.000Z",
       verified_at: createdAt,
     },
   });
@@ -3673,8 +5103,8 @@ Deno.test('launch Agent Home: superseded tested releases are history, not candid
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/agents/home-agent/home',
-          { headers: { Authorization: 'Bearer browser-session-token' } },
+          "https://ultralight.test/api/launch/agents/home-agent/home",
+          { headers: { Authorization: "Bearer browser-session-token" } },
         ),
       );
       const body = await response.json() as {
@@ -3687,24 +5117,24 @@ Deno.test('launch Agent Home: superseded tested releases are history, not candid
     agentHomeFetchMock({
       app: () =>
         agentHomeTestApp({
-          current_version: '1.1.0',
-          current_version_promoted_at: '2026-07-14T19:01:00.000Z',
-          versions: ['1.0.0', '1.1.0'],
+          current_version: "1.1.0",
+          current_version_promoted_at: "2026-07-14T19:01:00.000Z",
+          versions: ["1.0.0", "1.1.0"],
           version_metadata: [
-            proof('1.0.0', '2026-07-14T18:00:00.000Z', 'a'.repeat(64)),
-            proof('1.1.0', '2026-07-14T19:00:00.000Z', 'b'.repeat(64)),
+            proof("1.0.0", "2026-07-14T18:00:00.000Z", "a".repeat(64)),
+            proof("1.1.0", "2026-07-14T19:00:00.000Z", "b".repeat(64)),
           ],
         }),
     }),
   );
 });
 
-Deno.test('launch facade: byok summary lists providers without key material', async () => {
+Deno.test("launch facade: byok summary lists providers without key material", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
-        new Request('https://ultralight.test/api/launch/byok', {
-          headers: { Authorization: 'Bearer browser-session-token' },
+        new Request("https://ultralight.test/api/launch/byok", {
+          headers: { Authorization: "Bearer browser-session-token" },
         }),
       );
       const raw = await response.text();
@@ -3723,39 +5153,39 @@ Deno.test('launch facade: byok summary lists providers without key material', as
 
       assertEquals(response.status, 200);
       assertEquals(body.enabled, true);
-      assertEquals(body.primaryProvider, 'openrouter');
+      assertEquals(body.primaryProvider, "openrouter");
       assertEquals(body.providers.length, 8);
-      const openrouter = body.providers.find((p) => p.id === 'openrouter');
+      const openrouter = body.providers.find((p) => p.id === "openrouter");
       assertEquals(openrouter?.configured, true);
       assertEquals(openrouter?.primary, true);
-      assertEquals(openrouter?.model, 'openai/gpt-4o-mini');
-      const openai = body.providers.find((p) => p.id === 'openai');
+      assertEquals(openrouter?.model, "openai/gpt-4o-mini");
+      const openai = body.providers.find((p) => p.id === "openai");
       assertEquals(openai?.configured, false);
       assertEquals(openai?.primary, false);
       // Key material must never leave the server.
-      assertEquals(raw.includes('sk-or-secret-key-value'), false);
-      assertEquals(raw.includes('encrypted'), false);
+      assertEquals(raw.includes("sk-or-secret-key-value"), false);
+      assertEquals(raw.includes("encrypted"), false);
     },
     byokSessionMock(byokUserRow({
       byok_enabled: true,
-      byok_provider: 'openrouter',
+      byok_provider: "openrouter",
       byok_keys: {
         openrouter: {
-          encrypted_key: 'sk-or-secret-key-value',
-          model: 'openai/gpt-4o-mini',
-          added_at: '2026-06-01T00:00:00.000Z',
+          encrypted_key: "sk-or-secret-key-value",
+          model: "openai/gpt-4o-mini",
+          added_at: "2026-06-01T00:00:00.000Z",
         },
       },
     })),
   );
 });
 
-Deno.test('launch facade: inference options remain BYOK-only without a configured key', async () => {
+Deno.test("launch facade: inference options remain BYOK-only without a configured key", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
-        new Request('https://ultralight.test/api/launch/inference-options', {
-          headers: { Authorization: 'Bearer browser-session-token' },
+        new Request("https://ultralight.test/api/launch/inference-options", {
+          headers: { Authorization: "Bearer browser-session-token" },
         }),
       );
       const body = await response.json() as {
@@ -3771,7 +5201,7 @@ Deno.test('launch facade: inference options remain BYOK-only without a configure
       };
 
       assertEquals(response.status, 200);
-      assertEquals(body.billingMode, 'byok');
+      assertEquals(body.billingMode, "byok");
       assertEquals(body.primaryProvider, null);
       assertEquals(body.configuredProviders, []);
       assertEquals(body.credits, undefined);
@@ -3780,12 +5210,12 @@ Deno.test('launch facade: inference options remain BYOK-only without a configure
   );
 });
 
-Deno.test('launch facade: inference options report byok billing when primary configured', async () => {
+Deno.test("launch facade: inference options report byok billing when primary configured", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
-        new Request('https://ultralight.test/api/launch/inference-options', {
-          headers: { Authorization: 'Bearer browser-session-token' },
+        new Request("https://ultralight.test/api/launch/inference-options", {
+          headers: { Authorization: "Bearer browser-session-token" },
         }),
       );
       const body = await response.json() as {
@@ -3796,20 +5226,20 @@ Deno.test('launch facade: inference options report byok billing when primary con
       };
 
       assertEquals(response.status, 200);
-      assertEquals(body.billingMode, 'byok');
-      assertEquals(body.primaryProvider, 'openrouter');
-      assertEquals(body.configuredProviders, ['openrouter']);
+      assertEquals(body.billingMode, "byok");
+      assertEquals(body.primaryProvider, "openrouter");
+      assertEquals(body.configuredProviders, ["openrouter"]);
       assertEquals(body.credits, undefined);
     },
     byokSessionMock(
       byokUserRow({
         byok_enabled: true,
-        byok_provider: 'openrouter',
+        byok_provider: "openrouter",
         byok_keys: {
           openrouter: {
-            encrypted_key: 'sk-or-secret-key-value',
+            encrypted_key: "sk-or-secret-key-value",
             model: null,
-            added_at: '2026-06-01T00:00:00.000Z',
+            added_at: "2026-06-01T00:00:00.000Z",
           },
         },
       }),
@@ -3821,37 +5251,37 @@ Deno.test('launch facade: inference options report byok billing when primary con
 function parseJsonBody(
   body: BodyInit | null | undefined,
 ): Record<string, unknown> {
-  if (typeof body !== 'string') return {};
+  if (typeof body !== "string") return {};
   return JSON.parse(body) as Record<string, unknown>;
 }
 
-Deno.test('launch facade: legacy /tools and /agent-permissions paths still serve (rename aliases)', async () => {
+Deno.test("launch facade: legacy /tools and /agent-permissions paths still serve (rename aliases)", async () => {
   await withLaunchEnv(async () => {
     // Admin route must be reachable on BOTH canonical and legacy paths
     // (regression: the rename once left the admin matcher on the old path,
     // 404ing both forms). Unauthenticated -> 401 proves the handler matched.
     const adminCanonical = await handleLaunch(
-      new Request('https://ultralight.test/api/launch/admin/agents/app-1'),
+      new Request("https://ultralight.test/api/launch/admin/agents/app-1"),
     );
     await adminCanonical.body?.cancel();
     assertEquals(adminCanonical.status, 401);
 
     const adminLegacy = await handleLaunch(
-      new Request('https://ultralight.test/api/launch/admin/tools/app-1'),
+      new Request("https://ultralight.test/api/launch/admin/tools/app-1"),
     );
     await adminLegacy.body?.cancel();
     assertEquals(adminLegacy.status, 401);
   });
 });
 
-Deno.test('launch facade: legacy alias block 2', async () => {
+Deno.test("launch facade: legacy alias block 2", async () => {
   await withLaunchEnv(async () => {
     // Legacy paths must normalize onto canonical handlers: these auth-gated
     // routes return 401 (handler reached), not the route-level 404.
     const legacyRun = await handleLaunch(
       new Request(
-        'https://ultralight.test/api/launch/tools/deploy-helper/functions/run_check/run',
-        { method: 'POST', body: '{}' },
+        "https://ultralight.test/api/launch/tools/deploy-helper/functions/run_check/run",
+        { method: "POST", body: "{}" },
       ),
     );
     await legacyRun.body?.cancel();
@@ -3859,7 +5289,7 @@ Deno.test('launch facade: legacy alias block 2', async () => {
 
     const legacyPerms = await handleLaunch(
       new Request(
-        'https://ultralight.test/api/launch/tools/deploy-helper/agent-permissions',
+        "https://ultralight.test/api/launch/tools/deploy-helper/agent-permissions",
       ),
     );
     await legacyPerms.body?.cancel();
@@ -3867,7 +5297,7 @@ Deno.test('launch facade: legacy alias block 2', async () => {
 
     const canonicalPerms = await handleLaunch(
       new Request(
-        'https://ultralight.test/api/launch/agents/deploy-helper/caller-permissions',
+        "https://ultralight.test/api/launch/agents/deploy-helper/caller-permissions",
       ),
     );
     await canonicalPerms.body?.cancel();
@@ -3883,22 +5313,22 @@ function grantRow(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
-    id: '11111111-1111-4111-8111-111111111111',
-    user_id: 'user-1',
-    caller_app_id: 'caller-app-id',
-    caller_function: '',
-    slot: '',
-    target_app_id: 'target-app-id',
-    target_function: 'deploy',
-    mode: 'call',
-    status: 'active',
+    id: "11111111-1111-4111-8111-111111111111",
+    user_id: "user-1",
+    caller_app_id: "caller-app-id",
+    caller_function: "",
+    slot: "",
+    target_app_id: "target-app-id",
+    target_function: "deploy",
+    mode: "call",
+    status: "active",
     monthly_cap_credits: 5000,
     spent_credits_period: 0,
-    period_start: '2026-06-01T00:00:00.000Z',
+    period_start: "2026-06-01T00:00:00.000Z",
     constraints: {},
-    created_by: 'user',
-    created_at: '2026-06-01T00:00:00.000Z',
-    updated_at: '2026-06-01T00:00:00.000Z',
+    created_by: "user",
+    created_at: "2026-06-01T00:00:00.000Z",
+    updated_at: "2026-06-01T00:00:00.000Z",
     ...overrides,
   };
 }
@@ -3910,26 +5340,26 @@ function grantSessionMock(
 ): typeof fetch {
   return (async (input: Request | URL | string) => {
     const url = input instanceof Request ? input.url : String(input);
-    if (url === 'https://supabase.test/auth/v1/user') {
+    if (url === "https://supabase.test/auth/v1/user") {
       return jsonResponse({
-        id: 'user-1',
-        email: 'founder@example.com',
+        id: "user-1",
+        email: "founder@example.com",
         user_metadata: {},
       });
     }
-    if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
-      return jsonResponse([{ id: 'user-1' }]);
+    if (url.includes("/rest/v1/users?") && url.includes("select=id")) {
+      return jsonResponse([{ id: "user-1" }]);
     }
-    if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
-      return jsonResponse([{ tier: 'free' }]);
+    if (url.includes("/rest/v1/users?") && url.includes("select=tier")) {
+      return jsonResponse([{ tier: "free" }]);
     }
-    if (url.includes('/rest/v1/agent_function_grants?')) {
+    if (url.includes("/rest/v1/agent_function_grants?")) {
       return jsonResponse(grants);
     }
-    if (url.includes('/rest/v1/apps?')) {
+    if (url.includes("/rest/v1/apps?")) {
       return jsonResponse([
-        { id: 'caller-app-id', slug: 'caller', name: 'Caller' },
-        { id: 'target-app-id', slug: 'target', name: 'Target' },
+        { id: "caller-app-id", slug: "caller", name: "Caller" },
+        { id: "target-app-id", slug: "target", name: "Target" },
       ]);
     }
     return jsonResponse([]);
@@ -3938,7 +5368,7 @@ function grantSessionMock(
 
 Deno.test({
   name:
-    'launch facade: grant, wiring, and settings routes require an account session',
+    "launch facade: grant, wiring, and settings routes require an account session",
   // The api_token auth path constructs a supabase-js client whose auth
   // auto-refresh interval cannot be stopped from test code.
   sanitizeOps: false,
@@ -3947,58 +5377,58 @@ Deno.test({
     await withLaunchEnv(
       async () => {
         const attempts: Array<{ path: string; init?: RequestInit }> = [
-          { path: '/api/launch/grants' },
+          { path: "/api/launch/grants" },
           {
-            path: '/api/launch/grants',
+            path: "/api/launch/grants",
             init: {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                callerAppId: 'caller-app-id',
-                targetAppId: 'target-app-id',
-                targetFunction: 'deploy',
+                callerAppId: "caller-app-id",
+                targetAppId: "target-app-id",
+                targetFunction: "deploy",
               }),
             },
           },
           {
-            path: '/api/launch/grants/11111111-1111-4111-8111-111111111111',
+            path: "/api/launch/grants/11111111-1111-4111-8111-111111111111",
             init: {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ status: 'revoked' }),
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ status: "revoked" }),
             },
           },
           {
-            path: '/api/launch/grants/11111111-1111-4111-8111-111111111111',
-            init: { method: 'DELETE' },
+            path: "/api/launch/grants/11111111-1111-4111-8111-111111111111",
+            init: { method: "DELETE" },
           },
           {
             path:
-              '/api/launch/grants/11111111-1111-4111-8111-111111111111/approve',
+              "/api/launch/grants/11111111-1111-4111-8111-111111111111/approve",
             init: {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
               body: JSON.stringify({}),
             },
           },
-          { path: '/api/launch/wiring/targets' },
-          { path: '/api/launch/agents/deploy-helper/wiring' },
-          { path: '/api/launch/agents/deploy-helper/caller-trust' },
-          { path: '/api/launch/settings' },
+          { path: "/api/launch/wiring/targets" },
+          { path: "/api/launch/agents/deploy-helper/wiring" },
+          { path: "/api/launch/agents/deploy-helper/caller-trust" },
+          { path: "/api/launch/settings" },
           {
-            path: '/api/launch/settings',
+            path: "/api/launch/settings",
             init: {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json' },
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ agentGrantAutoApprove: true }),
             },
           },
           {
-            path: '/api/launch/agents/deploy-helper/settings',
+            path: "/api/launch/agents/deploy-helper/settings",
             init: {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ values: { API_KEY: 'must-not-write' } }),
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ values: { API_KEY: "must-not-write" } }),
             },
           },
         ];
@@ -4019,11 +5449,11 @@ Deno.test({
           assertEquals(
             response.status,
             403,
-            `${attempt.init?.method || 'GET'} ${attempt.path}`,
+            `${attempt.init?.method || "GET"} ${attempt.path}`,
           );
           assertStringIncludes(
-            body.error || '',
-            'account session',
+            body.error || "",
+            "account session",
             attempt.path,
           );
         }
@@ -4033,12 +5463,12 @@ Deno.test({
   },
 });
 
-Deno.test('launch facade: grants list returns AgentGrantListResponse shape', async () => {
+Deno.test("launch facade: grants list returns AgentGrantListResponse shape", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
-        new Request('https://ultralight.test/api/launch/grants', {
-          headers: { Authorization: 'Bearer browser-session-token' },
+        new Request("https://ultralight.test/api/launch/grants", {
+          headers: { Authorization: "Bearer browser-session-token" },
         }),
       );
       const body = await response.json() as {
@@ -4054,42 +5484,42 @@ Deno.test('launch facade: grants list returns AgentGrantListResponse shape', asy
 
       assertEquals(response.status, 200);
       assertEquals(Array.isArray(body.grants), true);
-      assertEquals(typeof body.generatedAt, 'string');
+      assertEquals(typeof body.generatedAt, "string");
       assertEquals(body.grants.length, 1);
-      assertEquals(body.grants[0].id, '11111111-1111-4111-8111-111111111111');
-      assertEquals(body.grants[0].status, 'active');
-      assertEquals(body.grants[0].targetFunction, 'deploy');
+      assertEquals(body.grants[0].id, "11111111-1111-4111-8111-111111111111");
+      assertEquals(body.grants[0].status, "active");
+      assertEquals(body.grants[0].targetFunction, "deploy");
       // Agent handles are joined so the UI can render names without N lookups.
-      assertEquals(body.grants[0].callerApp.name, 'Caller');
-      assertEquals(body.grants[0].targetApp.name, 'Target');
+      assertEquals(body.grants[0].callerApp.name, "Caller");
+      assertEquals(body.grants[0].targetApp.name, "Target");
     },
     grantSessionMock([grantRow()]),
   );
 });
 
-Deno.test('launch facade: grants status filter rejects unknown values', async () => {
+Deno.test("launch facade: grants status filter rejects unknown values", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/grants?status=bogus',
-          { headers: { Authorization: 'Bearer browser-session-token' } },
+          "https://ultralight.test/api/launch/grants?status=bogus",
+          { headers: { Authorization: "Bearer browser-session-token" } },
         ),
       );
       const body = await response.json() as { error?: string };
       assertEquals(response.status, 400);
-      assertStringIncludes(body.error || '', 'status must be one of');
+      assertStringIncludes(body.error || "", "status must be one of");
     },
     grantSessionMock([grantRow()]),
   );
 });
 
-Deno.test('launch facade: settings report the agentic-approval preference', async () => {
+Deno.test("launch facade: settings report the agentic-approval preference", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
-        new Request('https://ultralight.test/api/launch/settings', {
-          headers: { Authorization: 'Bearer browser-session-token' },
+        new Request("https://ultralight.test/api/launch/settings", {
+          headers: { Authorization: "Bearer browser-session-token" },
         }),
       );
       const body = await response.json() as {
@@ -4097,27 +5527,27 @@ Deno.test('launch facade: settings report the agentic-approval preference', asyn
         generatedAt: string;
       };
       assertEquals(response.status, 200);
-      assertEquals(typeof body.agentGrantAutoApprove, 'boolean');
-      assertEquals(typeof body.generatedAt, 'string');
+      assertEquals(typeof body.agentGrantAutoApprove, "boolean");
+      assertEquals(typeof body.generatedAt, "string");
     },
     (async (input: Request | URL | string) => {
       const url = input instanceof Request ? input.url : String(input);
-      if (url === 'https://supabase.test/auth/v1/user') {
+      if (url === "https://supabase.test/auth/v1/user") {
         return jsonResponse({
-          id: 'user-1',
-          email: 'founder@example.com',
+          id: "user-1",
+          email: "founder@example.com",
           user_metadata: {},
         });
       }
-      if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
-        return jsonResponse([{ id: 'user-1' }]);
+      if (url.includes("/rest/v1/users?") && url.includes("select=id")) {
+        return jsonResponse([{ id: "user-1" }]);
       }
-      if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
-        return jsonResponse([{ tier: 'free' }]);
+      if (url.includes("/rest/v1/users?") && url.includes("select=tier")) {
+        return jsonResponse([{ tier: "free" }]);
       }
       if (
-        url.includes('/rest/v1/users?') &&
-        url.includes('agent_grant_autoapprove')
+        url.includes("/rest/v1/users?") &&
+        url.includes("agent_grant_autoapprove")
       ) {
         return jsonResponse([{ agent_grant_autoapprove: true }]);
       }
@@ -4126,10 +5556,10 @@ Deno.test('launch facade: settings report the agentic-approval preference', asyn
   );
 });
 
-Deno.test('launch facade: status and openapi advertise grant/wiring routes', async () => {
+Deno.test("launch facade: status and openapi advertise grant/wiring routes", async () => {
   await withLaunchEnv(async () => {
     const statusResponse = await handleLaunch(
-      new Request('https://ultralight.test/api/launch/status'),
+      new Request("https://ultralight.test/api/launch/status"),
     );
     const status = await statusResponse.json() as {
       apiRoutes: string[];
@@ -4137,55 +5567,55 @@ Deno.test('launch facade: status and openapi advertise grant/wiring routes', asy
     };
     assertEquals(statusResponse.status, 200);
     assertEquals(status.endpoints.grants !== undefined, true);
-    assertEquals(status.endpoints.wiring, '/api/launch/agents/{id}/wiring');
+    assertEquals(status.endpoints.wiring, "/api/launch/agents/{id}/wiring");
     assertEquals(
       status.endpoints.callerTrust,
-      '/api/launch/agents/{id}/caller-trust',
+      "/api/launch/agents/{id}/caller-trust",
     );
     assertEquals(
       status.endpoints.wiringTargets,
-      '/api/launch/wiring/targets?q={query}',
+      "/api/launch/wiring/targets?q={query}",
     );
-    assertEquals(status.endpoints.settings, '/api/launch/settings');
-    assertEquals(status.apiRoutes.includes('GET /api/launch/grants'), true);
-    assertEquals(status.apiRoutes.includes('POST /api/launch/grants'), true);
+    assertEquals(status.endpoints.settings, "/api/launch/settings");
+    assertEquals(status.apiRoutes.includes("GET /api/launch/grants"), true);
+    assertEquals(status.apiRoutes.includes("POST /api/launch/grants"), true);
     assertEquals(
-      status.apiRoutes.includes('POST /api/launch/grants/:id/approve'),
+      status.apiRoutes.includes("POST /api/launch/grants/:id/approve"),
       true,
     );
     assertEquals(
-      status.apiRoutes.includes('DELETE /api/launch/grants/:id'),
+      status.apiRoutes.includes("DELETE /api/launch/grants/:id"),
       true,
     );
     assertEquals(
-      status.apiRoutes.includes('GET /api/launch/agents/:id/wiring'),
+      status.apiRoutes.includes("GET /api/launch/agents/:id/wiring"),
       true,
     );
     assertEquals(
-      status.apiRoutes.includes('GET /api/launch/agents/:id/caller-trust'),
+      status.apiRoutes.includes("GET /api/launch/agents/:id/caller-trust"),
       true,
     );
-    assertEquals(status.apiRoutes.includes('GET /api/launch/settings'), true);
-    assertEquals(status.apiRoutes.includes('PATCH /api/launch/settings'), true);
+    assertEquals(status.apiRoutes.includes("GET /api/launch/settings"), true);
+    assertEquals(status.apiRoutes.includes("PATCH /api/launch/settings"), true);
 
     const openapiResponse = await handleLaunch(
-      new Request('https://ultralight.test/api/launch/openapi.json'),
+      new Request("https://ultralight.test/api/launch/openapi.json"),
     );
     const spec = await openapiResponse.json() as {
       paths: Record<string, unknown>;
       components?: { schemas?: Record<string, unknown> };
     };
     assertEquals(openapiResponse.status, 200);
-    assertEquals(Boolean(spec.paths['/api/launch/grants']), true);
-    assertEquals(Boolean(spec.paths['/api/launch/grants/{id}']), true);
-    assertEquals(Boolean(spec.paths['/api/launch/grants/{id}/approve']), true);
-    assertEquals(Boolean(spec.paths['/api/launch/agents/{id}/wiring']), true);
+    assertEquals(Boolean(spec.paths["/api/launch/grants"]), true);
+    assertEquals(Boolean(spec.paths["/api/launch/grants/{id}"]), true);
+    assertEquals(Boolean(spec.paths["/api/launch/grants/{id}/approve"]), true);
+    assertEquals(Boolean(spec.paths["/api/launch/agents/{id}/wiring"]), true);
     assertEquals(
-      Boolean(spec.paths['/api/launch/agents/{id}/caller-trust']),
+      Boolean(spec.paths["/api/launch/agents/{id}/caller-trust"]),
       true,
     );
-    assertEquals(Boolean(spec.paths['/api/launch/wiring/targets']), true);
-    assertEquals(Boolean(spec.paths['/api/launch/settings']), true);
+    assertEquals(Boolean(spec.paths["/api/launch/wiring/targets"]), true);
+    assertEquals(Boolean(spec.paths["/api/launch/settings"]), true);
     assertEquals(
       Boolean(spec.components?.schemas?.AgentGrantSummary),
       true,
@@ -4207,28 +5637,28 @@ Deno.test('launch facade: status and openapi advertise grant/wiring routes', asy
 function jobSessionMock(rows: unknown[]): typeof fetch {
   return (async (input: Request | URL | string) => {
     const url = input instanceof Request ? input.url : String(input);
-    if (url === 'https://supabase.test/auth/v1/user') {
+    if (url === "https://supabase.test/auth/v1/user") {
       return jsonResponse({
-        id: 'user-1',
-        email: 'founder@example.com',
+        id: "user-1",
+        email: "founder@example.com",
         user_metadata: {},
       });
     }
-    if (url.includes('/rest/v1/async_jobs?')) {
+    if (url.includes("/rest/v1/async_jobs?")) {
       // The handler must scope the read to the session user.
-      assertStringIncludes(url, 'user_id=eq.user-1');
+      assertStringIncludes(url, "user_id=eq.user-1");
       return jsonResponse(rows);
     }
-    if (url.includes('/rest/v1/users?')) {
-      return jsonResponse([{ id: 'user-1' }]);
+    if (url.includes("/rest/v1/users?")) {
+      return jsonResponse([{ id: "user-1" }]);
     }
     return jsonResponse([]);
   }) as typeof fetch;
 }
 
-const JOB_ID = '7f1e6f0a-2b3c-4d5e-8f90-123456789abc';
+const JOB_ID = "7f1e6f0a-2b3c-4d5e-8f90-123456789abc";
 
-Deno.test('launch facade: job status requires authentication', async () => {
+Deno.test("launch facade: job status requires authentication", async () => {
   await withLaunchEnv(async () => {
     const response = await handleLaunch(
       new Request(`https://ultralight.test/api/launch/jobs/${JOB_ID}`),
@@ -4237,87 +5667,87 @@ Deno.test('launch facade: job status requires authentication', async () => {
   }, jobSessionMock([]));
 });
 
-Deno.test('launch facade: job status rejects non-uuid ids', async () => {
+Deno.test("launch facade: job status rejects non-uuid ids", async () => {
   await withLaunchEnv(async () => {
     const response = await handleLaunch(
-      new Request('https://ultralight.test/api/launch/jobs/not-a-uuid', {
-        headers: { Authorization: 'Bearer browser-session-token' },
+      new Request("https://ultralight.test/api/launch/jobs/not-a-uuid", {
+        headers: { Authorization: "Bearer browser-session-token" },
       }),
     );
     const body = await response.json() as { error?: string };
     assertEquals(response.status, 400);
-    assertStringIncludes(body.error || '', 'Invalid job id');
+    assertStringIncludes(body.error || "", "Invalid job id");
   }, jobSessionMock([]));
 });
 
-Deno.test('launch facade: job status 404s for unknown (or other-user) jobs', async () => {
+Deno.test("launch facade: job status 404s for unknown (or other-user) jobs", async () => {
   await withLaunchEnv(async () => {
     const response = await handleLaunch(
       new Request(`https://ultralight.test/api/launch/jobs/${JOB_ID}`, {
-        headers: { Authorization: 'Bearer browser-session-token' },
+        headers: { Authorization: "Bearer browser-session-token" },
       }),
     );
     assertEquals(response.status, 404);
   }, jobSessionMock([]));
 });
 
-Deno.test('launch facade: completed job returns the LaunchJobStatusResponse shape', async () => {
+Deno.test("launch facade: completed job returns the LaunchJobStatusResponse shape", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(`https://ultralight.test/api/launch/jobs/${JOB_ID}`, {
-          headers: { Authorization: 'Bearer browser-session-token' },
+          headers: { Authorization: "Bearer browser-session-token" },
         }),
       );
       const body = await response.json() as Record<string, unknown>;
       assertEquals(response.status, 200);
       assertEquals(body.jobId, JOB_ID);
-      assertEquals(body.status, 'completed');
+      assertEquals(body.status, "completed");
       assertEquals(body.result, { answer: 42 });
       assertEquals(body.error, null);
       assertEquals(body.aiCostCredits, 1.5);
-      assertEquals(body.executionId, 'exec-1');
-      assertEquals(typeof body.generatedAt, 'string');
+      assertEquals(body.executionId, "exec-1");
+      assertEquals(typeof body.generatedAt, "string");
     },
     jobSessionMock([{
       id: JOB_ID,
-      status: 'completed',
+      status: "completed",
       result: { answer: 42 },
       result_r2_key: null,
       error: null,
       duration_ms: 1234,
       ai_cost_light: 1.5,
-      execution_id: 'exec-1',
-      created_at: '2026-06-11T00:00:00Z',
-      completed_at: '2026-06-11T00:01:00Z',
+      execution_id: "exec-1",
+      created_at: "2026-06-11T00:00:00Z",
+      completed_at: "2026-06-11T00:01:00Z",
     }]),
   );
 });
 
-Deno.test('launch facade: queued job reports queued (never failed) with no result/error', async () => {
+Deno.test("launch facade: queued job reports queued (never failed) with no result/error", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(`https://ultralight.test/api/launch/jobs/${JOB_ID}`, {
-          headers: { Authorization: 'Bearer browser-session-token' },
+          headers: { Authorization: "Bearer browser-session-token" },
         }),
       );
       const body = await response.json() as Record<string, unknown>;
       assertEquals(response.status, 200);
-      assertEquals(body.status, 'queued');
+      assertEquals(body.status, "queued");
       assertEquals(body.result, null);
       assertEquals(body.error, null);
     },
     jobSessionMock([{
       id: JOB_ID,
-      status: 'queued',
+      status: "queued",
       result: null,
       result_r2_key: null,
       error: null,
       duration_ms: null,
       ai_cost_light: 0,
-      execution_id: 'exec-1',
-      created_at: '2026-06-11T00:00:00Z',
+      execution_id: "exec-1",
+      created_at: "2026-06-11T00:00:00Z",
       completed_at: null,
     }]),
   );
@@ -4325,8 +5755,8 @@ Deno.test('launch facade: queued job reports queued (never failed) with no resul
 
 // ---- Library folders (Phase 2) ---------------------------------------------
 
-const FOLDER_APP_ID = '11111111-1111-4111-8111-111111111111';
-const FOLDER_ID = '22222222-2222-4222-8222-222222222222';
+const FOLDER_APP_ID = "11111111-1111-4111-8111-111111111111";
+const FOLDER_ID = "22222222-2222-4222-8222-222222222222";
 
 type CapturedFolderReq = { url: string; method: string; body: unknown };
 
@@ -4341,45 +5771,45 @@ function folderSessionMock(
   return (async (input: Request | URL | string, init?: RequestInit) => {
     const url = input instanceof Request ? input.url : String(input);
     const method = init?.method ||
-      (input instanceof Request ? input.method : 'GET');
+      (input instanceof Request ? input.method : "GET");
     const rawBody = init?.body;
-    const parsedBody = typeof rawBody === 'string' ? JSON.parse(rawBody) : null;
-    if (url === 'https://supabase.test/auth/v1/user') {
+    const parsedBody = typeof rawBody === "string" ? JSON.parse(rawBody) : null;
+    if (url === "https://supabase.test/auth/v1/user") {
       return jsonResponse({
-        id: 'user-1',
-        email: 'founder@example.com',
+        id: "user-1",
+        email: "founder@example.com",
         user_metadata: {},
       });
     }
-    if (url.includes('/rest/v1/users?')) {
+    if (url.includes("/rest/v1/users?")) {
       return jsonResponse([{
-        id: 'user-1',
-        email: 'founder@example.com',
-        tier: 'free',
+        id: "user-1",
+        email: "founder@example.com",
+        tier: "free",
         provisional: false,
         last_active_at: null,
       }]);
     }
-    if (url.startsWith('https://supabase.test/rest/v1/library_folders')) {
+    if (url.startsWith("https://supabase.test/rest/v1/library_folders")) {
       captured.push({ url, method, body: parsedBody });
-      if (method === 'GET') return jsonResponse(opts.existingFolders ?? []);
-      if (method === 'POST') {
+      if (method === "GET") return jsonResponse(opts.existingFolders ?? []);
+      if (method === "POST") {
         return jsonResponse([{
           id: FOLDER_ID,
-          name: (parsedBody as { name?: string })?.name ?? 'Folder',
+          name: (parsedBody as { name?: string })?.name ?? "Folder",
           position: (parsedBody as { position?: number })?.position ?? 0,
         }], opts.folderPostStatus ?? 201);
       }
-      if (method === 'PATCH') {
-        return jsonResponse([{ id: FOLDER_ID, name: 'Renamed', position: 0 }]);
+      if (method === "PATCH") {
+        return jsonResponse([{ id: FOLDER_ID, name: "Renamed", position: 0 }]);
       }
-      if (method === 'DELETE') return jsonResponse([{ id: FOLDER_ID }]);
+      if (method === "DELETE") return jsonResponse([{ id: FOLDER_ID }]);
     }
     if (
-      url.startsWith('https://supabase.test/rest/v1/library_folder_members')
+      url.startsWith("https://supabase.test/rest/v1/library_folder_members")
     ) {
       captured.push({ url, method, body: parsedBody });
-      if (method === 'GET') return jsonResponse([]);
+      if (method === "GET") return jsonResponse([]);
       return jsonResponse([], opts.memberPostStatus ?? 200);
     }
     return jsonResponse([]);
@@ -4394,47 +5824,47 @@ function browserFolderRequest(
   return new Request(`https://ultralight.test${path}`, {
     method,
     headers: {
-      Authorization: 'Bearer browser-session-token',
-      'Content-Type': 'application/json',
+      Authorization: "Bearer browser-session-token",
+      "Content-Type": "application/json",
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 }
 
-Deno.test('launch folders: create stamps the session owner, ignoring the body', async () => {
+Deno.test("launch folders: create stamps the session owner, ignoring the body", async () => {
   const captured: CapturedFolderReq[] = [];
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
-        browserFolderRequest('/api/launch/folders', 'POST', {
-          scope: 'owned',
-          name: 'Tools',
-          owner_user_id: 'attacker-user',
+        browserFolderRequest("/api/launch/folders", "POST", {
+          scope: "owned",
+          name: "Tools",
+          owner_user_id: "attacker-user",
         }),
       );
       assertEquals(response.status, 201);
-      const post = captured.find((c) => c.method === 'POST');
+      const post = captured.find((c) => c.method === "POST");
       const body = post?.body as Record<string, unknown> | undefined;
       // The owner is taken from the authenticated session, never the request body.
-      assertEquals(body?.owner_user_id, 'user-1');
-      assertEquals(body?.scope, 'owned');
-      assertEquals(body?.name, 'Tools');
+      assertEquals(body?.owner_user_id, "user-1");
+      assertEquals(body?.scope, "owned");
+      assertEquals(body?.name, "Tools");
     },
     folderSessionMock(captured),
   );
 });
 
-Deno.test('launch folders: organizing requires an account session', async () => {
+Deno.test("launch folders: organizing requires an account session", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
-        new Request('https://ultralight.test/api/launch/folders', {
-          method: 'POST',
+        new Request("https://ultralight.test/api/launch/folders", {
+          method: "POST",
           headers: {
             Authorization: `Bearer ${TEST_API_TOKEN}`,
-            'Content-Type': 'application/json',
+            "Content-Type": "application/json",
           },
-          body: JSON.stringify({ scope: 'owned', name: 'Tools' }),
+          body: JSON.stringify({ scope: "owned", name: "Tools" }),
         }),
       );
       assertEquals(response.status, 403);
@@ -4443,72 +5873,72 @@ Deno.test('launch folders: organizing requires an account session', async () => 
   );
 });
 
-Deno.test('launch folders: move and uncategorize stay owner-scoped', async () => {
+Deno.test("launch folders: move and uncategorize stay owner-scoped", async () => {
   const captured: CapturedFolderReq[] = [];
   await withLaunchEnv(
     async () => {
       const move = await handleLaunch(
-        browserFolderRequest('/api/launch/folders/members', 'PUT', {
-          scope: 'owned',
+        browserFolderRequest("/api/launch/folders/members", "PUT", {
+          scope: "owned",
           app_id: FOLDER_APP_ID,
           folder_id: FOLDER_ID,
         }),
       );
       assertEquals(move.status, 200);
-      const post = captured.find((c) => c.method === 'POST');
+      const post = captured.find((c) => c.method === "POST");
       assertEquals(
         (post?.body as Record<string, unknown>)?.owner_user_id,
-        'user-1',
+        "user-1",
       );
 
       const clear = await handleLaunch(
-        browserFolderRequest('/api/launch/folders/members', 'PUT', {
-          scope: 'owned',
+        browserFolderRequest("/api/launch/folders/members", "PUT", {
+          scope: "owned",
           app_id: FOLDER_APP_ID,
           folder_id: null,
         }),
       );
       assertEquals(clear.status, 200);
-      const del = captured.find((c) => c.method === 'DELETE');
-      assertStringIncludes(del?.url ?? '', 'owner_user_id=eq.user-1');
-      assertStringIncludes(del?.url ?? '', `app_id=eq.${FOLDER_APP_ID}`);
+      const del = captured.find((c) => c.method === "DELETE");
+      assertStringIncludes(del?.url ?? "", "owner_user_id=eq.user-1");
+      assertStringIncludes(del?.url ?? "", `app_id=eq.${FOLDER_APP_ID}`);
     },
     folderSessionMock(captured),
   );
 });
 
-Deno.test('launch folders: rename and delete filter by owner in the query', async () => {
+Deno.test("launch folders: rename and delete filter by owner in the query", async () => {
   const captured: CapturedFolderReq[] = [];
   await withLaunchEnv(
     async () => {
       const rename = await handleLaunch(
-        browserFolderRequest(`/api/launch/folders/${FOLDER_ID}`, 'PATCH', {
-          name: 'Renamed',
+        browserFolderRequest(`/api/launch/folders/${FOLDER_ID}`, "PATCH", {
+          name: "Renamed",
         }),
       );
       assertEquals(rename.status, 200);
-      const patch = captured.find((c) => c.method === 'PATCH');
-      assertStringIncludes(patch?.url ?? '', 'owner_user_id=eq.user-1');
-      assertStringIncludes(patch?.url ?? '', `id=eq.${FOLDER_ID}`);
+      const patch = captured.find((c) => c.method === "PATCH");
+      assertStringIncludes(patch?.url ?? "", "owner_user_id=eq.user-1");
+      assertStringIncludes(patch?.url ?? "", `id=eq.${FOLDER_ID}`);
 
       const del = await handleLaunch(
-        browserFolderRequest(`/api/launch/folders/${FOLDER_ID}`, 'DELETE'),
+        browserFolderRequest(`/api/launch/folders/${FOLDER_ID}`, "DELETE"),
       );
       assertEquals(del.status, 200);
-      const delReq = captured.find((c) => c.method === 'DELETE');
-      assertStringIncludes(delReq?.url ?? '', 'owner_user_id=eq.user-1');
-      assertStringIncludes(delReq?.url ?? '', `id=eq.${FOLDER_ID}`);
+      const delReq = captured.find((c) => c.method === "DELETE");
+      assertStringIncludes(delReq?.url ?? "", "owner_user_id=eq.user-1");
+      assertStringIncludes(delReq?.url ?? "", `id=eq.${FOLDER_ID}`);
     },
     folderSessionMock(captured),
   );
 });
 
-Deno.test('launch folders: a non-uuid folder id is a 404, not a query', async () => {
+Deno.test("launch folders: a non-uuid folder id is a 404, not a query", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
-        browserFolderRequest('/api/launch/folders/not-a-uuid', 'PATCH', {
-          name: 'x',
+        browserFolderRequest("/api/launch/folders/not-a-uuid", "PATCH", {
+          name: "x",
         }),
       );
       assertEquals(response.status, 404);
@@ -4520,46 +5950,46 @@ Deno.test('launch folders: a non-uuid folder id is a 404, not a query', async ()
 // ---- P2.3 private multi-routine facade -----------------------------------
 
 Deno.test({
-  name: 'launch P2.3 routine and capacity routes reject connected-Agent keys',
+  name: "launch P2.3 routine and capacity routes reject connected-Agent keys",
   sanitizeOps: false,
   sanitizeResources: false,
   fn: async () => {
-    const routineId = '77777777-7777-4777-8777-777777777777';
+    const routineId = "77777777-7777-4777-8777-777777777777";
     await withLaunchEnv(
       async () => {
         const attempts: Array<
           { path: string; method: string; body?: unknown }
         > = [
           {
-            path: '/api/launch/agents/private-helper/capacity',
-            method: 'GET',
+            path: "/api/launch/agents/private-helper/capacity",
+            method: "GET",
           },
           {
-            path: '/api/launch/agents/private-helper/capacity',
-            method: 'PATCH',
+            path: "/api/launch/agents/private-helper/capacity",
+            method: "PATCH",
             body: { capPercent: 25 },
           },
           {
-            path: '/api/launch/agents/private-helper/routines',
-            method: 'GET',
+            path: "/api/launch/agents/private-helper/routines",
+            method: "GET",
           },
           {
             path: `/api/launch/agents/private-helper/routines/${routineId}`,
-            method: 'GET',
+            method: "GET",
           },
           {
             path: `/api/launch/agents/private-helper/routines/${routineId}`,
-            method: 'PATCH',
-            body: { expectedRevision: 'opaque', mission: 'widen access' },
+            method: "PATCH",
+            body: { expectedRevision: "opaque", mission: "widen access" },
           },
           {
             path:
               `/api/launch/agents/private-helper/routines/${routineId}/actions`,
-            method: 'POST',
+            method: "POST",
             body: {
-              expectedRevision: 'opaque',
-              idempotencyKey: '88888888-8888-4888-8888-888888888888',
-              action: 'activate',
+              expectedRevision: "opaque",
+              idempotencyKey: "88888888-8888-4888-8888-888888888888",
+              action: "activate",
             },
           },
         ];
@@ -4571,7 +6001,7 @@ Deno.test({
                 method: attempt.method,
                 headers: {
                   Authorization: `Bearer ${TEST_API_TOKEN}`,
-                  'Content-Type': 'application/json',
+                  "Content-Type": "application/json",
                 },
                 body: attempt.body === undefined
                   ? undefined
@@ -4585,12 +6015,12 @@ Deno.test({
             403,
             `${attempt.method} ${attempt.path}`,
           );
-          assertStringIncludes(body.error || '', 'account session');
+          assertStringIncludes(body.error || "", "account session");
           assertEquals(
-            response.headers.get('cache-control'),
-            'private, no-store',
+            response.headers.get("cache-control"),
+            "private, no-store",
           );
-          assertEquals(response.headers.get('vary'), 'Cookie, Authorization');
+          assertEquals(response.headers.get("vary"), "Cookie, Authorization");
         }
       },
       apiTokenAuthMock(),
@@ -4598,13 +6028,13 @@ Deno.test({
   },
 });
 
-Deno.test('launch managed routine detail returns a stable actionable revision', async () => {
+Deno.test("launch managed routine detail returns a stable actionable revision", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(
           `https://ultralight.test/api/launch/agents/home-agent/routines/${HOME_ROUTINE_ID}`,
-          { headers: { Authorization: 'Bearer browser-session-token' } },
+          { headers: { Authorization: "Bearer browser-session-token" } },
         ),
       );
       const raw = await response.text();
@@ -4617,28 +6047,28 @@ Deno.test('launch managed routine detail returns a stable actionable revision', 
       // returns the revision that actually certifies the returned detail.
       assertEquals(body.revision, `ah1:${HOME_APP_ID}:8`);
       assertEquals(body.routine?.id, HOME_ROUTINE_ID);
-      assertEquals(response.headers.get('cache-control'), 'private, no-store');
+      assertEquals(response.headers.get("cache-control"), "private, no-store");
     },
     agentHomeFetchMock({
-      revisionSequence: ['7', '8', '8', '8'],
+      revisionSequence: ["7", "8", "8", "8"],
       routine: () =>
         agentHomeRoutineRow({
           metadata: {
             launch_managed: true,
-            launch_role: 'primary',
+            launch_role: "primary",
           },
         }),
     }),
   );
 });
 
-Deno.test('launch managed routine collection fences its aggregate revision', async () => {
+Deno.test("launch managed routine collection fences its aggregate revision", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/agents/home-agent/routines',
-          { headers: { Authorization: 'Bearer browser-session-token' } },
+          "https://ultralight.test/api/launch/agents/home-agent/routines",
+          { headers: { Authorization: "Bearer browser-session-token" } },
         ),
       );
       const raw = await response.text();
@@ -4655,57 +6085,57 @@ Deno.test('launch managed routine collection fences its aggregate revision', asy
       assertEquals(body.aggregate?.total, 1);
     },
     agentHomeFetchMock({
-      revisionSequence: ['7', '8', '8', '8'],
+      revisionSequence: ["7", "8", "8", "8"],
       routine: () =>
         agentHomeRoutineRow({
           metadata: {
             launch_managed: true,
-            launch_role: 'primary',
+            launch_role: "primary",
           },
         }),
     }),
   );
 });
 
-Deno.test('launch managed routine detail rejects an exact non-member id', async () => {
+Deno.test("launch managed routine detail rejects an exact non-member id", async () => {
   await withLaunchEnv(
     async () => {
-      const otherRoutine = '99999999-9999-4999-8999-999999999999';
+      const otherRoutine = "99999999-9999-4999-8999-999999999999";
       const response = await handleLaunch(
         new Request(
           `https://ultralight.test/api/launch/agents/home-agent/routines/${otherRoutine}`,
-          { headers: { Authorization: 'Bearer browser-session-token' } },
+          { headers: { Authorization: "Bearer browser-session-token" } },
         ),
       );
       assertEquals(response.status, 404);
       const body = await response.json() as { error?: string };
-      assertEquals(body.error, 'Managed routine not found for this Agent');
+      assertEquals(body.error, "Managed routine not found for this Agent");
     },
     agentHomeFetchMock({
       routine: () =>
         agentHomeRoutineRow({
           metadata: {
             launch_managed: true,
-            launch_role: 'primary',
+            launch_role: "primary",
           },
         }),
     }),
   );
 });
 
-Deno.test('launch Agent capacity validates the percentage before any policy write', async () => {
+Deno.test("launch Agent capacity validates the percentage before any policy write", async () => {
   let policyWrites = 0;
   await withLaunchEnv(
     async () => {
-      for (const capPercent of [0, 10.001, 100.01, '25']) {
+      for (const capPercent of [0, 10.001, 100.01, "25"]) {
         const response = await handleLaunch(
           new Request(
-            'https://ultralight.test/api/launch/agents/home-agent/capacity',
+            "https://ultralight.test/api/launch/agents/home-agent/capacity",
             {
-              method: 'PATCH',
+              method: "PATCH",
               headers: {
-                Authorization: 'Bearer browser-session-token',
-                'Content-Type': 'application/json',
+                Authorization: "Bearer browser-session-token",
+                "Content-Type": "application/json",
               },
               body: JSON.stringify({ capPercent }),
             },
@@ -4717,25 +6147,25 @@ Deno.test('launch Agent capacity validates the percentage before any policy writ
     },
     agentHomeFetchMock({
       rpc: (name) => {
-        if (name === 'set_agent_capacity_policy') policyWrites += 1;
+        if (name === "set_agent_capacity_policy") policyWrites += 1;
         return undefined;
       },
     }),
   );
 });
 
-Deno.test('launch Pro capacity accepts an Agent cap write', async () => {
+Deno.test("launch Pro capacity accepts an Agent cap write", async () => {
   let policyWrites = 0;
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         new Request(
-          'https://ultralight.test/api/launch/agents/home-agent/capacity',
+          "https://ultralight.test/api/launch/agents/home-agent/capacity",
           {
-            method: 'PATCH',
+            method: "PATCH",
             headers: {
-              Authorization: 'Bearer browser-session-token',
-              'Content-Type': 'application/json',
+              Authorization: "Bearer browser-session-token",
+              "Content-Type": "application/json",
             },
             body: JSON.stringify({ capPercent: 100 }),
           },
@@ -4747,28 +6177,28 @@ Deno.test('launch Pro capacity accepts an Agent cap write', async () => {
       };
       assertEquals(response.status, 200);
       assertEquals(body.capPercent, 100);
-      assertEquals(body.weekly?.state, 'available');
+      assertEquals(body.weekly?.state, "available");
       assertEquals(policyWrites, 1);
     },
     agentHomeFetchMock({
       rpc: (name) => {
-        if (name === 'set_agent_capacity_policy') {
+        if (name === "set_agent_capacity_policy") {
           policyWrites += 1;
           return jsonResponse([{
             capacity_agent_id: HOME_APP_ID,
             agent_cap_basis_points: 10000,
           }]);
         }
-        if (name === 'get_account_capacity_status') {
+        if (name === "get_account_capacity_status") {
           return jsonResponse([{
-            plan_code: 'pro',
+            plan_code: "pro",
             limits_public: false,
             active_agent_limit: null,
-            capacity_state: 'available',
-            burst_state: 'available',
-            weekly_state: 'available',
-            burst_resets_at: '2026-07-17T15:00:00.000Z',
-            weekly_resets_at: '2026-07-20T10:00:00.000Z',
+            capacity_state: "available",
+            burst_state: "available",
+            weekly_state: "available",
+            burst_resets_at: "2026-07-17T15:00:00.000Z",
+            weekly_resets_at: "2026-07-20T10:00:00.000Z",
             next_eligible_at: null,
             burst_limit_light: 1,
             burst_used_light: 0,
@@ -4776,16 +6206,16 @@ Deno.test('launch Pro capacity accepts an Agent cap write', async () => {
             weekly_used_light: 0,
           }]);
         }
-        if (name === 'get_agent_capacity_status') {
+        if (name === "get_agent_capacity_status") {
           return jsonResponse([{
             capacity_agent_id: HOME_APP_ID,
-            plan_code: 'pro',
+            plan_code: "pro",
             limits_public: false,
-            capacity_state: 'available',
-            burst_state: 'available',
-            weekly_state: 'available',
-            burst_resets_at: '2026-07-17T15:00:00.000Z',
-            weekly_resets_at: '2026-07-20T10:00:00.000Z',
+            capacity_state: "available",
+            burst_state: "available",
+            weekly_state: "available",
+            burst_resets_at: "2026-07-17T15:00:00.000Z",
+            weekly_resets_at: "2026-07-20T10:00:00.000Z",
             next_eligible_at: null,
             agent_cap_basis_points: 10000,
             agent_burst_limit_light: 20,
@@ -4800,33 +6230,33 @@ Deno.test('launch Pro capacity accepts an Agent cap write', async () => {
   );
 });
 
-Deno.test('launch Alerts reject ambiguous writes and malformed pagination', async () => {
+Deno.test("launch Alerts reject ambiguous writes and malformed pagination", async () => {
   await withLaunchEnv(
     async () => {
       const attempts: Array<{ path: string; method: string; body?: unknown }> =
         [
           {
-            path: '/api/launch/notifications?limit=1.5',
-            method: 'GET',
+            path: "/api/launch/notifications?limit=1.5",
+            method: "GET",
           },
           {
-            path: '/api/launch/notifications?unread=0',
-            method: 'GET',
+            path: "/api/launch/notifications?unread=0",
+            method: "GET",
           },
           {
-            path: '/api/launch/notifications',
-            method: 'PATCH',
+            path: "/api/launch/notifications",
+            method: "PATCH",
             body: {},
           },
           {
-            path: '/api/launch/notifications',
-            method: 'PATCH',
-            body: { all: true, ids: ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'] },
+            path: "/api/launch/notifications",
+            method: "PATCH",
+            body: { all: true, ids: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"] },
           },
           {
-            path: '/api/launch/notifications',
-            method: 'PATCH',
-            body: { ids: ['not-a-uuid'] },
+            path: "/api/launch/notifications",
+            method: "PATCH",
+            body: { ids: ["not-a-uuid"] },
           },
         ];
       for (const attempt of attempts) {
@@ -4836,8 +6266,8 @@ Deno.test('launch Alerts reject ambiguous writes and malformed pagination', asyn
             {
               method: attempt.method,
               headers: {
-                Authorization: 'Bearer browser-session-token',
-                'Content-Type': 'application/json',
+                Authorization: "Bearer browser-session-token",
+                "Content-Type": "application/json",
               },
               body: attempt.body === undefined
                 ? undefined
@@ -4847,8 +6277,8 @@ Deno.test('launch Alerts reject ambiguous writes and malformed pagination', asyn
         );
         assertEquals(response.status, 400, attempt.path);
         assertEquals(
-          response.headers.get('cache-control'),
-          'private, no-store',
+          response.headers.get("cache-control"),
+          "private, no-store",
         );
       }
     },
@@ -4856,9 +6286,9 @@ Deno.test('launch Alerts reject ambiguous writes and malformed pagination', asyn
   );
 });
 
-const OPERATOR_USER_ID = '77777777-7777-4777-8777-777777777777';
-const OPERATOR_ALERT_ID = '88888888-8888-4888-8888-888888888888';
-const OPERATOR_ITEM_ID = '99999999-9999-4999-8999-999999999999';
+const OPERATOR_USER_ID = "77777777-7777-4777-8777-777777777777";
+const OPERATOR_ALERT_ID = "88888888-8888-4888-8888-888888888888";
+const OPERATOR_ITEM_ID = "99999999-9999-4999-8999-999999999999";
 
 interface OperatorFetchOptions {
   favoriteInitialized?: boolean;
@@ -4875,15 +6305,15 @@ interface OperatorFetchOptions {
 
 function operatorCanonicalAttentionSnapshot(): Record<string, unknown> {
   const candidate = compileOperatorItems([{
-    condition: 'account_byok_missing',
-    affectedAgents: [{ id: HOME_APP_ID, name: 'Home Agent' }],
-    detectedAt: '2026-07-23T17:58:00.000Z',
+    condition: "account_byok_missing",
+    affectedAgents: [{ id: HOME_APP_ID, name: "Home Agent" }],
+    detectedAt: "2026-07-23T17:58:00.000Z",
   }])[0]!;
   return {
     items: [{
       item: { ...candidate, id: OPERATOR_ITEM_ID },
       attention: {
-        state: 'open',
+        state: "open",
         readAt: null,
         snoozedUntil: null,
         dismissedAt: null,
@@ -4908,31 +6338,31 @@ function operatorCanonicalAttentionSnapshot(): Record<string, unknown> {
 function operatorTestApp(): Record<string, unknown> {
   return agentHomeTestApp({
     owner_id: OPERATOR_USER_ID,
-    current_version: 'v1',
-    versions: ['v1'],
-    storage_key: 'apps/home-agent/v1',
+    current_version: "v1",
+    versions: ["v1"],
+    storage_key: "apps/home-agent/v1",
     manifest: {
       functions: {
         inspect: {
-          description: 'Inspect the system.',
+          description: "Inspect the system.",
           annotations: { readOnlyHint: true },
         },
       },
       interfaces: [
         {
-          id: 'inbox',
-          label: 'Inbox',
-          description: 'Review mail requiring attention.',
-          entry: 'interfaces/inbox.html',
-          functions: ['inspect'],
-          hash: 'a'.repeat(64),
+          id: "inbox",
+          label: "Inbox",
+          description: "Review mail requiring attention.",
+          entry: "interfaces/inbox.html",
+          functions: ["inspect"],
+          hash: "a".repeat(64),
         },
         {
-          id: 'report',
-          label: 'Report',
-          entry: 'interfaces/report.html',
-          functions: ['inspect'],
-          hash: 'b'.repeat(64),
+          id: "report",
+          label: "Report",
+          entry: "interfaces/report.html",
+          functions: ["inspect"],
+          hash: "b".repeat(64),
         },
       ],
     },
@@ -4944,20 +6374,20 @@ function operatorFleetRow(): Record<string, unknown> {
     agent_id: HOME_APP_ID,
     routine_count: 1,
     active_routine_count: 1,
-    state: 'active',
-    health: 'healthy',
-    next_wake_at: '2026-07-23T18:05:00.000Z',
-    last_run_at: '2026-07-23T17:55:00.000Z',
+    state: "active",
+    health: "healthy",
+    next_wake_at: "2026-07-23T18:05:00.000Z",
+    last_run_at: "2026-07-23T17:55:00.000Z",
     deferred_wake_count: 0,
     unread_alert_count: 1,
     recent_activity: [{
       id: `alert:${OPERATOR_ALERT_ID}`,
-      kind: 'alert',
-      title: 'Inbox needs a decision',
-      summary: 'One reply needs review.',
-      status: 'open',
+      kind: "alert",
+      title: "Inbox needs a decision",
+      summary: "One reply needs review.",
+      status: "open",
       routineId: HOME_ROUTINE_ID,
-      createdAt: '2026-07-23T17:58:00.000Z',
+      createdAt: "2026-07-23T17:58:00.000Z",
     }],
     capacity_state: null,
     capacity_burst_state: null,
@@ -4973,13 +6403,13 @@ function operatorFleetRow(): Record<string, unknown> {
     attention_count: 1,
     fleet_position: 0,
     operating_summary: {
-      mode: 'scheduled',
-      label: 'Next: Check inbox',
-      basis: 'next_wake',
+      mode: "scheduled",
+      label: "Next: Check inbox",
+      basis: "next_wake",
       routineId: HOME_ROUTINE_ID,
-      routineName: 'Check inbox',
-      nextEventAt: '2026-07-23T18:05:00.000Z',
-      lastObservedAt: '2026-07-23T17:55:00.000Z',
+      routineName: "Check inbox",
+      nextEventAt: "2026-07-23T18:05:00.000Z",
+      lastObservedAt: "2026-07-23T17:55:00.000Z",
     },
     working_agent_count: 1,
   };
@@ -4994,7 +6424,7 @@ function operatorFetchMock(
   ) => {
     const url = input instanceof Request ? input.url : String(input);
     const method = init?.method ||
-      (input instanceof Request ? input.method : 'GET');
+      (input instanceof Request ? input.method : "GET");
     const rawBody = init?.body ??
       (input instanceof Request ? await input.clone().text() : null);
     const body = rawBody
@@ -5002,48 +6432,48 @@ function operatorFetchMock(
       : null;
     options.calls?.push({ url, method, body });
 
-    if (url === 'https://supabase.test/auth/v1/user') {
+    if (url === "https://supabase.test/auth/v1/user") {
       return jsonResponse({
         id: OPERATOR_USER_ID,
-        email: 'operator@example.com',
+        email: "operator@example.com",
         user_metadata: {},
       });
     }
-    if (url.includes('/rest/v1/users?') && url.includes('select=id')) {
+    if (url.includes("/rest/v1/users?") && url.includes("select=id")) {
       return jsonResponse([{ id: OPERATOR_USER_ID }]);
     }
-    if (url.includes('/rest/v1/users?') && url.includes('select=tier')) {
-      return jsonResponse([{ tier: 'pro' }]);
+    if (url.includes("/rest/v1/users?") && url.includes("select=tier")) {
+      return jsonResponse([{ tier: "pro" }]);
     }
-    if (url.startsWith('https://supabase.test/rest/v1/users?')) {
+    if (url.startsWith("https://supabase.test/rest/v1/users?")) {
       return jsonResponse([{
         id: OPERATOR_USER_ID,
-        display_name: 'Operator',
-        profile_slug: 'operator',
+        display_name: "Operator",
+        profile_slug: "operator",
         avatar_url: null,
       }]);
     }
-    if (url.startsWith('https://supabase.test/rest/v1/apps?')) {
+    if (url.startsWith("https://supabase.test/rest/v1/apps?")) {
       const parsed = new URL(url);
-      if (parsed.searchParams.get('select') === 'id') {
+      if (parsed.searchParams.get("select") === "id") {
         return jsonResponse([{ id: HOME_APP_ID }]);
       }
       return jsonResponse([operatorTestApp()]);
     }
     if (
       url.startsWith(
-        'https://supabase.test/rest/v1/user_notifications?',
+        "https://supabase.test/rest/v1/user_notifications?",
       )
     ) {
       const headers = new Headers(
         init?.headers ?? (input instanceof Request ? input.headers : undefined),
       );
-      if (headers.get('Prefer') === 'count=exact') {
-        return new Response('[]', {
+      if (headers.get("Prefer") === "count=exact") {
+        return new Response("[]", {
           status: 200,
           headers: {
-            'Content-Type': 'application/json',
-            'Content-Range': '0-0/1',
+            "Content-Type": "application/json",
+            "Content-Range": "0-0/1",
           },
         });
       }
@@ -5051,50 +6481,50 @@ function operatorFetchMock(
         id: OPERATOR_ALERT_ID,
         user_id: OPERATOR_USER_ID,
         agent_id: HOME_APP_ID,
-        kind: 'routine_error',
-        severity: 'warning',
-        title: 'Inbox checks stopped',
-        body: 'The inbox credential needs attention.',
-        entity_type: 'routine',
+        kind: "routine_error",
+        severity: "warning",
+        title: "Inbox checks stopped",
+        body: "The inbox credential needs attention.",
+        entity_type: "routine",
         entity_id: HOME_ROUTINE_ID,
         action_url: null,
-        item_class: 'incident',
+        item_class: "incident",
         requires_action: true,
-        lifecycle_state: 'open',
-        state_changed_at: '2026-07-23T17:58:00.000Z',
+        lifecycle_state: "open",
+        state_changed_at: "2026-07-23T17:58:00.000Z",
         snoozed_until: null,
         resolved_at: null,
         resolution_reason: null,
         archived_at: null,
-        created_at: '2026-07-23T17:58:00.000Z',
-        read_at: '2026-07-23T17:59:00.000Z',
+        created_at: "2026-07-23T17:58:00.000Z",
+        read_at: "2026-07-23T17:59:00.000Z",
       }]);
     }
     if (
       url.startsWith(
-        'https://supabase.test/rest/v1/notification_briefs?',
+        "https://supabase.test/rest/v1/notification_briefs?",
       )
     ) {
       return jsonResponse([]);
     }
     if (
       url.startsWith(
-        'https://supabase.test/rest/v1/user_agent_interface_preferences?',
+        "https://supabase.test/rest/v1/user_agent_interface_preferences?",
       )
     ) {
       return jsonResponse(
         options.favoriteInitialized
-          ? [{ interface_id: 'inbox', position: 0 }]
+          ? [{ interface_id: "inbox", position: 0 }]
           : [],
       );
     }
     if (
       url.startsWith(
-        'https://supabase.test/rest/v1/user_agent_preferences?',
+        "https://supabase.test/rest/v1/user_agent_preferences?",
       )
     ) {
-      const select = new URL(url).searchParams.get('select') || '';
-      if (select.includes('fleet_position')) {
+      const select = new URL(url).searchParams.get("select") || "";
+      if (select.includes("fleet_position")) {
         return jsonResponse([{
           agent_id: HOME_APP_ID,
           fleet_position: 0,
@@ -5103,89 +6533,89 @@ function operatorFetchMock(
       return jsonResponse([{
         revision: options.favoriteInitialized ? 2 : 1,
         favorites_initialized_at: options.favoriteInitialized
-          ? '2026-07-23T17:00:00.000Z'
+          ? "2026-07-23T17:00:00.000Z"
           : null,
         favorites_explicit: options.favoriteInitialized === true,
-        updated_at: '2026-07-23T17:00:00.000Z',
+        updated_at: "2026-07-23T17:00:00.000Z",
       }]);
     }
     if (
       url.startsWith(
-        'https://supabase.test/rest/v1/user_fleet_preferences?',
+        "https://supabase.test/rest/v1/user_fleet_preferences?",
       )
     ) {
       return jsonResponse([{
         revision: 4,
         shortcuts_enabled: true,
-        shortcut_map: { search: 'k', alerts: 'a' },
-        updated_at: '2026-07-23T17:00:00.000Z',
+        shortcut_map: { search: "k", alerts: "a" },
+        updated_at: "2026-07-23T17:00:00.000Z",
       }]);
     }
-    if (url.startsWith('https://supabase.test/rest/v1/rpc/')) {
-      const name = url.slice(url.lastIndexOf('/') + 1);
+    if (url.startsWith("https://supabase.test/rest/v1/rpc/")) {
+      const name = url.slice(url.lastIndexOf("/") + 1);
       const custom = options.rpc?.(name, body || {});
       if (custom) return custom;
-      if (name === 'get_user_agent_interface_favorites_snapshot') {
+      if (name === "get_user_agent_interface_favorites_snapshot") {
         return jsonResponse([{
           revision: options.favoriteInitialized ? 2 : 1,
-          favorite_interface_ids: options.favoriteInitialized ? ['inbox'] : [],
+          favorite_interface_ids: options.favoriteInitialized ? ["inbox"] : [],
           favorites_initialized_at: options.favoriteInitialized
-            ? '2026-07-23T17:00:00.000Z'
+            ? "2026-07-23T17:00:00.000Z"
             : null,
           favorites_explicit: options.favoriteInitialized === true,
-          updated_at: '2026-07-23T17:00:00.000Z',
+          updated_at: "2026-07-23T17:00:00.000Z",
         }]);
       }
-      if (name === 'get_user_fleet_preferences_snapshot') {
+      if (name === "get_user_fleet_preferences_snapshot") {
         return jsonResponse([{
           revision: 4,
           shortcuts_enabled: true,
-          shortcut_map: { search: 'k', alerts: 'a' },
-          updated_at: '2026-07-23T17:00:00.000Z',
+          shortcut_map: { search: "k", alerts: "a" },
+          updated_at: "2026-07-23T17:00:00.000Z",
           ordered_agent_ids: [HOME_APP_ID],
           ordered_fleet_positions: [0],
         }]);
       }
-      if (name === 'initialize_user_agent_interface_favorites') {
+      if (name === "initialize_user_agent_interface_favorites") {
         return jsonResponse([{
           revision: 2,
-          favorite_interface_ids: ['inbox'],
-          initialized_at: '2026-07-23T17:00:00.000Z',
+          favorite_interface_ids: ["inbox"],
+          initialized_at: "2026-07-23T17:00:00.000Z",
           explicit_choice: false,
           initialized_now: true,
         }]);
       }
-      if (name === 'get_agent_home_revision') {
-        return jsonResponse('7');
+      if (name === "get_agent_home_revision") {
+        return jsonResponse("7");
       }
       if (
-        name === 'get_owner_attention_page' ||
-        name === 'get_agent_attention_page'
+        name === "get_owner_attention_page" ||
+        name === "get_agent_attention_page"
       ) {
         return jsonResponse([{
           notifications: [{
             id: OPERATOR_ALERT_ID,
             user_id: OPERATOR_USER_ID,
             agent_id: HOME_APP_ID,
-            kind: 'routine_error',
-            severity: 'warning',
-            title: 'Inbox checks stopped',
-            body: 'The inbox credential needs attention.',
-            entity_type: 'routine',
+            kind: "routine_error",
+            severity: "warning",
+            title: "Inbox checks stopped",
+            body: "The inbox credential needs attention.",
+            entity_type: "routine",
             entity_id: HOME_ROUTINE_ID,
             action_url: null,
-            item_class: 'incident',
+            item_class: "incident",
             requires_action: true,
-            lifecycle_state: 'open',
-            state_changed_at: '2026-07-23T17:58:00.000Z',
+            lifecycle_state: "open",
+            state_changed_at: "2026-07-23T17:58:00.000Z",
             snoozed_until: null,
             resolved_at: null,
             resolution_reason: null,
             archived_at: null,
-            created_at: '2026-07-23T17:58:00.000Z',
-            read_at: '2026-07-23T17:59:00.000Z',
+            created_at: "2026-07-23T17:58:00.000Z",
+            read_at: "2026-07-23T17:59:00.000Z",
           }],
-          ...(name === 'get_owner_attention_page'
+          ...(name === "get_owner_attention_page"
             ? {
               per_agent_counts: [{
                 agent_id: HOME_APP_ID,
@@ -5200,69 +6630,69 @@ function operatorFetchMock(
           next_before_id: null,
         }]);
       }
-      if (name === 'replace_user_agent_interface_favorites') {
+      if (name === "replace_user_agent_interface_favorites") {
         return jsonResponse([{
           new_revision: 3,
           favorite_interface_ids: body?.p_interface_ids,
-          initialized_at: '2026-07-23T17:00:00.000Z',
+          initialized_at: "2026-07-23T17:00:00.000Z",
         }]);
       }
-      if (name === 'replace_user_fleet_order') {
+      if (name === "replace_user_fleet_order") {
         return jsonResponse([{
           new_revision: 5,
           ordered_agent_ids: body?.p_agent_ids,
         }]);
       }
-      if (name === 'replace_user_fleet_shortcuts') {
+      if (name === "replace_user_fleet_shortcuts") {
         return jsonResponse([{
           new_revision: 5,
           shortcuts_enabled: body?.p_shortcuts_enabled,
           shortcut_map: body?.p_shortcut_map,
         }]);
       }
-      if (name === 'get_launch_agent_activity') {
+      if (name === "get_launch_agent_activity") {
         return jsonResponse([
           {
             item_key: `notification:${OPERATOR_ALERT_ID}`,
-            phase: 'recent',
-            kind: 'incident',
-            title: 'Inbox checks stopped',
-            summary: 'The inbox credential needs attention.',
-            status: 'open',
-            event_at: '2026-07-23T17:58:00.000Z',
+            phase: "recent",
+            kind: "incident",
+            title: "Inbox checks stopped",
+            summary: "The inbox credential needs attention.",
+            status: "open",
+            event_at: "2026-07-23T17:58:00.000Z",
             routine_id: HOME_ROUTINE_ID,
             source_id: OPERATOR_ALERT_ID,
             detail_url:
               `/agents/home-agent?pane=alerts&item=${OPERATOR_ALERT_ID}`,
           },
           {
-            item_key: 'compute:77777777-7777-4777-8777-777777777777',
-            phase: 'recent',
-            kind: 'compute_run',
-            title: 'Compute · reconcile',
+            item_key: "compute:77777777-7777-4777-8777-777777777777",
+            phase: "recent",
+            kind: "compute_run",
+            title: "Compute · reconcile",
             summary: null,
-            status: 'succeeded',
-            event_at: '2026-07-23T17:57:00.000Z',
+            status: "succeeded",
+            event_at: "2026-07-23T17:57:00.000Z",
             routine_id: null,
-            source_id: '77777777-7777-4777-8777-777777777777',
+            source_id: "77777777-7777-4777-8777-777777777777",
             detail_url:
-              '/agents/home-agent?pane=compute&item=77777777-7777-4777-8777-777777777777',
+              "/agents/home-agent?pane=compute&item=77777777-7777-4777-8777-777777777777",
           },
         ]);
       }
-      if (name === 'get_launch_fleet_snapshot') {
+      if (name === "get_launch_fleet_snapshot") {
         return jsonResponse([operatorFleetRow()]);
       }
-      if (name === 'get_account_capacity_status') {
+      if (name === "get_account_capacity_status") {
         return jsonResponse([{
-          plan_code: 'pro',
+          plan_code: "pro",
           limits_public: false,
           active_agent_limit: null,
-          capacity_state: 'available',
-          burst_state: 'available',
-          weekly_state: 'available',
-          burst_resets_at: '2026-07-23T20:00:00.000Z',
-          weekly_resets_at: '2026-07-27T00:00:00.000Z',
+          capacity_state: "available",
+          burst_state: "available",
+          weekly_state: "available",
+          burst_resets_at: "2026-07-23T20:00:00.000Z",
+          weekly_resets_at: "2026-07-27T00:00:00.000Z",
           next_eligible_at: null,
           burst_limit_light: 100,
           burst_used_light: 10,
@@ -5278,25 +6708,25 @@ function operatorFetchMock(
 
 function operatorRequest(
   path: string,
-  method = 'GET',
+  method = "GET",
   body?: Record<string, unknown>,
 ): Request {
   return new Request(`https://ultralight.test${path}`, {
     method,
     headers: {
-      Authorization: 'Bearer browser-session-token',
-      ...(body ? { 'Content-Type': 'application/json' } : {}),
+      Authorization: "Bearer browser-session-token",
+      ...(body ? { "Content-Type": "application/json" } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
   });
 }
 
-Deno.test('launch operator preferences auto-favorite the first stable Interface once', async () => {
-  const calls: NonNullable<OperatorFetchOptions['calls']> = [];
+Deno.test("launch operator preferences auto-favorite the first stable Interface once", async () => {
+  const calls: NonNullable<OperatorFetchOptions["calls"]> = [];
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
-        operatorRequest('/api/launch/agents/home-agent/preferences'),
+        operatorRequest("/api/launch/agents/home-agent/preferences"),
       );
       const body = await response.json() as {
         preferences?: {
@@ -5308,37 +6738,37 @@ Deno.test('launch operator preferences auto-favorite the first stable Interface 
       };
 
       assertEquals(response.status, 200);
-      assertEquals(body.preferences?.favoriteInterfaceIds, ['inbox']);
+      assertEquals(body.preferences?.favoriteInterfaceIds, ["inbox"]);
       assertEquals(body.preferences?.favoritesInitialized, true);
       assertEquals(body.preferences?.favoritesExplicit, false);
-      assertStringIncludes(body.preferences?.revision || '', HOME_APP_ID);
-      assertEquals(response.headers.get('cache-control'), 'private, no-store');
+      assertStringIncludes(body.preferences?.revision || "", HOME_APP_ID);
+      assertEquals(response.headers.get("cache-control"), "private, no-store");
       const initialization = calls.find((call) =>
         call.url.endsWith(
-          '/rest/v1/rpc/initialize_user_agent_interface_favorites',
+          "/rest/v1/rpc/initialize_user_agent_interface_favorites",
         )
       );
       assertEquals(initialization?.body, {
         p_user_id: OPERATOR_USER_ID,
         p_agent_id: HOME_APP_ID,
-        p_manifest_interface_ids: ['inbox', 'report'],
+        p_manifest_interface_ids: ["inbox", "report"],
       });
     },
     operatorFetchMock({ calls }),
   );
 });
 
-Deno.test('launch operator preferences strictly replace only available favorites', async () => {
-  const calls: NonNullable<OperatorFetchOptions['calls']> = [];
+Deno.test("launch operator preferences strictly replace only available favorites", async () => {
+  const calls: NonNullable<OperatorFetchOptions["calls"]> = [];
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         operatorRequest(
-          '/api/launch/agents/home-agent/preferences',
-          'PATCH',
+          "/api/launch/agents/home-agent/preferences",
+          "PATCH",
           {
             expectedRevision: `agent-preference-v1:${HOME_APP_ID}:2`,
-            favoriteInterfaceIds: ['report'],
+            favoriteInterfaceIds: ["report"],
             favoritesInitialized: true,
           },
         ),
@@ -5347,22 +6777,22 @@ Deno.test('launch operator preferences strictly replace only available favorites
         preferences?: { favoriteInterfaceIds?: string[] };
       };
       assertEquals(response.status, 200);
-      assertEquals(body.preferences?.favoriteInterfaceIds, ['report']);
+      assertEquals(body.preferences?.favoriteInterfaceIds, ["report"]);
       const replacement = calls.find((call) =>
         call.url.endsWith(
-          '/rest/v1/rpc/replace_user_agent_interface_favorites',
+          "/rest/v1/rpc/replace_user_agent_interface_favorites",
         )
       );
-      assertEquals(replacement?.body?.p_expected_revision, '2');
+      assertEquals(replacement?.body?.p_expected_revision, "2");
       assertEquals(replacement?.body?.p_user_id, OPERATOR_USER_ID);
 
       const invalid = await handleLaunch(
         operatorRequest(
-          '/api/launch/agents/home-agent/preferences',
-          'PATCH',
+          "/api/launch/agents/home-agent/preferences",
+          "PATCH",
           {
             expectedRevision: `agent-preference-v1:${HOME_APP_ID}:3`,
-            favoriteInterfaceIds: ['not-in-the-release'],
+            favoriteInterfaceIds: ["not-in-the-release"],
             favoritesInitialized: true,
           },
         ),
@@ -5373,16 +6803,16 @@ Deno.test('launch operator preferences strictly replace only available favorites
   );
 });
 
-Deno.test('launch operator preference conflicts return only an opaque current revision', async () => {
+Deno.test("launch operator preference conflicts return only an opaque current revision", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         operatorRequest(
-          '/api/launch/agents/home-agent/preferences',
-          'PATCH',
+          "/api/launch/agents/home-agent/preferences",
+          "PATCH",
           {
             expectedRevision: `agent-preference-v1:${HOME_APP_ID}:2`,
-            favoriteInterfaceIds: ['inbox'],
+            favoriteInterfaceIds: ["inbox"],
             favoritesInitialized: true,
           },
         ),
@@ -5393,7 +6823,7 @@ Deno.test('launch operator preference conflicts return only an opaque current re
         details?: unknown;
       };
       assertEquals(response.status, 412);
-      assertEquals(body.code, 'AGENT_OPERATOR_REVISION_CONFLICT');
+      assertEquals(body.code, "AGENT_OPERATOR_REVISION_CONFLICT");
       assertEquals(
         body.currentRevision,
         `agent-preference-v1:${HOME_APP_ID}:9`,
@@ -5403,14 +6833,14 @@ Deno.test('launch operator preference conflicts return only an opaque current re
     operatorFetchMock({
       favoriteInitialized: true,
       rpc: (name) =>
-        name === 'replace_user_agent_interface_favorites'
+        name === "replace_user_agent_interface_favorites"
           ? jsonResponse({
-            code: 'P0001',
-            message: 'agent_preference_revision_conflict',
+            code: "P0001",
+            message: "agent_preference_revision_conflict",
             details: JSON.stringify({
               currentRevision: 9,
               expectedRevision: 2,
-              privateDatabaseDetail: 'must-not-leak',
+              privateDatabaseDetail: "must-not-leak",
             }),
           }, 400)
           : undefined,
@@ -5418,12 +6848,12 @@ Deno.test('launch operator preference conflicts return only an opaque current re
   );
 });
 
-Deno.test('launch Fleet order is a strict owner-scoped zero-based CAS mutation', async () => {
-  const calls: NonNullable<OperatorFetchOptions['calls']> = [];
+Deno.test("launch Fleet order is a strict owner-scoped zero-based CAS mutation", async () => {
+  const calls: NonNullable<OperatorFetchOptions["calls"]> = [];
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
-        operatorRequest('/api/launch/fleet/order', 'PUT', {
+        operatorRequest("/api/launch/fleet/order", "PUT", {
           agentIds: [HOME_APP_ID],
           expectedRevision: `fleet-preference-v1:${OPERATOR_USER_ID}:4`,
         }),
@@ -5442,21 +6872,21 @@ Deno.test('launch Fleet order is a strict owner-scoped zero-based CAS mutation',
         `fleet-preference-v1:${OPERATOR_USER_ID}:5`,
       );
       const replacement = calls.find((call) =>
-        call.url.endsWith('/rest/v1/rpc/replace_user_fleet_order')
+        call.url.endsWith("/rest/v1/rpc/replace_user_fleet_order")
       );
       assertEquals(replacement?.body?.p_user_id, OPERATOR_USER_ID);
-      assertEquals(replacement?.body?.p_expected_revision, '4');
-      assertEquals(response.headers.get('cache-control'), 'private, no-store');
+      assertEquals(replacement?.body?.p_expected_revision, "4");
+      assertEquals(response.headers.get("cache-control"), "private, no-store");
     },
     operatorFetchMock({ calls }),
   );
 });
 
-Deno.test('launch Fleet order conflicts return the opaque current revision', async () => {
+Deno.test("launch Fleet order conflicts return the opaque current revision", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
-        operatorRequest('/api/launch/fleet/order', 'PUT', {
+        operatorRequest("/api/launch/fleet/order", "PUT", {
           agentIds: [HOME_APP_ID],
           expectedRevision: `fleet-preference-v1:${OPERATOR_USER_ID}:4`,
         }),
@@ -5467,7 +6897,7 @@ Deno.test('launch Fleet order conflicts return the opaque current revision', asy
         details?: unknown;
       };
       assertEquals(response.status, 412);
-      assertEquals(body.code, 'AGENT_OPERATOR_REVISION_CONFLICT');
+      assertEquals(body.code, "AGENT_OPERATOR_REVISION_CONFLICT");
       assertEquals(
         body.currentRevision,
         `fleet-preference-v1:${OPERATOR_USER_ID}:9`,
@@ -5476,14 +6906,14 @@ Deno.test('launch Fleet order conflicts return the opaque current revision', asy
     },
     operatorFetchMock({
       rpc: (name) =>
-        name === 'replace_user_fleet_order'
+        name === "replace_user_fleet_order"
           ? jsonResponse({
-            code: 'P0001',
-            message: 'fleet_preference_revision_conflict',
+            code: "P0001",
+            message: "fleet_preference_revision_conflict",
             details: JSON.stringify({
               currentRevision: 9,
               expectedRevision: 4,
-              privateDatabaseDetail: 'must-not-leak',
+              privateDatabaseDetail: "must-not-leak",
             }),
           }, 400)
           : undefined,
@@ -5491,12 +6921,12 @@ Deno.test('launch Fleet order conflicts return the opaque current revision', asy
   );
 });
 
-Deno.test('launch Fleet shortcut preferences are private and share the Fleet CAS', async () => {
-  const calls: NonNullable<OperatorFetchOptions['calls']> = [];
+Deno.test("launch Fleet shortcut preferences are private and share the Fleet CAS", async () => {
+  const calls: NonNullable<OperatorFetchOptions["calls"]> = [];
   await withLaunchEnv(
     async () => {
       const read = await handleLaunch(
-        operatorRequest('/api/launch/fleet/preferences'),
+        operatorRequest("/api/launch/fleet/preferences"),
       );
       const current = await read.json() as {
         preferences?: {
@@ -5513,16 +6943,16 @@ Deno.test('launch Fleet shortcut preferences are private and share the Fleet CAS
       );
       assertEquals(current.preferences?.shortcutsEnabled, true);
       assertEquals(current.preferences?.shortcutMap, {
-        search: 'k',
-        alerts: 'a',
+        search: "k",
+        alerts: "a",
       });
       assertEquals(current.preferences?.positions, undefined);
 
       const update = await handleLaunch(
-        operatorRequest('/api/launch/fleet/preferences', 'PATCH', {
+        operatorRequest("/api/launch/fleet/preferences", "PATCH", {
           expectedRevision: `fleet-preference-v1:${OPERATOR_USER_ID}:4`,
           shortcutsEnabled: false,
-          shortcutMap: { search: 'G', alerts: null },
+          shortcutMap: { search: "G", alerts: null },
         }),
       );
       const updated = await update.json() as {
@@ -5539,50 +6969,50 @@ Deno.test('launch Fleet shortcut preferences are private and share the Fleet CAS
       );
       assertEquals(updated.preferences?.shortcutsEnabled, false);
       assertEquals(updated.preferences?.shortcutMap, {
-        search: 'g',
+        search: "g",
         alerts: null,
       });
       const replacement = calls.find((call) =>
-        call.url.endsWith('/rest/v1/rpc/replace_user_fleet_shortcuts')
+        call.url.endsWith("/rest/v1/rpc/replace_user_fleet_shortcuts")
       );
       assertEquals(replacement?.body, {
         p_user_id: OPERATOR_USER_ID,
         p_shortcuts_enabled: false,
-        p_shortcut_map: { search: 'g', alerts: null },
-        p_expected_revision: '4',
+        p_shortcut_map: { search: "g", alerts: null },
+        p_expected_revision: "4",
       });
-      assertEquals(update.headers.get('cache-control'), 'private, no-store');
+      assertEquals(update.headers.get("cache-control"), "private, no-store");
     },
     operatorFetchMock({ calls }),
   );
 });
 
-Deno.test('launch Fleet shortcut preferences reject unknown, conflicting, and stale updates', async () => {
+Deno.test("launch Fleet shortcut preferences reject unknown, conflicting, and stale updates", async () => {
   await withLaunchEnv(
     async () => {
       const unknown = await handleLaunch(
-        operatorRequest('/api/launch/fleet/preferences', 'PATCH', {
+        operatorRequest("/api/launch/fleet/preferences", "PATCH", {
           expectedRevision: `fleet-preference-v1:${OPERATOR_USER_ID}:4`,
           shortcutsEnabled: true,
-          shortcutMap: { back: 'x' },
+          shortcutMap: { back: "x" },
         }),
       );
       assertEquals(unknown.status, 400);
 
       const collision = await handleLaunch(
-        operatorRequest('/api/launch/fleet/preferences', 'PATCH', {
+        operatorRequest("/api/launch/fleet/preferences", "PATCH", {
           expectedRevision: `fleet-preference-v1:${OPERATOR_USER_ID}:4`,
           shortcutsEnabled: true,
-          shortcutMap: { search: 'a' },
+          shortcutMap: { search: "a" },
         }),
       );
       assertEquals(collision.status, 400);
 
       const stale = await handleLaunch(
-        operatorRequest('/api/launch/fleet/preferences', 'PATCH', {
+        operatorRequest("/api/launch/fleet/preferences", "PATCH", {
           expectedRevision: `fleet-preference-v1:${OPERATOR_USER_ID}:4`,
           shortcutsEnabled: true,
-          shortcutMap: { search: '/' },
+          shortcutMap: { search: "/" },
         }),
       );
       const body = await stale.json() as {
@@ -5591,7 +7021,7 @@ Deno.test('launch Fleet shortcut preferences reject unknown, conflicting, and st
         details?: unknown;
       };
       assertEquals(stale.status, 412);
-      assertEquals(body.code, 'AGENT_OPERATOR_REVISION_CONFLICT');
+      assertEquals(body.code, "AGENT_OPERATOR_REVISION_CONFLICT");
       assertEquals(
         body.currentRevision,
         `fleet-preference-v1:${OPERATOR_USER_ID}:9`,
@@ -5600,14 +7030,14 @@ Deno.test('launch Fleet shortcut preferences reject unknown, conflicting, and st
     },
     operatorFetchMock({
       rpc: (name) =>
-        name === 'replace_user_fleet_shortcuts'
+        name === "replace_user_fleet_shortcuts"
           ? jsonResponse({
-            code: 'P0001',
-            message: 'fleet_preference_revision_conflict',
+            code: "P0001",
+            message: "fleet_preference_revision_conflict",
             details: JSON.stringify({
               currentRevision: 9,
               expectedRevision: 4,
-              privateDatabaseDetail: 'must-not-leak',
+              privateDatabaseDetail: "must-not-leak",
             }),
           }, 400)
           : undefined,
@@ -5615,8 +7045,8 @@ Deno.test('launch Fleet shortcut preferences reject unknown, conflicting, and st
   );
 });
 
-Deno.test('launch search strictly parses owner-private navigation queries', async () => {
-  const calls: NonNullable<OperatorFetchOptions['calls']> = [];
+Deno.test("launch search strictly parses owner-private navigation queries", async () => {
+  const calls: NonNullable<OperatorFetchOptions["calls"]> = [];
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
@@ -5643,51 +7073,51 @@ Deno.test('launch search strictly parses owner-private navigation queries', asyn
       };
 
       assertEquals(response.status, 200);
-      assertEquals(body.query, 'send reply');
+      assertEquals(body.query, "send reply");
       assertEquals(body.results, [{
         id: OPERATOR_ALERT_ID,
-        kind: 'function',
+        kind: "function",
         agent: {
           id: HOME_APP_ID,
-          slug: 'home-agent',
-          name: 'Home Agent',
+          slug: "home-agent",
+          name: "Home Agent",
         },
-        title: 'Inspect',
-        summary: 'Inspect the system.',
+        title: "Inspect",
+        summary: "Inspect the system.",
         destination: {
-          href: '/agents/home-agent?pane=functions&item=inspect',
+          href: "/agents/home-agent?pane=functions&item=inspect",
           agentId: HOME_APP_ID,
-          pane: 'functions',
-          itemId: 'inspect',
+          pane: "functions",
+          itemId: "inspect",
         },
         score: 9.5,
       }]);
       const lexical = calls.find((call) =>
-        call.url.endsWith('/rest/v1/rpc/search_agent_documents')
+        call.url.endsWith("/rest/v1/rpc/search_agent_documents")
       );
       assertEquals(lexical?.body, {
         p_user_id: OPERATOR_USER_ID,
-        p_query: 'send reply',
+        p_query: "send reply",
         p_limit: 7,
         p_agent_id: HOME_APP_ID,
-        p_subject_types: ['function'],
+        p_subject_types: ["function"],
       });
-      assertEquals(response.headers.get('cache-control'), 'private, no-store');
+      assertEquals(response.headers.get("cache-control"), "private, no-store");
     },
     operatorFetchMock({
       calls,
       rpc: (name) =>
-        name === 'search_agent_documents'
+        name === "search_agent_documents"
           ? jsonResponse([{
             document_id: OPERATOR_ALERT_ID,
             agent_id: HOME_APP_ID,
-            agent_slug: 'home-agent',
-            subject_type: 'function',
-            subject_id: 'inspect',
-            title: 'Inspect',
-            breadcrumb: 'Home Agent / Functions',
-            snippet: 'Inspect the system.',
-            route: '/agents/home-agent?pane=functions&item=inspect',
+            agent_slug: "home-agent",
+            subject_type: "function",
+            subject_id: "inspect",
+            title: "Inspect",
+            breadcrumb: "Home Agent / Functions",
+            snippet: "Inspect the system.",
+            route: "/agents/home-agent?pane=functions&item=inspect",
             rank: 9.5,
           }])
           : undefined,
@@ -5695,27 +7125,27 @@ Deno.test('launch search strictly parses owner-private navigation queries', asyn
   );
 });
 
-Deno.test('launch search rejects unknown, duplicate, and malformed query parameters before retrieval', async () => {
-  const calls: NonNullable<OperatorFetchOptions['calls']> = [];
+Deno.test("launch search rejects unknown, duplicate, and malformed query parameters before retrieval", async () => {
+  const calls: NonNullable<OperatorFetchOptions["calls"]> = [];
   await withLaunchEnv(
     async () => {
       const paths = [
-        '/api/launch/search?q=mail&cursor=opaque',
-        '/api/launch/search?q=mail&q=reply',
-        '/api/launch/search?q=mail&kinds=agent,agent',
-        '/api/launch/search?q=mail&limit=01',
+        "/api/launch/search?q=mail&cursor=opaque",
+        "/api/launch/search?q=mail&q=reply",
+        "/api/launch/search?q=mail&kinds=agent,agent",
+        "/api/launch/search?q=mail&limit=01",
       ];
       for (const path of paths) {
         const response = await handleLaunch(operatorRequest(path));
         assertEquals(response.status, 400, path);
         assertEquals(
-          response.headers.get('cache-control'),
-          'private, no-store',
+          response.headers.get("cache-control"),
+          "private, no-store",
         );
       }
       assertEquals(
         calls.some((call) =>
-          call.url.endsWith('/rest/v1/rpc/search_agent_documents')
+          call.url.endsWith("/rest/v1/rpc/search_agent_documents")
         ),
         false,
       );
@@ -5724,11 +7154,11 @@ Deno.test('launch search rejects unknown, duplicate, and malformed query paramet
   );
 });
 
-Deno.test('launch Agent Home uses unified Activity and does not duplicate open Attention', async () => {
+Deno.test("launch Agent Home uses unified Activity and does not duplicate open Attention", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
-        operatorRequest('/api/launch/agents/home-agent/home'),
+        operatorRequest("/api/launch/agents/home-agent/home"),
       );
       const body = await response.json() as {
         activity?: {
@@ -5752,17 +7182,17 @@ Deno.test('launch Agent Home uses unified Activity and does not duplicate open A
         ),
         false,
       );
-      assertEquals(body.activity?.recent?.[0]?.kind, 'compute_run');
+      assertEquals(body.activity?.recent?.[0]?.kind, "compute_run");
     },
     operatorFetchMock(),
   );
 });
 
-Deno.test('launch global Attention is enriched, owner-private, and keeps read incidents open', async () => {
+Deno.test("launch global Attention is enriched, owner-private, and keeps read incidents open", async () => {
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
-        operatorRequest('/api/launch/attention'),
+        operatorRequest("/api/launch/attention"),
       );
       const body = await response.json() as {
         entries?: Array<{
@@ -5788,35 +7218,35 @@ Deno.test('launch global Attention is enriched, owner-private, and keeps read in
       assertEquals(body.agentCounts, [{
         agent: {
           id: HOME_APP_ID,
-          slug: 'home-agent',
-          name: 'Home Agent',
+          slug: "home-agent",
+          name: "Home Agent",
         },
         openCount: 1,
         requiresDecisionCount: 1,
       }]);
       assertEquals(body.nextCursor, null);
-      assertEquals(body.entries?.[0]?.agent?.slug, 'home-agent');
+      assertEquals(body.entries?.[0]?.agent?.slug, "home-agent");
       assertEquals(
         body.entries?.[0]?.item?.notificationId,
         OPERATOR_ALERT_ID,
       );
-      assertEquals(body.entries?.[0]?.item?.lifecycle?.state, 'open');
+      assertEquals(body.entries?.[0]?.item?.lifecycle?.state, "open");
       assertEquals(
         body.entries?.[0]?.item?.lifecycle?.readAt,
-        '2026-07-23T17:59:00.000Z',
+        "2026-07-23T17:59:00.000Z",
       );
-      assertEquals(response.headers.get('cache-control'), 'private, no-store');
+      assertEquals(response.headers.get("cache-control"), "private, no-store");
     },
     operatorFetchMock(),
   );
 });
 
-Deno.test('launch global Attention shadow-reads canonical conditions without displacing legacy', async () => {
-  const calls: NonNullable<OperatorFetchOptions['calls']> = [];
+Deno.test("launch global Attention shadow-reads canonical conditions without displacing legacy", async () => {
+  const calls: NonNullable<OperatorFetchOptions["calls"]> = [];
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
-        operatorRequest('/api/launch/attention?limit=41'),
+        operatorRequest("/api/launch/attention?limit=41"),
       );
       const body = await response.json() as {
         readSource?: string;
@@ -5831,7 +7261,7 @@ Deno.test('launch global Attention shadow-reads canonical conditions without dis
       };
 
       assertEquals(response.status, 200);
-      assertEquals(body.readSource, 'legacy');
+      assertEquals(body.readSource, "legacy");
       assertEquals(body.entries?.length, 1);
       assertEquals(body.operatorItems?.openCount, 1);
       assertEquals(body.operatorItems?.requiresDecisionCount, 0);
@@ -5839,13 +7269,13 @@ Deno.test('launch global Attention shadow-reads canonical conditions without dis
       assertEquals(body.operatorItems?.items?.[0]?.item?.id, OPERATOR_ITEM_ID);
       assertEquals(
         body.operatorItems?.items?.[0]?.item?.conditionKey,
-        'account:byok',
+        "account:byok",
       );
       assertEquals(body.operatorItems?.agentCounts?.[0], {
         agent: {
           id: HOME_APP_ID,
-          slug: 'home-agent',
-          name: 'Home Agent',
+          slug: "home-agent",
+          name: "Home Agent",
         },
         openCount: 1,
         requiresDecisionCount: 0,
@@ -5853,12 +7283,12 @@ Deno.test('launch global Attention shadow-reads canonical conditions without dis
       });
       assertEquals(
         calls.some((call) =>
-          call.url.endsWith('/rest/v1/rpc/get_owner_attention_page')
+          call.url.endsWith("/rest/v1/rpc/get_owner_attention_page")
         ),
         true,
       );
       const canonicalCall = calls.find((call) =>
-        call.url.endsWith('/rest/v1/rpc/get_operator_attention_page')
+        call.url.endsWith("/rest/v1/rpc/get_operator_attention_page")
       );
       assertEquals(canonicalCall?.body?.p_user_id, OPERATOR_USER_ID);
       assertEquals(canonicalCall?.body?.p_agent_id, null);
@@ -5867,20 +7297,20 @@ Deno.test('launch global Attention shadow-reads canonical conditions without dis
     operatorFetchMock({
       calls,
       rpc: (name) =>
-        name === 'get_operator_attention_page'
+        name === "get_operator_attention_page"
           ? jsonResponse([operatorCanonicalAttentionSnapshot()])
           : undefined,
     }),
-    { OPERATOR_ATTENTION_READ_MODE: 'shadow' },
+    { OPERATOR_ATTENTION_READ_MODE: "shadow" },
   );
 });
 
-Deno.test('launch Agent Attention is atomically paged with exact counts', async () => {
-  const calls: NonNullable<OperatorFetchOptions['calls']> = [];
+Deno.test("launch Agent Attention is atomically paged with exact counts", async () => {
+  const calls: NonNullable<OperatorFetchOptions["calls"]> = [];
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
-        operatorRequest('/api/launch/agents/home-agent/attention?limit=37'),
+        operatorRequest("/api/launch/agents/home-agent/attention?limit=37"),
       );
       const body = await response.json() as {
         items?: Array<{ notificationId?: string }>;
@@ -5895,7 +7325,7 @@ Deno.test('launch Agent Attention is atomically paged with exact counts', async 
       assertEquals(body.requiresDecisionCount, 1);
       assertEquals(body.nextCursor, null);
       const pageCall = calls.find((call) =>
-        call.url.endsWith('/rest/v1/rpc/get_agent_attention_page')
+        call.url.endsWith("/rest/v1/rpc/get_agent_attention_page")
       );
       assertEquals(pageCall?.body, {
         p_user_id: OPERATOR_USER_ID,
@@ -5905,19 +7335,19 @@ Deno.test('launch Agent Attention is atomically paged with exact counts', async 
         p_before_created_at: null,
         p_before_id: null,
       });
-      assertEquals(response.headers.get('cache-control'), 'private, no-store');
+      assertEquals(response.headers.get("cache-control"), "private, no-store");
     },
     operatorFetchMock({ calls }),
   );
 });
 
-Deno.test('launch Agent activity is focused, paginated, canonical, and private', async () => {
-  const calls: NonNullable<OperatorFetchOptions['calls']> = [];
+Deno.test("launch Agent activity is focused, paginated, canonical, and private", async () => {
+  const calls: NonNullable<OperatorFetchOptions["calls"]> = [];
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         operatorRequest(
-          '/api/launch/agents/home-agent/home/activity?limit=3',
+          "/api/launch/agents/home-agent/home/activity?limit=3",
         ),
       );
       const body = await response.json() as {
@@ -5937,38 +7367,38 @@ Deno.test('launch Agent activity is focused, paginated, canonical, and private',
       };
       assertEquals(response.status, 200);
       assertEquals(body.agent?.id, HOME_APP_ID);
-      assertEquals(body.activity?.recent?.[0]?.kind, 'attention');
+      assertEquals(body.activity?.recent?.[0]?.kind, "attention");
       assertEquals(body.activity?.recent?.[0]?.destination, {
         href: `/agents/home-agent?pane=alerts&item=${OPERATOR_ALERT_ID}`,
         agentId: HOME_APP_ID,
-        pane: 'alerts',
+        pane: "alerts",
         itemId: OPERATOR_ALERT_ID,
       });
       assertEquals(body.nextCursor, null);
       const activityCall = calls.find((call) =>
-        call.url.endsWith('/rest/v1/rpc/get_launch_agent_activity')
+        call.url.endsWith("/rest/v1/rpc/get_launch_agent_activity")
       );
       assertEquals(activityCall?.body?.p_user_id, OPERATOR_USER_ID);
       assertEquals(activityCall?.body?.p_recent_limit, 4);
       assertEquals(activityCall?.body?.p_include_upcoming, true);
-      assertEquals(response.headers.get('cache-control'), 'private, no-store');
+      assertEquals(response.headers.get("cache-control"), "private, no-store");
     },
     operatorFetchMock({ calls }),
   );
 });
 
-Deno.test('launch Attention lifecycle actions are owner-scoped, canonical, and private', async () => {
-  const calls: NonNullable<OperatorFetchOptions['calls']> = [];
+Deno.test("launch Attention lifecycle actions are owner-scoped, canonical, and private", async () => {
+  const calls: NonNullable<OperatorFetchOptions["calls"]> = [];
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         operatorRequest(
           `/api/launch/notifications/${OPERATOR_ALERT_ID}/actions`,
-          'POST',
+          "POST",
           {
-            action: 'resolve',
-            idempotencyKey: 'attention-action-route-1',
-            resolutionReason: 'Credential restored',
+            action: "resolve",
+            idempotencyKey: "attention-action-route-1",
+            resolutionReason: "Credential restored",
           },
         ),
       );
@@ -5988,37 +7418,37 @@ Deno.test('launch Attention lifecycle actions are owner-scoped, canonical, and p
       assertEquals(body.ok, true);
       assertEquals(body.notificationId, OPERATOR_ALERT_ID);
       assertEquals(body.actionId, null);
-      assertEquals(body.lifecycle?.state, 'resolved');
-      assertEquals(body.lifecycle?.resolutionReason, 'Credential restored');
+      assertEquals(body.lifecycle?.state, "resolved");
+      assertEquals(body.lifecycle?.resolutionReason, "Credential restored");
       assertEquals(
         body.lifecycle?.resolvedAt,
-        '2026-07-23T18:00:00.000Z',
+        "2026-07-23T18:00:00.000Z",
       );
       assertEquals(body.destination, null);
-      assertEquals(response.headers.get('cache-control'), 'private, no-store');
+      assertEquals(response.headers.get("cache-control"), "private, no-store");
 
       const transition = calls.find((call) =>
-        call.url.endsWith('/rest/v1/rpc/transition_user_notification')
+        call.url.endsWith("/rest/v1/rpc/transition_user_notification")
       );
       assertEquals(transition?.body, {
         p_user_id: OPERATOR_USER_ID,
         p_notification_id: OPERATOR_ALERT_ID,
-        p_action: 'resolve',
+        p_action: "resolve",
         p_snoozed_until: null,
-        p_resolution_reason: 'Credential restored',
+        p_resolution_reason: "Credential restored",
       });
     },
     operatorFetchMock({
       calls,
       rpc: (name) =>
-        name === 'transition_user_notification'
+        name === "transition_user_notification"
           ? jsonResponse([{
             notification_id: OPERATOR_ALERT_ID,
-            item_class: 'incident',
-            lifecycle_state: 'resolved',
+            item_class: "incident",
+            lifecycle_state: "resolved",
             read_at: null,
             snoozed_until: null,
-            resolved_at: '2026-07-23T18:00:00.000Z',
+            resolved_at: "2026-07-23T18:00:00.000Z",
             archived_at: null,
           }])
           : undefined,
@@ -6026,40 +7456,40 @@ Deno.test('launch Attention lifecycle actions are owner-scoped, canonical, and p
   );
 });
 
-Deno.test('launch Attention actions reject arbitrary enriched execution before persistence', async () => {
-  const calls: NonNullable<OperatorFetchOptions['calls']> = [];
+Deno.test("launch Attention actions reject arbitrary enriched execution before persistence", async () => {
+  const calls: NonNullable<OperatorFetchOptions["calls"]> = [];
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         operatorRequest(
           `/api/launch/notifications/${OPERATOR_ALERT_ID}/actions`,
-          'POST',
+          "POST",
           {
-            action: 'execute_brief',
-            actionId: 'brief-action-not-allowlisted',
-            idempotencyKey: 'attention-action-route-2',
+            action: "execute_brief",
+            actionId: "brief-action-not-allowlisted",
+            idempotencyKey: "attention-action-route-2",
           },
         ),
       );
       assertEquals(response.status, 409);
       assertEquals(
         calls.some((call) =>
-          call.url.endsWith('/rest/v1/rpc/transition_user_notification')
+          call.url.endsWith("/rest/v1/rpc/transition_user_notification")
         ),
         false,
       );
-      assertEquals(response.headers.get('cache-control'), 'private, no-store');
+      assertEquals(response.headers.get("cache-control"), "private, no-store");
     },
     operatorFetchMock({ calls }),
   );
 });
 
-Deno.test('launch Fleet opts into operator v2 and preserves legacy fields', async () => {
-  const calls: NonNullable<OperatorFetchOptions['calls']> = [];
+Deno.test("launch Fleet opts into operator v2 and preserves legacy fields", async () => {
+  const calls: NonNullable<OperatorFetchOptions["calls"]> = [];
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
-        operatorRequest('/api/launch/fleet'),
+        operatorRequest("/api/launch/fleet"),
       );
       const body = await response.json() as {
         agents?: Array<{
@@ -6088,19 +7518,19 @@ Deno.test('launch Fleet opts into operator v2 and preserves legacy fields', asyn
 
       assertEquals(response.status, 200);
       assertEquals(body.agents?.[0]?.agent?.id, HOME_APP_ID);
-      assertEquals(body.agents?.[0]?.state, 'active');
+      assertEquals(body.agents?.[0]?.state, "active");
       assertEquals(body.agents?.[0]?.attentionCount, 1);
       assertEquals(body.agents?.[0]?.unreadAlertCount, 1);
       assertEquals(body.agents?.[0]?.recentActivity?.length, 1);
       assertEquals(body.agents?.[0]?.workingReadiness?.working, true);
-      assertEquals(body.agents?.[0]?.operatingSummary?.mode, 'scheduled');
+      assertEquals(body.agents?.[0]?.operatingSummary?.mode, "scheduled");
       assertEquals(
         body.agents?.[0]?.operatingSummary?.label,
-        'Next: Check inbox',
+        "Next: Check inbox",
       );
       assertEquals(
         body.agents?.[0]?.operatingSummary?.nextEventAt,
-        '2026-07-23T18:05:00.000Z',
+        "2026-07-23T18:05:00.000Z",
       );
       assertEquals(body.agents?.[0]?.fleetPosition, 0);
       assertEquals(body.workingSummary, {
@@ -6115,7 +7545,7 @@ Deno.test('launch Fleet opts into operator v2 and preserves legacy fields', asyn
         `fleet-preference-v1:${OPERATOR_USER_ID}:4`,
       );
       const snapshots = calls.filter((call) =>
-        call.url.endsWith('/rest/v1/rpc/get_launch_fleet_snapshot')
+        call.url.endsWith("/rest/v1/rpc/get_launch_fleet_snapshot")
       );
       assertEquals(snapshots.length, 1);
       assertEquals(snapshots[0].body, {
@@ -6123,34 +7553,34 @@ Deno.test('launch Fleet opts into operator v2 and preserves legacy fields', asyn
         p_include_operator_fields: true,
       });
       const ownedAppsRead = calls.find((call) => {
-        if (!call.url.startsWith('https://supabase.test/rest/v1/apps?')) {
+        if (!call.url.startsWith("https://supabase.test/rest/v1/apps?")) {
           return false;
         }
         const query = new URL(call.url).searchParams;
-        return query.get('owner_id') === `eq.${OPERATOR_USER_ID}` &&
-          query.get('select') !== 'id';
+        return query.get("owner_id") === `eq.${OPERATOR_USER_ID}` &&
+          query.get("select") !== "id";
       });
       assertEquals(
         ownedAppsRead &&
-          new URL(ownedAppsRead.url).searchParams.get('limit'),
-        '1000',
+          new URL(ownedAppsRead.url).searchParams.get("limit"),
+        "1000",
       );
-      assertEquals(response.headers.get('cache-control'), 'private, no-store');
+      assertEquals(response.headers.get("cache-control"), "private, no-store");
     },
     operatorFetchMock({ calls }),
   );
 });
 
-Deno.test('launch canonical Attention updates only owner presentation state', async () => {
-  const calls: NonNullable<OperatorFetchOptions['calls']> = [];
+Deno.test("launch canonical Attention updates only owner presentation state", async () => {
+  const calls: NonNullable<OperatorFetchOptions["calls"]> = [];
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         operatorRequest(
           `/api/launch/operator-items/${OPERATOR_ITEM_ID}/attention`,
-          'PATCH',
+          "PATCH",
           {
-            action: 'mark_read',
+            action: "mark_read",
           },
         ),
       );
@@ -6166,58 +7596,58 @@ Deno.test('launch canonical Attention updates only owner presentation state', as
       assertEquals(body, {
         itemId: OPERATOR_ITEM_ID,
         attention: {
-          state: 'open',
-          readAt: '2026-07-24T18:00:00.000Z',
+          state: "open",
+          readAt: "2026-07-24T18:00:00.000Z",
           snoozedUntil: null,
           dismissedAt: null,
         },
       });
-      assertEquals(response.headers.get('cache-control'), 'private, no-store');
+      assertEquals(response.headers.get("cache-control"), "private, no-store");
       const mutation = calls.find((call) =>
         call.url.endsWith(
-          '/rest/v1/rpc/apply_operator_item_attention_action',
+          "/rest/v1/rpc/apply_operator_item_attention_action",
         )
       );
       assertEquals(mutation?.body, {
         p_user_id: OPERATOR_USER_ID,
         p_item_id: OPERATOR_ITEM_ID,
-        p_action: 'mark_read',
+        p_action: "mark_read",
         p_snoozed_until: null,
       });
     },
     operatorFetchMock({
       calls,
       rpc: (name) =>
-        name === 'apply_operator_item_attention_action'
+        name === "apply_operator_item_attention_action"
           ? jsonResponse([{
             item_id: OPERATOR_ITEM_ID,
             user_id: OPERATOR_USER_ID,
-            state: 'open',
-            read_at: '2026-07-24T18:00:00.000Z',
+            state: "open",
+            read_at: "2026-07-24T18:00:00.000Z",
             snoozed_until: null,
             dismissed_at: null,
-            created_at: '2026-07-24T17:00:00.000Z',
-            updated_at: '2026-07-24T18:00:00.000Z',
+            created_at: "2026-07-24T17:00:00.000Z",
+            updated_at: "2026-07-24T18:00:00.000Z",
           }])
           : null,
     }),
   );
 });
 
-Deno.test('launch canonical Run once queues the exact server-owned remediation and leaves scheduling paused', async () => {
-  const calls: NonNullable<OperatorFetchOptions['calls']> = [];
-  const requestId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-  const runId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
-  const leaseToken = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
-  const idempotencyKey = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+Deno.test("launch canonical Run once queues the exact server-owned remediation and leaves scheduling paused", async () => {
+  const calls: NonNullable<OperatorFetchOptions["calls"]> = [];
+  const requestId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const runId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const leaseToken = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  const idempotencyKey = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
   await withLaunchEnv(
     async () => {
       const response = await handleLaunch(
         operatorRequest(
           `/api/launch/operator-items/${OPERATOR_ITEM_ID}/actions`,
-          'POST',
+          "POST",
           {
-            remediationId: 'run_once:canonical',
+            remediationId: "run_once:canonical",
             idempotencyKey,
             expectedRevision: `ah1:${HOME_APP_ID}:7`,
           },
@@ -6227,16 +7657,16 @@ Deno.test('launch canonical Run once queues the exact server-owned remediation a
 
       assertEquals(response.status, 202);
       assertEquals(body.itemId, OPERATOR_ITEM_ID);
-      assertEquals(body.remediationId, 'run_once:canonical');
-      assertEquals(body.action, 'run_once');
+      assertEquals(body.remediationId, "run_once:canonical");
+      assertEquals(body.action, "run_once");
       assertEquals(body.runId, runId);
-      assertEquals(body.scheduleState, 'paused');
+      assertEquals(body.scheduleState, "paused");
       assertEquals(body.replayed, false);
-      assertEquals(response.headers.get('cache-control'), 'private, no-store');
+      assertEquals(response.headers.get("cache-control"), "private, no-store");
 
       const queue = calls.find((call) =>
         call.url.endsWith(
-          '/rest/v1/rpc/queue_operator_item_routine_run_once',
+          "/rest/v1/rpc/queue_operator_item_routine_run_once",
         )
       );
       assertEquals(queue?.body, {
@@ -6245,47 +7675,47 @@ Deno.test('launch canonical Run once queues the exact server-owned remediation a
         p_user_id: OPERATOR_USER_ID,
         p_routine_id: HOME_ROUTINE_ID,
         p_item_id: OPERATOR_ITEM_ID,
-        p_remediation_id: 'run_once:canonical',
+        p_remediation_id: "run_once:canonical",
         p_lease_token: leaseToken,
-        p_expected_revision: '7',
+        p_expected_revision: "7",
       });
     },
     operatorFetchMock({
       calls,
       rpc: (name, body) => {
-        if (name === 'resolve_operator_item_routine_run_once') {
+        if (name === "resolve_operator_item_routine_run_once") {
           return jsonResponse([{
             app_id: HOME_APP_ID,
             routine_id: HOME_ROUTINE_ID,
           }]);
         }
-        if (name === 'claim_agent_home_action') {
-          assertEquals(body.p_action, 'operator_run_once');
+        if (name === "claim_agent_home_action") {
+          assertEquals(body.p_action, "operator_run_once");
           assertEquals(body.p_request_payload, {
-            action: 'operator_run_once',
+            action: "operator_run_once",
             capabilityIds: [],
             version: null,
             routineId: HOME_ROUTINE_ID,
             operatorItemId: OPERATOR_ITEM_ID,
-            remediationId: 'run_once:canonical',
+            remediationId: "run_once:canonical",
           });
           return jsonResponse([{
             request_id: requestId,
             request_lease_token: leaseToken,
             is_new: true,
-            request_status: 'in_progress',
+            request_status: "in_progress",
             request_response: {},
-            request_fingerprint: 'a'.repeat(64),
-            current_revision: '7',
+            request_fingerprint: "a".repeat(64),
+            current_revision: "7",
           }]);
         }
-        if (name === 'queue_operator_item_routine_run_once') {
+        if (name === "queue_operator_item_routine_run_once") {
           return jsonResponse([{ run_id: runId, is_new: true }]);
         }
-        if (name === 'complete_agent_home_action') {
+        if (name === "complete_agent_home_action") {
           return jsonResponse([{
             request_id: requestId,
-            request_status: 'completed',
+            request_status: "completed",
             request_response: body.p_response,
           }]);
         }
@@ -6295,53 +7725,53 @@ Deno.test('launch canonical Run once queues the exact server-owned remediation a
   );
 });
 
-Deno.test('launch operator routes reject connected-Agent keys with private errors', async () => {
+Deno.test("launch operator routes reject connected-Agent keys with private errors", async () => {
   await withLaunchEnv(
     async () => {
       const attempts = [
-        operatorRequest('/api/launch/agents/home-agent/preferences'),
-        operatorRequest('/api/launch/agents/home-agent/home/activity'),
-        operatorRequest('/api/launch/agents/home-agent/attention'),
-        operatorRequest('/api/launch/attention'),
+        operatorRequest("/api/launch/agents/home-agent/preferences"),
+        operatorRequest("/api/launch/agents/home-agent/home/activity"),
+        operatorRequest("/api/launch/agents/home-agent/attention"),
+        operatorRequest("/api/launch/attention"),
         operatorRequest(
           `/api/launch/operator-items/${OPERATOR_ITEM_ID}/attention`,
-          'PATCH',
-          { action: 'mark_read' },
+          "PATCH",
+          { action: "mark_read" },
         ),
         operatorRequest(
           `/api/launch/operator-items/${OPERATOR_ITEM_ID}/actions`,
-          'POST',
+          "POST",
           {
-            remediationId: 'run_once:canonical',
-            idempotencyKey: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+            remediationId: "run_once:canonical",
+            idempotencyKey: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
             expectedRevision: `ah1:${HOME_APP_ID}:7`,
           },
         ),
-        operatorRequest('/api/launch/fleet/preferences'),
-        operatorRequest('/api/launch/search?q=mail'),
+        operatorRequest("/api/launch/fleet/preferences"),
+        operatorRequest("/api/launch/search?q=mail"),
         operatorRequest(
           `/api/launch/notifications/${OPERATOR_ALERT_ID}/actions`,
-          'POST',
+          "POST",
           {
-            action: 'resolve',
-            idempotencyKey: 'attention-action-auth-1',
+            action: "resolve",
+            idempotencyKey: "attention-action-auth-1",
           },
         ),
-        operatorRequest('/api/launch/fleet/order', 'PUT', {
+        operatorRequest("/api/launch/fleet/order", "PUT", {
           agentIds: [HOME_APP_ID],
           expectedRevision: `fleet-preference-v1:${OPERATOR_USER_ID}:1`,
         }),
       ];
       for (const attempt of attempts) {
         const headers = new Headers(attempt.headers);
-        headers.set('Authorization', `Bearer ${TEST_API_TOKEN}`);
+        headers.set("Authorization", `Bearer ${TEST_API_TOKEN}`);
         const response = await handleLaunch(new Request(attempt, { headers }));
         const body = await response.json() as { error?: string };
         assertEquals(response.status, 403);
-        assertStringIncludes(body.error || '', 'account session');
+        assertStringIncludes(body.error || "", "account session");
         assertEquals(
-          response.headers.get('cache-control'),
-          'private, no-store',
+          response.headers.get("cache-control"),
+          "private, no-store",
         );
       }
     },
@@ -6349,52 +7779,52 @@ Deno.test('launch operator routes reject connected-Agent keys with private error
   );
 });
 
-Deno.test('launch OpenAPI documents operator preference, search, order, and activity routes', async () => {
+Deno.test("launch OpenAPI documents operator preference, search, order, and activity routes", async () => {
   await withLaunchEnv(async () => {
     const response = await handleLaunch(
-      new Request('https://ultralight.test/api/launch/openapi.json'),
+      new Request("https://ultralight.test/api/launch/openapi.json"),
     );
     const spec = await response.json() as { paths?: Record<string, unknown> };
-    assertEquals(Boolean(spec.paths?.['/api/launch/fleet/order']), true);
-    assertEquals(Boolean(spec.paths?.['/api/launch/fleet/preferences']), true);
-    assertEquals(Boolean(spec.paths?.['/api/launch/search']), true);
-    assertEquals(Boolean(spec.paths?.['/api/launch/attention']), true);
+    assertEquals(Boolean(spec.paths?.["/api/launch/fleet/order"]), true);
+    assertEquals(Boolean(spec.paths?.["/api/launch/fleet/preferences"]), true);
+    assertEquals(Boolean(spec.paths?.["/api/launch/search"]), true);
+    assertEquals(Boolean(spec.paths?.["/api/launch/attention"]), true);
     assertEquals(
       Boolean(
-        spec.paths?.['/api/launch/operator-items/{id}/attention'],
+        spec.paths?.["/api/launch/operator-items/{id}/attention"],
       ),
       true,
     );
     assertEquals(
-      Boolean(spec.paths?.['/api/launch/operator-items/{id}/actions']),
+      Boolean(spec.paths?.["/api/launch/operator-items/{id}/actions"]),
       true,
     );
     assertEquals(
-      Boolean(spec.paths?.['/api/launch/agents/{id}/attention']),
+      Boolean(spec.paths?.["/api/launch/agents/{id}/attention"]),
       true,
     );
     assertEquals(
-      Boolean(spec.paths?.['/api/launch/agents/{id}/preferences']),
+      Boolean(spec.paths?.["/api/launch/agents/{id}/preferences"]),
       true,
     );
     assertEquals(
-      Boolean(spec.paths?.['/api/launch/agents/{id}/home/activity']),
+      Boolean(spec.paths?.["/api/launch/agents/{id}/home/activity"]),
       true,
     );
     assertEquals(
-      Boolean(spec.paths?.['/api/launch/agents/{id}/routine-runs/{runId}']),
+      Boolean(spec.paths?.["/api/launch/agents/{id}/routine-runs/{runId}"]),
       true,
     );
     assertEquals(
       Boolean(
         spec.paths?.[
-          '/api/launch/agents/{id}/routine-runs/{runId}/logs/{receiptId}'
+          "/api/launch/agents/{id}/routine-runs/{runId}/logs/{receiptId}"
         ],
       ),
       true,
     );
     assertEquals(
-      Boolean(spec.paths?.['/api/launch/notifications/{id}/actions']),
+      Boolean(spec.paths?.["/api/launch/notifications/{id}/actions"]),
       true,
     );
   });

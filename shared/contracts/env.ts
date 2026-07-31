@@ -38,12 +38,14 @@ export interface EnvCredential {
   inject: EnvCredentialInjection;
 }
 
-// A per-user secret resolved for HOST-SIDE use: the decrypted value (kept in the
-// parent isolate — never injected into the sandbox) plus its optional credential
-// binding. Keyed by env var name in the runtime credentials map (Phase 3 vault).
+// A per-user value resolved for HOST-SIDE use. The map contains both ordinary
+// per-user configuration and vaulted secrets, so consumers must check `vaulted`
+// before treating a value as a secret. Keyed by env var name.
 export interface ResolvedCredential {
   value: string;
   credential?: EnvCredential;
+  /** True only when this value is excluded from the tenant isolate. */
+  vaulted?: boolean;
 }
 
 export const ENV_VAR_LIMITS: EnvVarLimits = {

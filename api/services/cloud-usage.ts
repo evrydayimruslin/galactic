@@ -50,12 +50,12 @@ export interface CapacityResourceMeter {
   totalLight: () => number;
 }
 
-export interface CapacityResourceMeterOptions {
+interface CapacityResourceMeterOptions {
   /** Hard per-execution ceiling for attributable subscription capacity. */
   maxLight?: number;
 }
 
-export const CAPACITY_EXECUTION_LIMIT_CODE = "CAPACITY_EXECUTION_LIMIT";
+const CAPACITY_EXECUTION_LIMIT_CODE = "CAPACITY_EXECUTION_LIMIT";
 
 export class CapacityExecutionLimitError extends Error {
   readonly code = CAPACITY_EXECUTION_LIMIT_CODE;

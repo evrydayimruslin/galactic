@@ -62,7 +62,10 @@ import {
 } from "../services/app-contracts.ts";
 import { hasValidPageShareSession } from "../services/page-share-session.ts";
 import { fetchAppEntryCode } from "../services/app-runtime-resources.ts";
-import { buildAppTrustCard, type TrustCard } from "../services/trust.ts";
+import {
+  buildVerifiedAppTrustCard,
+  type TrustCard,
+} from "../services/trust.ts";
 import { resolveExecutedIntegrity } from "../services/executed-bundle.ts";
 import {
   buildMarketplaceListingSummary,
@@ -92,6 +95,15 @@ import {
 } from "../../shared/types/index.ts";
 import type { AppManifest } from "../../shared/contracts/manifest.ts";
 import { matchesServiceCredential } from "../services/control-plane-auth.ts";
+import {
+  AppDeploymentExecutionError,
+  type AppDeploymentLifecycleSource,
+  assertAppNativeRouteRunnable,
+} from "../services/app-deployment-lifecycle.ts";
+import {
+  isProSubscriptionError,
+  requireActiveProSubscription,
+} from "../services/pro-subscription.ts";
 
 function renderLayoutHTML(
   options: Parameters<typeof getLayoutHTML>[0],
@@ -921,6 +933,12 @@ export function createApp() {
             return json({ error: "App not found" }, 404);
           }
 
+          // This native data-URL executor is a legacy-only compatibility
+          // surface. Fence canonical releases before reading mutable source
+          // from R2; M7 releases execute from their exact immutable release
+          // bundle through the hardened HTTP/MCP Dynamic Worker surfaces.
+          assertAppNativeRouteRunnable(app);
+
           // Generate ETag and check for conditional request (304)
           const etag = generateAppETag(
             app as {
@@ -985,7 +1003,12 @@ export function createApp() {
             if (
               isEmbed || method !== "GET" || (subPath !== "/" && subPath !== "")
             ) {
-              return await executeServerApp(code, request, appId, subPath);
+              return await executeServerApp(
+                code,
+                request,
+                subPath,
+                app,
+              );
             } else {
               return new Response(
                 renderLayoutHTML({
@@ -1052,6 +1075,9 @@ export function createApp() {
             }
           }
         } catch (err) {
+          if (err instanceof AppDeploymentExecutionError) {
+            return appDeploymentExecutionErrorResponse(err);
+          }
           console.error("Error loading app:", err);
           return json({ error: "Failed to load app" }, 500);
         }
@@ -1073,10 +1099,15 @@ export function createApp() {
 async function executeServerApp(
   code: string,
   originalRequest: Request,
-  appId: string,
   subPath: string,
+  app: AppDeploymentLifecycleSource & { owner_id: string },
 ): Promise<Response> {
   try {
+    // Recheck the route invariant at the execution boundary in case this
+    // helper gains another caller. Canonical releases must never reach native
+    // module import, even with already-loaded source.
+    assertAppNativeRouteRunnable(app);
+
     // Create a modified request with the subPath as the URL path
     const originalUrl = new URL(originalRequest.url);
     const appUrl = new URL(subPath + originalUrl.search, originalUrl.origin);
@@ -1095,6 +1126,11 @@ async function executeServerApp(
     const dataUrl = `data:${mimeType};base64,${
       btoa(unescape(encodeURIComponent(code)))
     }`;
+
+    // Membership can lapse after the Agent page or source was loaded. Verify
+    // the paying owner immediately before module import, since top-level module
+    // code is already user-code execution.
+    await requireActiveProSubscription(app.owner_id, { enabled: true });
 
     // Import the module - Deno handles TypeScript natively
     const module = await import(dataUrl);
@@ -1120,12 +1156,28 @@ async function executeServerApp(
 
     return response;
   } catch (err) {
+    if (err instanceof AppDeploymentExecutionError) {
+      return appDeploymentExecutionErrorResponse(err);
+    }
+    if (isProSubscriptionError(err)) {
+      return json({ error: err.message, type: err.code }, err.status);
+    }
     console.error("Server app execution error:", err);
     return json({
       error: "App execution failed",
       message: err instanceof Error ? err.message : String(err),
     }, 500);
   }
+}
+
+function appDeploymentExecutionErrorResponse(
+  err: AppDeploymentExecutionError,
+): Response {
+  return json({
+    error: err.message,
+    type: err.code,
+    deployment_state: err.deploymentState,
+  }, err.status);
 }
 
 /**
@@ -1931,7 +1983,7 @@ async function handlePublicAppPage(
     // (the executing bundle vs its signed attestation), not just source signing.
     const executedIntegrity = await resolveExecutedIntegrity(app.id);
     const trustCard = sanitizeGpuTrustCard(
-      buildAppTrustCard({ ...app, env_schema: {} }, {
+      await buildVerifiedAppTrustCard({ ...app, env_schema: {} }, {
         executed_integrity: executedIntegrity,
       }),
     );

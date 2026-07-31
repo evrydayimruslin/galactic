@@ -42,7 +42,11 @@ function platformRequest(
   });
 }
 
-function platformCookieRequest(method: string, params: unknown, token: string): Request {
+function platformCookieRequest(
+  method: string,
+  params: unknown,
+  token: string,
+): Request {
   return new Request("https://api.test/mcp/platform", {
     method: "POST",
     headers: {
@@ -63,6 +67,7 @@ Deno.test({
     const previousFetch = globalThis.fetch;
     const salt = "platform-scope-test-salt";
     const hash = await tokenHash(TOKEN, salt);
+    let entitlementChecks = 0;
 
     globalThis.__env = {
       ...(previousEnv || {}),
@@ -110,6 +115,12 @@ Deno.test({
             headers: { "Content-Type": "application/json" },
           },
         );
+      }
+      if (url.pathname.endsWith("/rest/v1/account_entitlements")) {
+        entitlementChecks += 1;
+        return new Response(JSON.stringify([]), {
+          headers: { "Content-Type": "application/json" },
+        });
       }
       throw new Error(`Unexpected fetch: ${method} ${url}`);
     }) as typeof fetch;
@@ -159,6 +170,36 @@ Deno.test({
       assert(!names.includes("gx.upload"));
       assert(!names.includes("gx.secrets"));
       assert(!names.includes("gx.grants"));
+      assertEquals(
+        entitlementChecks,
+        0,
+        "scope rejection and read-only discovery must precede entitlement",
+      );
+
+      const executionDenied = await handlePlatformMcp(
+        platformRequest("tools/call", {
+          name: "gx.call",
+          arguments: {
+            app_id: "target-agent",
+            function_name: "run",
+            args: {},
+          },
+        }),
+      );
+      const executionDeniedBody = await executionDenied.json() as {
+        error?: { code?: number; data?: { type?: string } };
+      };
+      assertEquals(executionDenied.status, 402);
+      assertEquals(executionDeniedBody.error?.code, -32004);
+      assertEquals(
+        executionDeniedBody.error?.data?.type,
+        "PRO_SUBSCRIPTION_REQUIRED",
+      );
+      assertEquals(
+        entitlementChecks,
+        1,
+        "authorized persistent API-key tool execution must require membership",
+      );
     } finally {
       globalThis.__env = previousEnv;
       globalThis.fetch = previousFetch;
@@ -218,6 +259,15 @@ Deno.test({
             provisional: false,
             last_active_at: null,
           }),
+          { headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.pathname.endsWith("/rest/v1/account_entitlements")) {
+        return new Response(
+          JSON.stringify([{
+            plan_code: "pro",
+            subscription_status: "active",
+          }]),
           { headers: { "Content-Type": "application/json" } },
         );
       }
@@ -317,6 +367,15 @@ Deno.test({
             provisional: false,
             last_active_at: null,
           }),
+          { headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.pathname.endsWith("/rest/v1/account_entitlements")) {
+        return new Response(
+          JSON.stringify([{
+            plan_code: "pro",
+            subscription_status: "active",
+          }]),
           { headers: { "Content-Type": "application/json" } },
         );
       }

@@ -58,7 +58,18 @@ export interface ExecutionContextEntry {
   executionDeadlineAtMs?: number | null;
 }
 
-const registry = new Map<string, ExecutionContextEntry & { at: number }>();
+interface StoredExecutionContextEntry extends ExecutionContextEntry {
+  at: number;
+  /**
+   * Host-owned count of event.publish attempts for this execution. This field
+   * is deliberately absent from ExecutionContextEntry and resolve() results:
+   * tenant code may present only the opaque handle, never read or reset the
+   * authoritative counter.
+   */
+  eventPublishCount: number;
+}
+
+const registry = new Map<string, StoredExecutionContextEntry>();
 
 // Executions are short-lived and deregister in a finally, so the TTL only
 // backstops a handle stranded by an unhandled parent throw before finally. Set
@@ -77,7 +88,11 @@ export function registerExecutionContext(
 ): string {
   if (registry.size >= SWEEP_THRESHOLD) sweep();
   const handle = crypto.randomUUID() + crypto.randomUUID().replaceAll("-", "");
-  registry.set(handle, { ...entry, at: Date.now() });
+  registry.set(handle, {
+    ...entry,
+    at: Date.now(),
+    eventPublishCount: 0,
+  });
   return handle;
 }
 
@@ -122,6 +137,43 @@ export function deregisterExecutionContext(
 ): void {
   if (!handle) return;
   registry.delete(handle);
+}
+
+/**
+ * Atomically consume one event.publish attempt from a live execution.
+ *
+ * The lookup, limit check, and increment are synchronous so concurrent async
+ * emit calls cannot all observe the same pre-increment value. Consumption is
+ * intentionally not rolled back when downstream verification or delivery
+ * fails: retries still consume host work and must not bypass the per-execution
+ * ceiling.
+ */
+export function consumeExecutionEventPublish(
+  handle: string | null | undefined,
+  limit = 50,
+): void {
+  if (!Number.isSafeInteger(limit) || limit <= 0) {
+    throw new Error(
+      "Event publish limit must be a positive safe integer.",
+    );
+  }
+  if (typeof handle !== "string" || !handle) {
+    throw new Error(
+      "Event publish requires a live execution context handle.",
+    );
+  }
+  const entry = registry.get(handle);
+  if (!entry) {
+    throw new Error(
+      "Event publish requires a live execution context handle.",
+    );
+  }
+  if (entry.eventPublishCount >= limit) {
+    throw new Error(
+      `Event publish limit exceeded: at most ${limit} publishes are allowed per execution.`,
+    );
+  }
+  entry.eventPublishCount += 1;
 }
 
 /**

@@ -106,6 +106,18 @@ Deno.test("consumer: claimed job whose Agent is gone → failed row, ack (never 
       ) {
         return new Response(JSON.stringify([claimedRow]), { status: 200 });
       }
+      if (
+        method === "GET" &&
+        url.pathname.endsWith("/rest/v1/account_entitlements")
+      ) {
+        return new Response(
+          JSON.stringify([{
+            plan_code: "pro",
+            subscription_status: "active",
+          }]),
+          { status: 200 },
+        );
+      }
       if (method === "GET" && url.pathname.endsWith("/rest/v1/apps")) {
         // The Agent was deleted after the job was queued.
         return new Response("[]", { status: 200 });

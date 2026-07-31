@@ -569,7 +569,7 @@ function GalacticKeysSettings({
       <p className='neb-settings-subtitle'>
         {hasActiveSubscription
           ? 'API keys let something act as you outside this browser. Names come from whatever created them; revoking takes effect on the next request.'
-          : 'An active Galactic Pro subscription is required to create or use API keys. You can still revoke existing keys below.'}
+          : 'An active Galactic membership is required to create or use persistent API keys. You can still revoke existing keys below.'}
       </p>
       {plaintext
         ? (

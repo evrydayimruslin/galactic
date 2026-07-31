@@ -7,26 +7,42 @@ import type {
   LaunchInterfaceSummary,
 } from "../../../../../shared/contracts/launch.ts";
 import type { AgentStudioPane } from "../../lib/agent-studio-route";
-import { shouldShowAgentSetup } from "../../lib/agent-studio-state";
+import {
+  agentStudioSetupCapabilityId,
+  agentStudioSetupGrantRequest,
+  shouldShowAgentSetup,
+} from "../../lib/agent-studio-state";
 import type { LaunchNavigate } from "../../lib/navigation";
 import { safeAttentionDestinationHref } from "../nebula/operator-agent-alerts";
 
 interface AgentStudioOverviewProps {
+  activationBusy: boolean;
   endpoint: string | null;
   favoriteInterfaceIds: readonly string[];
   home: LaunchAgentHomeResponse;
   interfaces: readonly LaunchInterfaceSummary[];
+  onActivate: () => void;
+  onApproveSetupCapability: (requirementId: string) => void;
   onNavigate: LaunchNavigate;
   onOpenPane: (pane: AgentStudioPane, item?: string | null) => void;
+  onRemediateSetupGrant: (requirementId: string) => void;
+  setupActionBusy: string | null;
+  setupActionError: string;
 }
 
 export function AgentStudioOverview({
+  activationBusy,
   endpoint,
   favoriteInterfaceIds,
   home,
   interfaces,
+  onActivate,
+  onApproveSetupCapability,
   onNavigate,
   onOpenPane,
+  onRemediateSetupGrant,
+  setupActionBusy,
+  setupActionError,
 }: AgentStudioOverviewProps): ReactElement {
   const [copied, setCopied] = useState(false);
   const [interfacePage, setInterfacePage] = useState(0);
@@ -328,8 +344,15 @@ export function AgentStudioOverview({
         )
         : (
           <AgentSetupPath
+            activationBusy={activationBusy}
             home={home}
+            onActivate={onActivate}
+            onApproveSetupCapability={onApproveSetupCapability}
+            onNavigate={onNavigate}
             onOpenPane={onOpenPane}
+            onRemediateSetupGrant={onRemediateSetupGrant}
+            setupActionBusy={setupActionBusy}
+            setupActionError={setupActionError}
           />
         )}
     </section>
@@ -466,53 +489,129 @@ function ActivityRow({
 }
 
 function AgentSetupPath({
+  activationBusy,
   home,
+  onActivate,
+  onApproveSetupCapability,
+  onNavigate,
   onOpenPane,
+  onRemediateSetupGrant,
+  setupActionBusy,
+  setupActionError,
 }: {
+  activationBusy: boolean;
   home: LaunchAgentHomeResponse;
+  onActivate: () => void;
+  onApproveSetupCapability: (requirementId: string) => void;
+  onNavigate: LaunchNavigate;
   onOpenPane: (pane: AgentStudioPane, item?: string | null) => void;
+  onRemediateSetupGrant: (requirementId: string) => void;
+  setupActionBusy: string | null;
+  setupActionError: string;
 }): ReactElement {
-  const blockingSetting = home.setup.requirements.find((item) =>
-    item.blocking && item.kind === "setting" && item.settingKey
+  const connectionRequirement = home.setup.requirements.find((item) =>
+    item.blocking &&
+    (item.kind === "setting" || item.group === "Inference")
   );
+  const authorityRequirement = home.setup.requirements.find((item) =>
+    item.blocking && item !== connectionRequirement
+  );
+  const capabilityId = authorityRequirement
+    ? agentStudioSetupCapabilityId(home, authorityRequirement.id)
+    : null;
+  const grantRequest = authorityRequirement?.kind === "grant"
+    ? agentStudioSetupGrantRequest(home, authorityRequirement.id)
+    : null;
+  const openConnectionRequirement = () => {
+    if (connectionRequirement?.destination?.startsWith("/")) {
+      onNavigate(connectionRequirement.destination);
+      return;
+    }
+    onOpenPane(
+      "connections",
+      connectionRequirement?.settingKey
+        ? `setting:${connectionRequirement.settingKey}`
+        : null,
+    );
+  };
   const steps = [
     {
+      action: () => onOpenPane(
+        "settings",
+        home.release.candidate
+          ? `release:${home.release.candidate.version}`
+          : null,
+      ),
+      actionDisabled: false,
+      actionLabel: "Continue",
       complete: Boolean(home.release.live),
       description:
         "A tested release defines the Agent's functions, interfaces, and routines.",
       label: "Publish a live release",
-      item: home.release.candidate
-        ? `release:${home.release.candidate.version}`
-        : null,
-      pane: "settings" as const,
     },
     {
-      complete: !home.setup.requirements.some((item) =>
-        item.blocking && item.kind === "setting"
-      ),
+      action: openConnectionRequirement,
+      actionDisabled: false,
+      actionLabel: "Connect",
+      complete: !connectionRequirement,
       description:
         "Set the credentials and destinations its release declares.",
       label: "Connect what it needs",
-      item: blockingSetting?.settingKey
-        ? `setting:${blockingSetting.settingKey}`
-        : null,
-      pane: "connections" as const,
     },
+    capabilityId && authorityRequirement
+      ? {
+        action: () =>
+          onApproveSetupCapability(authorityRequirement.id),
+        actionDisabled: !home.actions.canApproveCapabilities,
+        actionLabel: setupActionBusy === authorityRequirement.id
+          ? "Approving capability…"
+          : "Approve capability",
+        complete: false,
+        description: [
+          authorityRequirement.description ?? authorityRequirement.label,
+          "This approves the declared capability only. Access to another Agent requires a separate, bounded grant.",
+        ].join(" "),
+        label: "Approve declared capability",
+      }
+      : authorityRequirement?.kind === "grant" && grantRequest
+      ? {
+        action: () => onRemediateSetupGrant(authorityRequirement.id),
+        actionDisabled: false,
+        actionLabel: setupActionBusy === authorityRequirement.id
+          ? "Authorizing grant…"
+          : "Authorize bounded grant",
+        complete: false,
+        description:
+          `Authorize the separate grant required for ${authorityRequirement.label} (${grantRequest.targetFunction}). Galactic preserves an existing proposal's cap; otherwise it applies the 5,000-credit monthly default. The grant can be revoked later.`,
+        label: "Authorize cross-Agent access",
+      }
+      : authorityRequirement?.kind === "grant"
+      ? {
+        action: () => onOpenPane("capabilities"),
+        actionDisabled: false,
+        actionLabel: "Review capabilities",
+        complete: false,
+        description:
+          `${authorityRequirement.description ?? authorityRequirement.label} The target Agent or function no longer resolves. Update and retest the release before granting access.`,
+        label: "Repair cross-Agent access",
+      }
+      : {
+        action: () => onOpenPane("routines"),
+        actionDisabled: false,
+        actionLabel: "Review",
+        complete: !authorityRequirement,
+        description: authorityRequirement?.description ??
+          "Review its authority and add a routine only if it should run on a schedule.",
+        label: "Review authority and routines",
+      },
     {
-      complete: Boolean(home.routines?.aggregate.total),
+      action: onActivate,
+      actionDisabled: !home.actions.canActivate,
+      actionLabel: activationBusy ? "Activating…" : "Activate Agent",
+      complete: home.state.lifecycle !== "needs_setup",
       description:
-        "Give the Agent recurring work or an event it can respond to.",
-      label: "Configure a routine",
-      item: null,
-      pane: "routines" as const,
-    },
-    {
-      complete: home.setup.ready,
-      description:
-        "Review remaining authority and activate the Agent when it is ready.",
-      label: "Review and activate",
-      item: null,
-      pane: "routines" as const,
+        "Activate this private release after its required setup is complete.",
+      label: "Activate",
     },
   ];
   const activeIndex = Math.max(
@@ -541,11 +640,23 @@ function AgentSetupPath({
                   <>
                     <p>{step.description}</p>
                     <button
-                      onClick={() => onOpenPane(step.pane, step.item)}
+                      disabled={activationBusy || Boolean(setupActionBusy) ||
+                        step.actionDisabled}
+                      onClick={step.action}
                       type="button"
                     >
-                      Continue
+                      {step.actionLabel}
                     </button>
+                    {index === 2 && setupActionError
+                      ? (
+                        <p
+                          className="agent-studio-setup-error"
+                          role="alert"
+                        >
+                          {setupActionError}
+                        </p>
+                      )
+                      : null}
                   </>
                 )
                 : null}

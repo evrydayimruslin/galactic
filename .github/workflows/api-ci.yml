@@ -37,6 +37,9 @@ on:
       - 'scripts/smoke/interface-deploy-smoke.mjs'
       - 'scripts/smoke/interface-deploy-promotion.mjs'
       - 'scripts/smoke/interface-deploy-promotion.test.mjs'
+      - 'scripts/smoke/gx-test-containment-smoke.mjs'
+      - 'scripts/smoke/gx-test-containment-smoke.test.mjs'
+      - 'scripts/smoke/run-staging-smoke-suite.mjs'
       - 'scripts/smoke/with-staging-owner-session.mjs'
       - 'scripts/smoke/with-staging-owner-session.test.mjs'
       - 'shared/**'
@@ -87,6 +90,9 @@ on:
       - 'scripts/smoke/interface-deploy-smoke.mjs'
       - 'scripts/smoke/interface-deploy-promotion.mjs'
       - 'scripts/smoke/interface-deploy-promotion.test.mjs'
+      - 'scripts/smoke/gx-test-containment-smoke.mjs'
+      - 'scripts/smoke/gx-test-containment-smoke.test.mjs'
+      - 'scripts/smoke/run-staging-smoke-suite.mjs'
       - 'scripts/smoke/with-staging-owner-session.mjs'
       - 'scripts/smoke/with-staging-owner-session.test.mjs'
       - 'shared/**'
@@ -165,6 +171,7 @@ jobs:
             scripts/release/verify-production-compute-release-evidence.test.mjs \
             scripts/release/write-api-compute-disabled-config.test.mjs \
             scripts/smoke/compute-admitted-smoke.test.mjs \
+            scripts/smoke/gx-test-containment-smoke.test.mjs \
             scripts/smoke/interface-deploy-promotion.test.mjs \
             scripts/smoke/owner-attention-probe.test.mjs \
             scripts/smoke/with-staging-owner-session.test.mjs
@@ -177,6 +184,9 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      - name: Verify tenant RPC binding surface
+        run: npm run test:rpc-surface
 
       - name: Test
         run: npm run test:full

@@ -19,8 +19,10 @@ import {
   updateAgentStudioRoute,
 } from "../../lib/agent-studio-route";
 import {
+  agentStudioSetupCapabilityId,
   clearStudioActionKey,
   getOrCreateStudioActionKey,
+  remediateAgentStudioSetupGrant,
   retainIdempotencyKeyAfterFailure,
   shouldShowAgentSetup,
   studioStatus,
@@ -85,6 +87,10 @@ export function AgentStudioApp({
   const [theme, setTheme] = useState<AgentStudioTheme>(readStudioTheme);
   const [runBusy, setRunBusy] = useState(false);
   const [runError, setRunError] = useState("");
+  const [activationBusy, setActivationBusy] = useState(false);
+  const [activationError, setActivationError] = useState("");
+  const [setupActionBusy, setSetupActionBusy] = useState<string | null>(null);
+  const [setupActionError, setSetupActionError] = useState("");
   const homeActionIdempotencyKeys = useRef(new Map<string, string>());
   const [attentionCount, setAttentionCount] = useState(
     home?.attention?.openCount ?? 0,
@@ -123,6 +129,8 @@ export function AgentStudioApp({
   }, [home?.attention?.openCount]);
   useEffect(() => {
     setAttentionCount(home?.attention?.openCount ?? 0);
+    setSetupActionBusy(null);
+    setSetupActionError("");
   }, [agent?.id]);
   useEffect(() => {
     preferenceReadGeneration.current += 1;
@@ -360,6 +368,87 @@ export function AgentStudioApp({
     }
   };
 
+  const activate = async () => {
+    if (!agent || !home || !home.actions.canActivate || activationBusy) return;
+    const attemptKey = `${agent.id}:home:activate`;
+    const idempotencyKey = getOrCreateStudioActionKey(
+      attemptKey,
+      homeActionIdempotencyKeys.current,
+    );
+    setActivationBusy(true);
+    setActivationError("");
+    try {
+      await launchApi.actOnAgentHome(agentLocator(agent), {
+        action: "activate",
+        expectedRevision: home.revision,
+        idempotencyKey,
+      });
+      clearStudioActionKey(attemptKey, homeActionIdempotencyKeys.current);
+      live.reload();
+    } catch (reason) {
+      if (!retainIdempotencyKeyAfterFailure(reason)) {
+        clearStudioActionKey(attemptKey, homeActionIdempotencyKeys.current);
+      }
+      setActivationError(errorMessage(reason));
+    } finally {
+      setActivationBusy(false);
+    }
+  };
+
+  const approveSetupCapability = async (requirementId: string) => {
+    if (!agent || !home || setupActionBusy) return;
+    const capabilityId = agentStudioSetupCapabilityId(home, requirementId);
+    if (!capabilityId || !home.actions.canApproveCapabilities) {
+      setSetupActionError(
+        "This capability is no longer awaiting owner approval. Refresh setup and review the current release.",
+      );
+      return;
+    }
+    const attemptKey =
+      `${agent.id}:home:approve_capabilities:${capabilityId}`;
+    const idempotencyKey = getOrCreateStudioActionKey(
+      attemptKey,
+      homeActionIdempotencyKeys.current,
+    );
+    setSetupActionBusy(requirementId);
+    setSetupActionError("");
+    try {
+      await launchApi.actOnAgentHome(agentLocator(agent), {
+        action: "approve_capabilities",
+        capabilityIds: [capabilityId],
+        expectedRevision: home.revision,
+        idempotencyKey,
+      });
+      clearStudioActionKey(attemptKey, homeActionIdempotencyKeys.current);
+      live.reload();
+    } catch (reason) {
+      if (!retainIdempotencyKeyAfterFailure(reason)) {
+        clearStudioActionKey(attemptKey, homeActionIdempotencyKeys.current);
+      }
+      setSetupActionError(errorMessage(reason));
+    } finally {
+      setSetupActionBusy(null);
+    }
+  };
+
+  const remediateSetupGrant = async (requirementId: string) => {
+    if (!agent || !home || setupActionBusy) return;
+    setSetupActionBusy(requirementId);
+    setSetupActionError("");
+    try {
+      await remediateAgentStudioSetupGrant(
+        launchApi,
+        home,
+        requirementId,
+      );
+      live.reload();
+    } catch (reason) {
+      setSetupActionError(errorMessage(reason));
+    } finally {
+      setSetupActionBusy(null);
+    }
+  };
+
   const loadMoreActivity = async () => {
     if (!agent || !activityCursor || activityLoading) return;
     const requestGeneration = activityRequestGeneration.current;
@@ -415,24 +504,39 @@ export function AgentStudioApp({
               activity={activity}
               activityCursor={activityCursor}
               activityLoading={activityLoading}
+              activationBusy={activationBusy}
               agent={agent}
               home={home}
               item={item}
               live={live}
               onAttentionCountChange={setAttentionCount}
+              onActivate={() => void activate()}
+              onApproveSetupCapability={(requirementId) =>
+                void approveSetupCapability(requirementId)}
               onLoadMoreActivity={() => void loadMoreActivity()}
               onNavigate={navigate}
               onOpenHandoff={openHandoff}
               onOpenPane={openPane}
+              onRemediateSetupGrant={(requirementId) =>
+                void remediateSetupGrant(requirementId)}
               onRunNow={() => void runNow()}
               onToggleFavorite={(id) => void toggleFavorite(id)}
               pane={pane}
               preferences={preferences}
+              setupActionBusy={setupActionBusy}
+              setupActionError={setupActionError}
               handoffDescriptions={handoffDescriptions}
               onHandoffDescriptionsChange={setHandoffDescriptions}
             />
             {runError
               ? <p className="agent-studio-inline-error" role="alert">{runError}</p>
+              : null}
+            {activationError
+              ? (
+                <p className="agent-studio-inline-error" role="alert">
+                  {activationError}
+                </p>
+              )
               : null}
             {preferencesError
               ? (
@@ -458,30 +562,39 @@ function AgentStudioPaneContent({
   activity,
   activityCursor,
   activityLoading,
+  activationBusy,
   agent,
   home,
   item,
   live,
   onAttentionCountChange,
+  onActivate,
+  onApproveSetupCapability,
   onLoadMoreActivity,
   onNavigate,
   onOpenHandoff,
   onOpenPane,
+  onRemediateSetupGrant,
   onRunNow,
   onToggleFavorite,
   pane,
   preferences,
+  setupActionBusy,
+  setupActionError,
   handoffDescriptions,
   onHandoffDescriptionsChange,
 }: {
   activity: LaunchAgentActivityPreview | null;
   activityCursor: string | null;
   activityLoading: boolean;
+  activationBusy: boolean;
   agent: LaunchAgentSummary;
   home: LaunchPageProps["live"]["data"]["agentHome"];
   item?: string;
   live: LaunchPageProps["live"];
   onAttentionCountChange: (count: number) => void;
+  onActivate: () => void;
+  onApproveSetupCapability: (requirementId: string) => void;
   onLoadMoreActivity: () => void;
   onNavigate: LaunchPageProps["navigate"];
   onOpenHandoff: (
@@ -494,10 +607,13 @@ function AgentStudioPaneContent({
     item?: string | null,
     replace?: boolean,
   ) => void;
+  onRemediateSetupGrant: (requirementId: string) => void;
   onRunNow: () => void;
   onToggleFavorite: (interfaceId: string) => void;
   pane: AgentStudioPane;
   preferences: LaunchAgentPreferences | null;
+  setupActionBusy: string | null;
+  setupActionError: string;
   handoffDescriptions: Partial<Record<AgentStudioHandoffIntent, string>>;
   onHandoffDescriptionsChange: (
     descriptions: Partial<Record<AgentStudioHandoffIntent, string>>,
@@ -538,8 +654,14 @@ function AgentStudioPaneContent({
           favoriteInterfaceIds={preferences?.favoriteInterfaceIds ??
             home.preferences?.favoriteInterfaceIds ??
             []}
+          activationBusy={activationBusy}
           onNavigate={onNavigate}
+          onActivate={onActivate}
+          onApproveSetupCapability={onApproveSetupCapability}
           onOpenPane={onOpenPane}
+          onRemediateSetupGrant={onRemediateSetupGrant}
+          setupActionBusy={setupActionBusy}
+          setupActionError={setupActionError}
         />
       )
       : <StudioLoading error={live.data.agentHomeError} />;

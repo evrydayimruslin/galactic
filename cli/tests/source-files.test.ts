@@ -64,6 +64,20 @@ Deno.test('CLI collection includes every platform-supported extension and preser
   });
 });
 
+Deno.test('CLI source collection excludes live env files but permits placeholder examples', async () => {
+  await withTempDirectory(async (directory) => {
+    await Deno.writeTextFile(`${directory}/.env`, 'SECRET=live\n');
+    await Deno.writeTextFile(`${directory}/.env.local`, 'SECRET=local\n');
+    await Deno.writeTextFile(
+      `${directory}/.env.example`,
+      'SECRET=replace-me\n',
+    );
+
+    const files = await collectSourceFiles(directory);
+    assertEquals(files.map((file) => file.name), ['.env.example']);
+  });
+});
+
 Deno.test('CLI collection is deterministic, byte-counted, and rejects invalid UTF-8 text', async () => {
   await withTempDirectory(async (directory) => {
     await Deno.mkdir(`${directory}/nested`);

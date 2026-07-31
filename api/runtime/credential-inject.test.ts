@@ -35,7 +35,12 @@ Deno.test("credential-inject: header inject with prefix", () => {
       },
     },
   };
-  const prepared = prepareCredentialRequest("KEY", "https://api.x.com/", undefined, creds);
+  const prepared = prepareCredentialRequest(
+    "KEY",
+    "https://api.x.com/",
+    undefined,
+    creds,
+  );
   assertEquals(prepared.headers["X-Api-Key"], "Token abc");
 });
 
@@ -50,7 +55,12 @@ Deno.test("credential-inject: basic auth pulls username from another credential"
     },
     USER: { value: "alice" },
   };
-  const prepared = prepareCredentialRequest("PASS", "https://api.x.com/", undefined, creds);
+  const prepared = prepareCredentialRequest(
+    "PASS",
+    "https://api.x.com/",
+    undefined,
+    creds,
+  );
   assertEquals(prepared.headers["Authorization"], "Basic " + btoa("alice:pw"));
 });
 
@@ -64,7 +74,12 @@ Deno.test("credential-inject: query inject adds the secret as a query param", ()
       },
     },
   };
-  const prepared = prepareCredentialRequest("K", "https://api.x.com/data", undefined, creds);
+  const prepared = prepareCredentialRequest(
+    "K",
+    "https://api.x.com/data",
+    undefined,
+    creds,
+  );
   assertEquals(new URL(prepared.url).searchParams.get("api_key"), "qv");
 });
 
@@ -90,13 +105,24 @@ Deno.test("credential-inject: wildcard destination matches subdomains", () => {
       credential: { destination: "*.example.com", inject: { as: "bearer" } },
     },
   };
-  const prepared = prepareCredentialRequest("K", "https://api.example.com/x", undefined, creds);
+  const prepared = prepareCredentialRequest(
+    "K",
+    "https://api.example.com/x",
+    undefined,
+    creds,
+  );
   assertEquals(prepared.headers["Authorization"], "Bearer v");
 });
 
 Deno.test("credential-inject: unknown credential key throws", () => {
   assertThrows(
-    () => prepareCredentialRequest("NOPE", "https://api.openai.com/", undefined, bearerCreds()),
+    () =>
+      prepareCredentialRequest(
+        "NOPE",
+        "https://api.openai.com/",
+        undefined,
+        bearerCreds(),
+      ),
     Error,
     "Unknown credential",
   );
@@ -107,7 +133,8 @@ Deno.test("credential-inject: a per-user secret with no credential binding canno
   // (and it never reaches the sandbox either) — no way to read its value.
   const creds: Record<string, ResolvedCredential> = { RAW: { value: "leak" } };
   assertThrows(
-    () => prepareCredentialRequest("RAW", "https://api.x.com/", undefined, creds),
+    () =>
+      prepareCredentialRequest("RAW", "https://api.x.com/", undefined, creds),
     Error,
     "no network binding",
   );
@@ -115,7 +142,46 @@ Deno.test("credential-inject: a per-user secret with no credential binding canno
 
 Deno.test("credential-inject: non-http scheme is rejected", () => {
   assertThrows(
-    () => prepareCredentialRequest("API_KEY", "file:///etc/passwd", undefined, bearerCreds()),
+    () =>
+      prepareCredentialRequest(
+        "API_KEY",
+        "file:///etc/passwd",
+        undefined,
+        bearerCreds(),
+      ),
     Error,
   );
+});
+
+Deno.test("credential-inject: plaintext HTTP is rejected before secret injection", () => {
+  assertThrows(
+    () =>
+      prepareCredentialRequest(
+        "API_KEY",
+        "http://api.openai.com/v1/chat",
+        undefined,
+        bearerCreds(),
+      ),
+    Error,
+    "credentialed requests require https",
+  );
+});
+
+Deno.test("credential-inject: an explicit HTTPS default port matches a normalized URL", () => {
+  const creds: Record<string, ResolvedCredential> = {
+    API_KEY: {
+      value: "sk-secret",
+      credential: {
+        destination: "api.openai.com:443",
+        inject: { as: "bearer" },
+      },
+    },
+  };
+  const prepared = prepareCredentialRequest(
+    "API_KEY",
+    "https://api.openai.com:443/v1/chat",
+    undefined,
+    creds,
+  );
+  assertEquals(prepared.headers["Authorization"], "Bearer sk-secret");
 });

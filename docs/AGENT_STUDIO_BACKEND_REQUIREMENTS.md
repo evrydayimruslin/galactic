@@ -19,8 +19,8 @@ Status meanings:
 
 | ID | Requirement | Status | Dependencies |
 | --- | --- | --- | --- |
-| AS-BE-001 | Purpose-bound coding-agent handoff credential | Partial | token service, platform MCP auth |
-| AS-BE-002 | Durable handoff lifecycle and single-target release semantics | Contracted | AS-BE-001, staged bundles, attestations |
+| AS-BE-001 | Purpose-bound coding-agent handoff credential | Implemented | token service, platform MCP auth |
+| AS-BE-002 | Durable handoff lifecycle and single-target release semantics | Implemented | M6 candidate submission, M7 member deployment boundary |
 | AS-BE-003 | Autonomous per-function policy | Contracted | release declarations, runtime call gate |
 | AS-BE-004 | Generic held-work approval envelope | Contracted | AS-BE-003, run executor |
 | AS-BE-005 | Owner-safe rich Activity receipts | Partial | execution/event receipts |
@@ -39,91 +39,193 @@ Status meanings:
 
 ## AS-BE-001 — Purpose-bound coding-agent handoff credential
 
-Implemented in this tranche:
+Implemented in Milestone 6:
 
-- Dedicated account-session-only handoff endpoints.
-- Reveal-once credential with an exact server-selected 30-minute expiry.
-- One shared handoff model has five authenticated intent configurations:
-  `agent`, `interface`, `function`, `routine`, and `connect`. `signed-out` is a
-  presentation and draft-preservation state, never a credential intent.
-- Caller-selected intent is validated against the workspace or owned-Agent
-  route. Galactic derives scopes, exact app IDs, and expiry; body overrides
-  are rejected.
-- Structural intents require a human description before credential creation.
-- Interface, function, and routine credentials are restricted to the owned
-  Agent in platform MCP authorization.
-- Handoff credentials expose bounded discovery, source projection/download,
-  staging, testing, candidate upload, lint, and scaffold tools only. They
-  cannot use DB, logs, secrets, routines, grants, calls, incident resolution,
-  release promotion, or owner approval actions.
-- Agent-scoped inspection and upload require the exact assigned Agent UUID.
-- New-Agent issuance and publication are disabled until AS-BE-002 can enforce
-  one create. The UI does not install an issuer for this path, its credential
-  adapter fails closed, and the server rejects the intent. Extension/connect
-  handoffs cannot create another Agent.
-- The enabled credential paths are workspace `connect` and Agent-scoped
-  `interface`, `function`, and `routine`. The signed-out presentation preserves
-  the intended path and its draft through authentication without issuing or
-  copying a credential.
-- The Connect surface no longer falls back to the legacy broad, 30-day builder
-  key. If short-lived handoff issuance is unavailable, it shows the failure and
-  issues no substitute.
-- The general API-key endpoint cannot mint reserved `handoff:*` scopes, and
-  malformed or multiple handoff markers fail closed.
-- Cached authentication verdicts carry the database expiry and cannot extend
-  a 30-minute credential beyond its exact expiry.
+- Creation requires a confirmed passwordless sign-in-link account session.
+  Merely possessing an unconfirmed Supabase session, a general API key, or a
+  prior handoff bearer cannot mint another handoff.
+- The server creates a first-class, service-role-only handoff session and an
+  API-token hash row atomically. The session id and token id are the same for
+  client compatibility, but there is intentionally no cascading foreign key:
+  consuming the token never deletes lifecycle history.
+- The bearer is revealed only in the creation response, stored only as a
+  salted hash with `plaintext_token = NULL`, and expires at exactly
+  `created_at + 3600 seconds`. The database, not request copy, fixes the expiry.
+- The five authenticated intents are `agent`, `interface`, `function`,
+  `routine`, and `connect`. `signed-out` remains a presentation and
+  draft-preservation state, never a credential intent.
+- Galactic derives the exact intent-specific scope set, target semantics,
+  candidate-set id, reserved new-Agent id where applicable, and expiry.
+  Request bodies cannot widen them. A direct authenticated insert is also
+  prevented from self-minting a token that merely looks like `handoff:*`.
+- Handoff scope strings are descriptive, not authority. Every request resolves
+  the durable session afresh and is accepted only at the exact
+  `POST /mcp/platform` surface. Other REST, MCP, run, publish, and deployment
+  surfaces reject the bearer even if a generic token verdict is cached.
+- Platform MCP returns a handoff-specific initialization response, an empty
+  resource list, and no account/library/memory projection. Dispatch checks,
+  not only `tools/list`, enforce the same boundary.
+- `connect` is inspection-only: it may discover its bounded tool surface and
+  use local scaffold/lint guidance, but it cannot enumerate account data,
+  stage, test, submit, deploy, or mutate an Agent.
+- `agent`, `interface`, `function`, and `routine` may follow the exact
+  stage/test/submit candidate path in AS-BE-002. Existing-Agent inspection and
+  submission require the assigned UUID. New-Agent work receives one reserved
+  UUID and cannot target an existing Agent.
+- No handoff can use DB, logs, secrets, routines, grants, calls, incident
+  resolution, release promotion, owner approval, or any live/external-effect
+  action. Upload consumes the bearer immediately; cancellation, rejection,
+  revocation, and expiry also delete it atomically.
+- The legacy broad, 30-day builder-key fallback is gone. An issuance or durable
+  session failure produces no substitute credential.
+- Staging, basic conformance, archive creation, and candidate submission are
+  available before membership. Payment, deployment, promotion, setup, and
+  activation are deliberately not handoff powers.
 
-Remaining:
+Preserve these acceptance invariants:
 
-- Store a first-class handoff session rather than deriving purpose from the
-  credential.
-- Bind audit records to a description hash without putting the raw
-  description into credential metadata.
-- Revoke automatically after a terminal lifecycle state, not only at expiry.
-- Bind the reviewed release delta to the selected intent. Today
-  interface/function/routine are purpose-labelled but share the same bounded
-  target-Agent build path; Galactic cannot yet prove that an uploaded candidate
-  changed only the named artifact class.
-- Add a dedicated Agent-scoped connection-declaration intent. Workspace
-  `connect` means “open a temporary coding session”; it does not authorize a
-  coding agent to add or change an Agent release's declared credentials,
-  settings, endpoints, or authority requirements. That new intent must receive
-  its own semantic-delta validation under AS-BE-002.
-
-Acceptance:
-
-1. A credential cannot outlive 30 minutes, widen its own scope, operate on a
-   different Agent, add secrets, approve authority, or bypass owner review.
-2. Full token material is returned once and never appears in list, log, error,
-   receipt, or lifecycle responses.
-3. Every denied cross-purpose and cross-Agent operation is tested at dispatch,
-   not merely hidden from `tools/list`.
-4. Promotion always requires an authenticated owner session.
+1. A bearer cannot outlive 60 minutes, widen its purpose, cross its target,
+   add secrets, approve authority, or bypass owner review.
+2. Full token material appears once and never appears in a list, log, error,
+   receipt, archive, or lifecycle projection.
+3. Terminal or uploaded state is visible on the next request through the
+   authoritative session lookup; token-cache staleness cannot revive it.
+4. Promotion always requires an authenticated owner session and an active
+   $20/month membership.
+5. Workspace `connect` is not an Agent connection-declaration authority.
+   Changing declared endpoints, credentials, settings, or authority remains a
+   reviewed full-release candidate operation.
 
 ## AS-BE-002 — Durable handoff lifecycle
 
-Persist the state machine:
+Milestone 6 implements the candidate half and Milestone 7 completes the
+owner-controlled deployment half of this state machine:
 
 ```text
-created -> connected -> staged -> tested -> uploaded -> promoted
+created -> connected -> staged -> tested -> uploaded
+                    \-> restaged     \-> safely retested
        \__________________________-> cancelled | rejected | revoked | expired
+
+uploaded -- authenticated active member manually deploys --> promoted
 ```
 
-Each transition must bind the credential, owner, intent, target Agent (when
-known), reviewed semantic delta, source/bundle hash, test attestation, release,
-and timestamp. State advancement is monotonic and idempotent. Every terminal
-state revokes the credential. For a new-Agent intent, the first successful
-creation atomically and permanently binds the handoff to that private, paused
-Agent so the same credential cannot create or update another. Failed retries
-may reuse the same content-addressed bundle but may not change purpose.
-
-The upload/promotion boundary must use:
+The implemented candidate workflow is:
 
 ```text
-gx.project -> gx.stage -> gx.test(bundle_id)
-           -> gx.upload(bundle_id, test_attestation)
-           -> authenticated owner review and promotion
+existing target: gx.project/gx.download (optional inspection)
+new target:      gx.scaffold (local guidance)
+both:            gx.stage -> gx.test(bundle_id)
+                 -> gx.upload(bundle_id, exact test_attestation)
+                 -> immutable candidate archive; bearer consumed
 ```
+
+Durable session behavior:
+
+- One session binds owner, intent, description SHA-256 (never raw
+  description), one candidate-set id, and one target. A new-Agent session
+  reserves an unused Agent UUID without inserting `public.apps`; an extension
+  session binds an existing owned Agent; Connect has no candidate target.
+- Stage binds one content-addressed bundle and source hash. Before a successful
+  test, a corrected bundle may replace it and increments the lineage revision.
+  After testing, a different bundle or release fails closed.
+- A successful test must be the current V2 Galactic **basic conformance**
+  qualification for the exact staged source, compiled `galactic.yaml`
+  document, report, and release digests. A safe retry may replace only the
+  attestation id/digest when every release-evidence digest is unchanged.
+- Candidate submission recompiles and verifies that exact full release, loads
+  its retained conformance report, and writes an immutable archive containing
+  source, compiled artifacts, qualification evidence, manifest/authority data,
+  candidate-set/target identity, and lineage. The session stores the archive
+  root digest plus byte/object counts before moving to `uploaded`.
+- `uploaded` means **candidate submitted, not deployed**. It creates no Agent,
+  changes no `current_version`, applies no migration, moves no live executable
+  pointer, starts no routine, and performs no external action. The bearer is
+  deleted atomically with this transition.
+- Intent labels describe why the handoff was opened, but all four candidate
+  intents submit the same security unit: a complete Agent release. The owner
+  must review the complete manifest, authority, endpoints, variables, routines,
+  interfaces, compute, and release diff. M6 makes no claim that only the named
+  artifact class changed.
+- Interface/function/routine sessions snapshot the target's base version,
+  optional legacy source/release digests, release generation, and a required
+  canonical base-state digest at creation. M7 deployment compare-and-swaps
+  that lineage in the leased database saga; a changed live base makes the
+  candidate stale and requires a new handoff/review.
+- Creation is limited to ten nonterminal/unclaimed sessions per owner.
+  Submitted-but-unpromoted archives are additionally limited to ten candidates
+  and 100 MiB aggregate per owner. Quota rejection leaves the session tested
+  and makes a best-effort deletion of the just-written unbound archive
+  objects. The same compensation runs after any definitive lifecycle
+  rejection, including a concurrent cancellation. Blobs and the submitted
+  pointer are namespaced by each attempt's archive digest, preventing a losing
+  exact-retest upload from deleting the committed attempt's objects. Cleanup
+  must not run after an ambiguous transport or response failure because the
+  database may already reference the archive. Any unreachable objects must be
+  reclaimed by an operational garbage collector.
+- Transitions are monotonic and idempotent, recorded in an append-only event
+  stream, and service-role-only. Cancelled, rejected, revoked, expired, and
+  uploaded sessions remain queryable after their token row is gone.
+
+### Milestone 7 deployment boundary
+
+Milestone 7 implements the authenticated manual flow:
+
+```text
+durable $20/month checkout attempt -> active membership
+  -> owner reviews one or more immutable candidates
+  -> manual Deploy for each selected candidate
+  -> leased replay-safe saga + base-lineage CAS
+  -> private setup_required release; routines paused
+  -> credentials/authority/cadence/budget setup -> explicit owner activation
+```
+
+Implemented invariants:
+
+- Checkout has a durable server-only attempt identity, request fingerprint,
+  Stripe identity binding, expiry, and replay projection. Stripe subscription
+  reconciliation may establish the membership entitlement, but checkout and
+  its return never deploy a candidate. The owner must return to the invitation
+  and click **Deploy**.
+- Deployment accepts only a current V2 basic-conformance candidate whose
+  session records the exact immutable archive root; source, document, report,
+  and release digests; qualification evidence; and reviewed manifest.
+- Materialization reads only that frozen archive. Source and release artifacts
+  are retained under content-addressed release-digest keys. The executable is
+  stored under the release digest with a mandatory signed attestation over its
+  exact bytes, version, and digest, then read back and strictly verified; the
+  canonical path has no unsigned fallback.
+- PostgreSQL claims one deployment with an idempotency fingerprint and a
+  fenced lease. It checks active $20/month membership and the candidate's
+  target/base lineage in the same authoritative flow, supports safe lease
+  reconciliation, and replays the completed result after a lost response
+  without rebuilding from mutable source or reapplying effects.
+- Commit creates or updates the Agent as private `setup_required`, binds the
+  immutable release and provenance, and retires prior routines. Newly declared
+  routines remain paused. Setup supplies user credentials and reviews
+  authority, cadence, and budget; a separate membership-checked owner action
+  explicitly activates the release and any selected routine.
+- Multiple invitations are projected and deployed independently. A failed or
+  stale candidate does not roll back candidates that succeeded, and the UI
+  reports per-candidate progress and retryable failure.
+- Qualified release pointers cannot be changed through mutable legacy
+  patch/publish/rebuild/upload paths. Canonical runtime loading is bound to the
+  active release digest rather than a mutable latest or semantic-version key.
+- Authenticated clients no longer have broad direct writes to `public.apps`,
+  routines, routine capabilities, runs, or dashboard bindings. Narrow
+  service-role/security-definer mutations own release, setup, activation, and
+  execution transitions, with membership and lifecycle checks beside the
+  database mutation.
+- Runtime entry points fail closed unless the Agent lifecycle is runnable and
+  membership is currently active. This includes direct run, HTTP/MCP,
+  dynamic/native execution, codemode/recipe execution, queued jobs, deferred
+  event delivery, and routine/routine-run claims. Membership lapse cannot
+  leave a previously active routine or deferred execution path running.
+
+Milestone 7 acceptance is covered by route/service/runtime tests, adversarial
+replay and lineage tests, database privilege and concurrency tests, full API
+and web suites, typechecks/builds, and responsive browser review. This
+completion does not implement the standing OAuth/device exchange in AS-BE-016
+or the later Studio requirements below.
 
 ## AS-BE-003 — Autonomous per-function policy
 
@@ -274,7 +376,7 @@ transport, or UI fallback for the other.
 
 ## AS-BE-016 — Durable machine connection exchange
 
-A copied 30-minute bearer is a temporary coding session, not a standing
+A copied 60-minute bearer is a temporary coding session, not a standing
 machine connection. A durable “connect once per machine” promise requires an
 OAuth/device exchange with:
 
@@ -285,7 +387,7 @@ OAuth/device exchange with:
 - Handoff credentials that bootstrap the exchange but cannot become the
   standing credential themselves.
 
-Until this exists, product copy must say temporary 30-minute handoff and tell
+Until this exists, product copy must say temporary 60-minute handoff and tell
 the user to request a fresh prompt after expiry.
 
 ## AS-BE-017 — Idempotent, resumable Interface invocation

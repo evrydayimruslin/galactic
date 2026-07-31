@@ -2,6 +2,8 @@ import { checkRateLimit, type RateLimitResult } from './ratelimit.ts';
 
 export type AuthRateLimitRoute =
   | 'auth:login'
+  | 'auth:magic_link'
+  | 'auth:magic_link_verify'
   | 'auth:password'
   | 'auth:session'
   | 'auth:refresh'
@@ -56,6 +58,26 @@ export const AUTH_ROUTE_RATE_LIMITS: Record<AuthRateLimitRoute, AuthRateLimitPol
     resource: '/auth/launch/password',
     limitMessage: 'Too many email sign-in attempts. Please wait a few minutes and try again.',
     unavailableMessage: 'Email sign-in is temporarily unavailable while auth protections recover. Please try again shortly.',
+  },
+  'auth:magic_link': {
+    endpoint: 'auth:magic_link',
+    limit: 10,
+    windowMinutes: 10,
+    keySource: 'ip',
+    responseKind: 'json',
+    resource: '/auth/launch/magic-link',
+    limitMessage: 'Too many email sign-in attempts. Please wait a few minutes and try again.',
+    unavailableMessage: 'Email sign-in is temporarily unavailable while auth protections recover. Please try again shortly.',
+  },
+  'auth:magic_link_verify': {
+    endpoint: 'auth:magic_link_verify',
+    limit: 20,
+    windowMinutes: 10,
+    keySource: 'ip',
+    responseKind: 'json',
+    resource: '/auth/launch/verify',
+    limitMessage: 'Too many email verification attempts. Please request a new sign-in link.',
+    unavailableMessage: 'Email verification is temporarily unavailable. Please try again shortly.',
   },
   'auth:session': {
     endpoint: 'auth:session',
@@ -257,7 +279,8 @@ function getPolicy(
 }
 
 export function getAuthRateLimitClientIp(request: Request): string | null {
-  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+  return request.headers.get('cf-connecting-ip')
+    || request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
     || request.headers.get('x-real-ip')
     || null;
 }

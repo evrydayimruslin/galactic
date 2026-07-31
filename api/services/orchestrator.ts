@@ -20,14 +20,19 @@ import {
   type SystemAgentContext,
   type SystemAgentState,
 } from "./flash-broker.ts";
-import { executeDynamicCodeMode } from "../runtime/dynamic-executor.ts";
+import {
+  buildDynamicCodemodeFunctionBindings,
+  executeDynamicCodeMode,
+} from "../runtime/dynamic-executor.ts";
 import {
   type BundleAttestation,
   loadLiveExecutedBundle,
+  loadReleaseExecutedBundle,
 } from "./executed-bundle.ts";
 import { getD1DatabaseId } from "./d1-provisioning.ts";
 import { createAppsService } from "./apps.ts";
 import { registerExecutionPlanGate } from "./plan-gate.ts";
+import { requireActiveProSubscription } from "./pro-subscription.ts";
 import {
   fetchInferenceChatCompletion,
   selectInferenceModel,
@@ -1525,16 +1530,18 @@ async function executeRecipe(
 ): Promise<{ result: unknown; error?: string; logs: string[] }> {
   // P5 (Phase 4c): the Flash orchestrator is the SECOND in-process codemode
   // path (alongside ul.codemode). Apply the same cross-app access filter so a
-  // revoked non-owned-private grant or an explicit "never" policy is honored
-  // here too. Derive the bundle/binding app set FROM the filtered map so
-  // dropped apps get no bundles loaded at all.
-  const { filterCodemodeToolMapByAccess } = await import(
+  // revoked non-owned-private grant, an explicit "never" policy, or a
+  // non-runnable/suspended deployment is honored here too. Derive the
+  // bundle/binding app set FROM the filtered map so dropped apps get no
+  // bundles loaded at all.
+  const { authorizeCodemodeToolMapByAccess } = await import(
     "./codemode-access.ts"
   );
-  const filteredBrokerToolMap = await filterCodemodeToolMapByAccess(
+  const access = await authorizeCodemodeToolMapByAccess(
     userId,
     brokerResult.toolMap,
   );
+  const filteredBrokerToolMap = access.toolMap;
 
   const toolMap: Record<string, { appId: string; fnName: string }> = {};
   for (const [name, mapping] of Object.entries(filteredBrokerToolMap)) {
@@ -1548,21 +1555,29 @@ async function executeRecipe(
   // the orchestrator runs the same integrity check as the direct gx.call path.
   const bundleEntries = await Promise.all(
     appIds.map(async (appId) => {
-      const loaded = await loadLiveExecutedBundle(appId);
+      const release = access.releases[appId];
+      const loaded = release?.deploymentState === "ready" &&
+          release.releaseDigest
+        ? await loadReleaseExecutedBundle(appId, release.releaseDigest)
+        : release?.deploymentState === "legacy"
+        ? await loadLiveExecutedBundle(appId)
+        : { code: null, attestation: null };
       return [appId, loaded] as const;
     }),
   );
   const appBundles: Record<string, string> = {};
   const appAttestations: Record<string, BundleAttestation | null> = {};
+  const appReleaseDigests: Record<string, string | null> = {};
   for (const [appId, loaded] of bundleEntries) {
     if (loaded.code) {
       appBundles[appId] = loaded.code;
       appAttestations[appId] = loaded.attestation;
+      appReleaseDigests[appId] = access.releases[appId]?.releaseDigest ?? null;
     }
   }
 
-  // Create RPC bindings (parallel)
-  const bindings: Record<string, unknown> = {};
+  // Resolve one database identity per Agent, then construct a separate
+  // host-authorized DB/DATA pair for every exact function.
   const dbIdEntries = await Promise.all(
     appIds.map(async (appId) => {
       const dbId = await getD1DatabaseId(appId);
@@ -1571,17 +1586,16 @@ async function executeRecipe(
   );
 
   const dynamicExports = getDynamicWorkerExports();
-  for (const [appId, dbId] of dbIdEntries) {
-    const safeId = appId.replace(/-/g, "_");
-    if (dbId) {
-      bindings[`DB_${safeId}`] = dynamicExports.DatabaseBinding({
-        props: { databaseId: dbId, appId, userId },
-      });
-    }
-    bindings[`DATA_${safeId}`] = dynamicExports.AppDataBinding({
-      props: { appId, userId },
-    });
-  }
+  const {
+    bindings,
+    functionBindingNames,
+  } = buildDynamicCodemodeFunctionBindings({
+    toolMap,
+    authorities: access.authorities,
+    databaseIds: Object.fromEntries(dbIdEntries),
+    userId,
+    factories: dynamicExports,
+  });
 
   console.log(
     `[ORCHESTRATOR] Executing recipe: ${appIds.length} apps, ${
@@ -1589,12 +1603,15 @@ async function executeRecipe(
     } bundles`,
   );
 
+  await requireActiveProSubscription(userId, { enabled: true });
   return await executeDynamicCodeMode({
     code,
     toolMap,
     appBundles,
     appAttestations,
+    appReleaseDigests,
     bindings,
+    functionBindingNames,
     userContext: { id: userId, email: userEmail },
     timeoutMs: 60_000,
     files,

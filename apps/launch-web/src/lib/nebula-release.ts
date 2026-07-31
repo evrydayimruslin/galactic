@@ -38,7 +38,7 @@ export function releaseReviewLabel(
 ): string {
   switch (status) {
     case "ready":
-      return "Ready to promote";
+      return "Ready to deploy";
     case "owner_review_required":
       return "Owner review required";
     case "unavailable":

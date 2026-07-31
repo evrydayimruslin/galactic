@@ -412,10 +412,16 @@ export async function listTokens(userId: string): Promise<ApiToken[]> {
     throw new Error(`Failed to list tokens: ${error.message}`);
   }
 
-  return (data || []).map((row: Omit<ApiToken, 'plaintext_token'>) => ({
-    ...row,
-    plaintext_token: null,
-  }));
+  return (data || [])
+    // Purpose-bound builder handoffs have their own durable lifecycle. They
+    // must never masquerade as persistent API keys in account settings.
+    .filter((row: Omit<ApiToken, 'plaintext_token'>) =>
+      !row.scopes?.some((scope) => scope.startsWith('handoff:'))
+    )
+    .map((row: Omit<ApiToken, 'plaintext_token'>) => ({
+      ...row,
+      plaintext_token: null,
+    }));
 }
 
 /**

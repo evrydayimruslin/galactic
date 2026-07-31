@@ -12,6 +12,7 @@ import {
   type CloudOperationMeteringContext,
   debitCloudOperation,
 } from "../../services/cloud-usage.ts";
+import { assertBindingEffectAuthority } from "./function-authority.ts";
 
 // ============================================
 // TYPES
@@ -20,6 +21,11 @@ import {
 interface AppDataBindingProps {
   appId: string;
   userId: string;
+  // Host-authored, per-function capability ceiling. Optional only for
+  // backwards compatibility with bindings created before function authority.
+  allowRead?: boolean;
+  allowWrite?: boolean;
+  allowDelete?: boolean;
   operationMetering?: CloudOperationMeteringContext | null;
   operationBillingConfig?:
     | Pick<
@@ -46,20 +52,20 @@ export class AppDataBinding
   // (Cloudflare WorkerEntrypoint contract), so this is call-scoped. Set at each
   // public method entry; meter() resolves the CURRENT metering context from it,
   // so a warm-reused isolate never meters against a stale baked hold.
-  private execCtxHandle?: string;
+  #execCtxHandle?: string;
 
-  private getR2Bucket(): R2Bucket {
+  #getR2Bucket(): R2Bucket {
     return globalThis.__env.R2_BUCKET;
   }
 
-  private meteringContext() {
+  #meteringContext() {
     // Handle threaded (even if it resolves to null) → resolve-or-FAIL-CLOSED:
     // never fall back to props, which are frozen at load and go STALE under a
     // warm get() reuse. Handle NOT threaded (undefined: legacy/direct-call
     // path) → props fallback preserves pre-registry behavior. No-op under
     // load(); safety linchpin under get() reuse. See database-binding.ts.
-    if (this.execCtxHandle !== undefined) {
-      const resolved = resolveExecutionContext(this.execCtxHandle);
+    if (this.#execCtxHandle !== undefined) {
+      const resolved = resolveExecutionContext(this.#execCtxHandle);
       return {
         metering: resolved?.cloudOperationMetering ?? null,
         billingConfig: resolved?.cloudOperationBillingConfig ?? null,
@@ -71,8 +77,8 @@ export class AppDataBinding
     };
   }
 
-  private async meter(operation: string, key?: string): Promise<void> {
-    const { metering, billingConfig } = this.meteringContext();
+  async #meter(operation: string, key?: string): Promise<void> {
+    const { metering, billingConfig } = this.#meteringContext();
     if (!metering) {
       return;
     }
@@ -91,7 +97,7 @@ export class AppDataBinding
     });
   }
 
-  private dataKey(key: string): string {
+  #dataKey(key: string): string {
     const { appId, userId } = this.ctx.props;
     const sanitized = key.replace(/[^a-zA-Z0-9\-_\/]/g, "_");
     return userId
@@ -104,26 +110,28 @@ export class AppDataBinding
     value: unknown,
     execCtxHandle?: string,
   ): Promise<void> {
-    if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
-    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
-    await this.meter("appdata.store", key);
-    const bucket = this.getR2Bucket();
+    assertBindingEffectAuthority(this.ctx.props.allowWrite, "storage.write");
+    if (execCtxHandle !== undefined) this.#execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.#execCtxHandle, this.ctx.props.requireExecCtx);
+    await this.#meter("appdata.store", key);
+    const bucket = this.#getR2Bucket();
     const data = JSON.stringify({
       key,
       value,
       updated_at: new Date().toISOString(),
     });
-    await bucket.put(this.dataKey(key), data, {
+    await bucket.put(this.#dataKey(key), data, {
       httpMetadata: { contentType: "application/json" },
     });
   }
 
   async load(key: string, execCtxHandle?: string): Promise<unknown> {
-    if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
-    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
-    await this.meter("appdata.load", key);
-    const bucket = this.getR2Bucket();
-    const obj = await bucket.get(this.dataKey(key));
+    assertBindingEffectAuthority(this.ctx.props.allowRead, "storage.read");
+    if (execCtxHandle !== undefined) this.#execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.#execCtxHandle, this.ctx.props.requireExecCtx);
+    await this.#meter("appdata.load", key);
+    const bucket = this.#getR2Bucket();
+    const obj = await bucket.get(this.#dataKey(key));
     if (!obj) return null;
     const text = await obj.text();
     try {
@@ -135,18 +143,20 @@ export class AppDataBinding
   }
 
   async remove(key: string, execCtxHandle?: string): Promise<void> {
-    if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
-    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
-    await this.meter("appdata.remove", key);
-    const bucket = this.getR2Bucket();
-    await bucket.delete(this.dataKey(key));
+    assertBindingEffectAuthority(this.ctx.props.allowDelete, "storage.delete");
+    if (execCtxHandle !== undefined) this.#execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.#execCtxHandle, this.ctx.props.requireExecCtx);
+    await this.#meter("appdata.remove", key);
+    const bucket = this.#getR2Bucket();
+    await bucket.delete(this.#dataKey(key));
   }
 
   async list(prefix?: string, execCtxHandle?: string): Promise<string[]> {
-    if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
-    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
-    await this.meter("appdata.list", prefix);
-    const bucket = this.getR2Bucket();
+    assertBindingEffectAuthority(this.ctx.props.allowRead, "storage.read");
+    if (execCtxHandle !== undefined) this.#execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.#execCtxHandle, this.ctx.props.requireExecCtx);
+    await this.#meter("appdata.list", prefix);
+    const bucket = this.#getR2Bucket();
     const { appId, userId } = this.ctx.props;
     const r2Prefix = userId
       ? `apps/${appId}/users/${userId}/data/${prefix || ""}`

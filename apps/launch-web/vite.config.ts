@@ -27,7 +27,9 @@ export default {
         changeOrigin: true,
         secure: true,
       },
-      "/auth": {
+      // The passwordless confirmation screen is a launch-web SPA route. All
+      // other /auth endpoints continue to proxy to the API worker.
+      "^/auth/(?!confirm(?:[/?]|$))": {
         target: launchApiProxyTarget,
         changeOrigin: true,
         secure: true,

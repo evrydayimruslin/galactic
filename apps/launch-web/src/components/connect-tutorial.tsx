@@ -5,8 +5,8 @@ import type { LocationState } from "../App";
 import { createStudioHandoffCredential } from "../lib/agent-studio-handoff-credential";
 import { launchApiOrigin } from "../lib/api";
 import {
-  parseConnectTutorialContext,
   type ConnectTutorialIntent,
+  parseConnectTutorialContext,
 } from "../lib/connect-tutorial";
 import { AgentStudioHandoff } from "./agent-studio/agent-studio-handoff";
 import type {
@@ -50,7 +50,7 @@ function tutorialTheme(): "light" | "dark" {
 
 /**
  * The canonical Connect surface uses the same handoff component as Agent
- * Studio. Credentials are issued only after Copy, expire in 30 minutes, and
+ * Studio. Credentials are issued only after Copy, expire in 60 minutes, and
  * are never replaced with the legacy broad 30-day builder key.
  */
 export function ConnectTutorialPanel({
@@ -68,8 +68,8 @@ export function ConnectTutorialPanel({
 }): ReactElement {
   const context = parseConnectTutorialContext(location.search);
   const needsAgent = isExtensionIntent(context.intent);
-  const intendedIntent =
-    context.intent as AuthenticatedAgentStudioHandoffIntent;
+  const intendedIntent = context
+    .intent as AuthenticatedAgentStudioHandoffIntent;
   const activeIntent = signedIn ? intendedIntent : "signed-out";
   const target = handoffTarget(agent);
   const draftStorageKey = `galactic.connect.handoff:${context.intent}:${
@@ -102,12 +102,7 @@ export function ConnectTutorialPanel({
     >
       <AgentStudioHandoff
         continuationIntent={intendedIntent}
-        createCredential={signedIn && intendedIntent !== "agent"
-          ? createStudioHandoffCredential
-          : undefined}
-        credentialUnavailableMessage={intendedIntent === "agent"
-          ? "New-Agent handoffs are waiting for durable single-create binding. No broader key will be substituted."
-          : undefined}
+        createCredential={signedIn ? createStudioHandoffCredential : undefined}
         draftStorageKey={draftStorageKey}
         intent={activeIntent}
         key={draftStorageKey}

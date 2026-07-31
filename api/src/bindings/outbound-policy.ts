@@ -41,7 +41,9 @@ function parseIpv4Literal(host: string): number[] | null {
   let asInt: number | null = null;
   if (/^0x[0-9a-f]+$/.test(host)) asInt = parseInt(host, 16);
   else if (/^[0-9]+$/.test(host)) asInt = parseInt(host, 10);
-  if (asInt === null || !Number.isFinite(asInt) || asInt < 0 || asInt > 0xffffffff) {
+  if (
+    asInt === null || !Number.isFinite(asInt) || asInt < 0 || asInt > 0xffffffff
+  ) {
     return null;
   }
   return [
@@ -84,7 +86,9 @@ function embeddedIpv4FromIpv6(host: string): number[] | null {
   if (hextets.length < 2) return null;
   const last = hextets[hextets.length - 1];
   const prev = hextets[hextets.length - 2];
-  if (!/^[0-9a-f]{1,4}$/.test(last) || !/^[0-9a-f]{1,4}$/.test(prev)) return null;
+  if (!/^[0-9a-f]{1,4}$/.test(last) || !/^[0-9a-f]{1,4}$/.test(prev)) {
+    return null;
+  }
   const low = parseInt(last, 16);
   const high = parseInt(prev, 16);
   return [(high >> 8) & 0xff, high & 0xff, (low >> 8) & 0xff, low & 0xff];
@@ -131,11 +135,18 @@ export function hostInAllowlist(
   host: string,
   port: string,
   allowlist: readonly string[],
+  protocol?: string,
 ): boolean {
   let h = host.trim().toLowerCase();
   if (h.startsWith("[") && h.endsWith("]")) h = h.slice(1, -1); // IPv6 literal
   if (h.length > 1 && h.endsWith(".")) h = h.slice(0, -1); // rooted FQDN
-  const p = String(port ?? "");
+  const normalizedProtocol = protocol?.trim().toLowerCase();
+  const p = String(port ?? "") ||
+    (normalizedProtocol === "https:"
+      ? "443"
+      : normalizedProtocol === "http:"
+      ? "80"
+      : "");
 
   for (const raw of allowlist) {
     const entry = raw.trim().toLowerCase();
@@ -178,9 +189,15 @@ export function evaluateOutbound(
     return { allowed: false, reason: `scheme not allowed: ${url.protocol}` };
   }
   if (isBlockedHost(url.hostname)) {
-    return { allowed: false, reason: `destination not allowed: ${url.hostname}` };
+    return {
+      allowed: false,
+      reason: `destination not allowed: ${url.hostname}`,
+    };
   }
-  if (allowlist && !hostInAllowlist(url.hostname, url.port, allowlist)) {
+  if (
+    allowlist &&
+    !hostInAllowlist(url.hostname, url.port, allowlist, url.protocol)
+  ) {
     return {
       allowed: false,
       reason: `destination not in allowlist: ${url.hostname}`,
@@ -277,7 +294,10 @@ export async function guardedFetch(
 
     // Method/body transition: 301/302/303 downgrade a body-bearing method to GET
     // (browser behavior); 307/308 preserve method + body.
-    if (response.status === 301 || response.status === 302 || response.status === 303) {
+    if (
+      response.status === 301 || response.status === 302 ||
+      response.status === 303
+    ) {
       if (method !== "GET" && method !== "HEAD") {
         method = "GET";
         body = null;

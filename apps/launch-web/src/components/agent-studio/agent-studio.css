@@ -996,6 +996,15 @@
   margin-top: 14px;
 }
 
+.agent-studio-setup-step button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.agent-studio-setup-step .agent-studio-setup-error {
+  color: var(--danger);
+}
+
 .agent-studio-setup-note {
   margin-top: 24px;
   color: var(--ink-3);

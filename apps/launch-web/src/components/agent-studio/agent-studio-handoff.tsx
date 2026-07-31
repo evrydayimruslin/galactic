@@ -1,19 +1,13 @@
-import {
-  type ReactElement,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { type ReactElement, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   AGENT_STUDIO_HANDOFF_COPY,
   AGENT_STUDIO_HANDOFF_INTENTS,
-  type AuthenticatedAgentStudioHandoffIntent,
   type AgentStudioHandoffCopy,
   type AgentStudioHandoffCredentialIssued,
   type AgentStudioHandoffIntent,
   type AgentStudioHandoffTarget,
+  type AuthenticatedAgentStudioHandoffIntent,
   buildAgentStudioHandoffPrompt,
   buildRedactedHandoffPreview,
   buildSignedOutHandoffPreview,
@@ -46,7 +40,6 @@ export interface AgentStudioHandoffProps {
   platformMcpUrl?: string;
   showIntentTabs?: boolean;
   target?: AgentStudioHandoffTarget | null;
-  workspaceAgentCount?: number | null;
 }
 
 type CredentialPhase =
@@ -82,19 +75,20 @@ export function AgentStudioHandoff({
   onDescriptionChange,
   onIntentChange,
   onSignIn,
-  platformMcpUrl = "https://api.galactic.dev/mcp/platform",
+  platformMcpUrl = "https://api.connectgalactic.com/mcp/platform",
   showIntentTabs = false,
   target = null,
-  workspaceAgentCount = null,
 }: AgentStudioHandoffProps): ReactElement {
-  const [internalIntent, setInternalIntent] =
-    useState<AgentStudioHandoffIntent>(initialIntent);
+  const [internalIntent, setInternalIntent] = useState<
+    AgentStudioHandoffIntent
+  >(initialIntent);
   const intent = controlledIntent ?? internalIntent;
   const [descriptions, setDescriptions] = useState<
     Partial<Record<AgentStudioHandoffIntent, string>>
   >(() => readDrafts(draftStorageKey, initialDescriptions));
-  const [credentialState, setCredentialState] =
-    useState<CredentialState>(EMPTY_CREDENTIAL_STATE);
+  const [credentialState, setCredentialState] = useState<CredentialState>(
+    EMPTY_CREDENTIAL_STATE,
+  );
   const requestGeneration = useRef(0);
   const description = descriptions[intent] ?? "";
   const copy = AGENT_STUDIO_HANDOFF_COPY[intent];
@@ -105,7 +99,9 @@ export function AgentStudioHandoff({
     exactTargetReady &&
     !signedOut &&
     Boolean(createCredential);
-  const displayCopy = dynamicCopy(copy, intent, target);
+  const displayCopy = signedOut
+    ? signedOutCopy(continuationIntent ?? "connect")
+    : dynamicCopy(copy, intent, target);
 
   useEffect(() => {
     if (!draftStorageKey) return;
@@ -122,10 +118,9 @@ export function AgentStudioHandoff({
     requestGeneration.current += 1;
     setCredentialState(EMPTY_CREDENTIAL_STATE);
   }, [description, intent, target?.id]);
-  useEffect(() =>
-    () => {
-      requestGeneration.current += 1;
-    }, []);
+  useEffect(() => () => {
+    requestGeneration.current += 1;
+  }, []);
 
   const preview = useMemo(() => {
     if (signedOut) {
@@ -246,12 +241,12 @@ export function AgentStudioHandoff({
     phase: credentialState.phase,
   });
   const metadata = handoffMetadata({
+    continuationIntent,
     credential: credentialState.credential,
     intent,
     target,
-    workspaceAgentCount,
   });
-  const beats = handoffBeats(intent, target);
+  const beats = handoffBeats(intent, target, continuationIntent);
   const actionBusy = credentialState.phase === "issuing" ||
     credentialState.phase === "copying";
 
@@ -395,9 +390,7 @@ export function AgentStudioHandoff({
                     })}
                 </div>
                 <button
-                  className={credentialState.phase === "copied"
-                    ? "copied"
-                    : ""}
+                  className={credentialState.phase === "copied" ? "copied" : ""}
                   disabled={!ready || actionBusy}
                   onClick={copyPrompt}
                   type="button"
@@ -493,18 +486,54 @@ function dynamicCopy(
     cardTitle: `New ${target.name} ${
       intent === "function" ? "function" : intent
     }`,
-    headline: `${intent === "function" ? "Write" : intent === "routine"
-      ? "Start"
-      : "Add"} a${intent === "interface" ? "n" : ""} ${noun} for ${
-      target.name
-    }`,
+    headline: `${
+      intent === "function" ? "Write" : intent === "routine" ? "Start" : "Add"
+    } a${intent === "interface" ? "n" : ""} ${noun} for ${target.name}`,
     subhead: copy.subhead.replaceAll("this Agent", target.name),
+  };
+}
+
+function signedOutCopy(
+  continuationIntent: AuthenticatedAgentStudioHandoffIntent,
+): AgentStudioHandoffCopy {
+  const base = AGENT_STUDIO_HANDOFF_COPY["signed-out"];
+  const destination = AGENT_STUDIO_HANDOFF_COPY[continuationIntent];
+  if (continuationIntent === "connect") {
+    return {
+      ...base,
+      backResultLabel: "an inspection-only connection",
+      fieldLabel: "Optional · what should it explain first?",
+      headline: destination.headline,
+      placeholder: destination.placeholder,
+      subhead:
+        "Sign in first, then Galactic can issue a 60-minute inspection-only connection for builder tools, scaffold, and lint guidance. It cannot enumerate your Agents, stage source, or change anything.",
+      thirdBeatTitle: destination.thirdBeatTitle,
+    };
+  }
+  const noun = continuationIntent === "agent"
+    ? "Agent"
+    : continuationIntent === "interface"
+    ? "interface"
+    : continuationIntent === "function"
+    ? "capability"
+    : "routine";
+  return {
+    ...base,
+    backResultLabel: `a tested ${noun} candidate`,
+    cardTitle: `${destination.cardTitle} · sign in required`,
+    fieldLabel: destination.fieldLabel.replace("Required", "Optional"),
+    headline: destination.headline,
+    placeholder: destination.placeholder,
+    subhead:
+      `Start describing the ${noun} now and it will still be here after you sign in. Galactic then issues a 60-minute purpose-bound key that can submit one tested candidate for review; it cannot deploy or activate it.`,
+    thirdBeatTitle: `Review the tested ${noun} candidate`,
   };
 }
 
 function handoffBeats(
   intent: AgentStudioHandoffIntent,
   target: AgentStudioHandoffTarget | null,
+  continuationIntent?: AuthenticatedAgentStudioHandoffIntent,
 ) {
   const name = target?.name ?? "this Agent";
   switch (intent) {
@@ -521,7 +550,7 @@ function handoffBeats(
         },
         {
           body:
-            "Release 1.0.0, private and paused, with nothing granted until you say so.",
+            "A tested candidate for release 1.0.0, with nothing deployed or granted until you review it.",
           title: AGENT_STUDIO_HANDOFF_COPY.agent.thirdBeatTitle,
         },
       ];
@@ -533,31 +562,50 @@ function handoffBeats(
         },
         {
           body:
-            "Nothing changes yet—it connects, lists what it sees, and waits for you.",
-          title: "Your coding agent connects and lists what it sees",
+            "Nothing changes—it lists only the bounded scaffold and lint tools, then waits for you.",
+          title: "Your coding agent confirms the safe connection",
         },
         {
           body:
-            "Each change arrives as an immutable release you approve or roll back.",
+            "Choose New Agent, Interface, Function, or Routine when you want it to prepare a tested candidate.",
           title: AGENT_STUDIO_HANDOFF_COPY.connect.thirdBeatTitle,
         },
       ];
     case "signed-out":
+      if ((continuationIntent ?? "connect") === "connect") {
+        return [
+          {
+            body:
+              "A temporary inspection-only key has to belong to a confirmed account.",
+            title: "Sign in to Galactic",
+          },
+          {
+            body:
+              "It arrives written for you, with a 60-minute key that exposes only safe builder guidance.",
+            title: "Paste this prompt to your coding agent",
+          },
+          {
+            body:
+              "It can inspect tools, scaffold, and lint guidance, but cannot enumerate Agents, stage source, or change anything.",
+            title: AGENT_STUDIO_HANDOFF_COPY.connect.thirdBeatTitle,
+          },
+        ];
+      }
       return [
         {
           body:
-            "A temporary key that can stage Agent changes has to belong to an account.",
+            "A temporary purpose-bound key has to belong to a confirmed account.",
           title: "Sign in to Galactic",
         },
         {
           body:
-            "It arrives written for you, with a genuinely short-lived key.",
+            "It arrives written for you, with a 60-minute key bound to this exact build.",
           title: "Paste this prompt to your coding agent",
         },
         {
           body:
-            "Each change arrives as an immutable release you approve or roll back.",
-          title: AGENT_STUDIO_HANDOFF_COPY["signed-out"].thirdBeatTitle,
+            "The exact tested candidate waits for your review. Membership then unlocks a separate manual Deploy step.",
+          title: signedOutCopy(continuationIntent!).thirdBeatTitle,
         },
       ];
     default: {
@@ -581,12 +629,10 @@ function handoffBeats(
           title: "Your coding agent asks, builds and stages",
         },
         {
-          body: intent === "routine"
-            ? "On Routines, paused, so nothing wakes until you switch it on."
-            : intent === "function"
-            ? "On Capabilities as tested code; no autonomous authority is implied until you configure an enforced policy."
-            : "On Interfaces, tied to the immutable release you approve.",
-          title: `The ${result} runs on Galactic`,
+          body: intent === "function"
+            ? "Submitted as tested code for review; no authority is granted and nothing changes until you manually deploy it."
+            : `Submitted as part of one immutable full-release candidate; the ${result} changes nothing until you manually deploy it.`,
+          title: AGENT_STUDIO_HANDOFF_COPY[intent].thirdBeatTitle,
         },
       ];
     }
@@ -594,24 +640,35 @@ function handoffBeats(
 }
 
 function handoffMetadata({
+  continuationIntent,
   credential,
   intent,
   target,
-  workspaceAgentCount,
 }: {
+  continuationIntent?: AuthenticatedAgentStudioHandoffIntent;
   credential: AgentStudioHandoffCredentialIssued | null;
   intent: AgentStudioHandoffIntent;
   target: AgentStudioHandoffTarget | null;
-  workspaceAgentCount: number | null;
 }) {
   if (intent === "signed-out") {
+    const destination = continuationIntent ?? "connect";
+    const agent = destination === "agent"
+      ? "one reserved Agent after sign-in"
+      : destination === "connect"
+      ? "none · builder guidance only"
+      : "exact Agent chosen after sign-in";
+    const scope = destination === "connect"
+      ? "inspection only"
+      : destination === "agent"
+      ? "one new-Agent candidate"
+      : `one ${destination} candidate`;
     return [
       { label: "Signed in as", tone: "accent", value: "nobody yet" },
-      { label: "Agent", tone: "muted", value: "chosen after sign-in" },
+      { label: "Agent", tone: "muted", value: agent },
       {
         label: "Scope",
         tone: "muted",
-        value: "server-bounded after sign-in",
+        value: scope,
       },
       { label: "Token", tone: "accent", value: "issued after sign-in" },
       {
@@ -625,17 +682,15 @@ function handoffMetadata({
   const keyValue = credential
     ? maskCredential(credential.bearerToken)
     : "issued when copied";
-  const expiry = credential
-    ? formatExpiry(credential.expiresAt)
-    : "not issued";
+  const expiry = credential ? formatExpiry(credential.expiresAt) : "not issued";
   if (intent === "agent") {
     return [
       { label: "Creating", tone: "", value: "a new Agent" },
       { label: "Existing Agents", tone: "", value: "untouched" },
       {
         label: "Scope",
-        tone: "danger",
-        value: "single-create binding required",
+        tone: "accent",
+        value: "one reserved Agent",
       },
       { label: "Token", tone: "accent", value: keyValue },
       { label: "Token expires", tone: "accent", value: expiry },
@@ -647,11 +702,9 @@ function handoffMetadata({
       {
         label: "Covers",
         tone: "",
-        value: workspaceAgentCount === null
-          ? "your workspace Agents"
-          : `all your Agents · ${workspaceAgentCount}`,
+        value: "builder tools, scaffold, and lint guidance",
       },
-      { label: "Scope", tone: "accent", value: "inspect + stage candidate" },
+      { label: "Scope", tone: "accent", value: "inspection only" },
       { label: "Token", tone: "accent", value: keyValue },
       { label: "Token expires", tone: "accent", value: expiry },
     ];

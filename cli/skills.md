@@ -248,6 +248,7 @@ Canonical setup blockers, incidents, usage reports, and platform-owned remediati
 - Never infer a destination or action from title/detail prose. Use the returned remediation object.
 
 ### gx.upload({ files?, bundle_id?, test_attestation?, name?, description?, visibility?, app_id?, type? })
+
 Deploy TypeScript app or publish markdown page.
 
 - `type: "page"`: publish markdown at a URL. Requires `content` + `slug`.
@@ -266,24 +267,60 @@ Deploy TypeScript app or publish markdown page.
 - With `app_id`: download app source code (respects download_access setting).
 - Downloaded `.wasm` files use `encoding: "base64"` so clients can restore the
   exact published bytes.
-- Without `app_id`: scaffold a new app. The enabled runtime generates index.ts +
-  manifest.json + .ultralightrc.json. Optional: `functions` array, `storage`
-  type, `permissions` list, `policy: true` for policy.ts.
+- Without `app_id`: scaffold a new app. The enabled runtime generates
+  `index.ts` + root `galactic.yaml` + `.ultralightrc.json`. The YAML is the
+  authored release contract; Galactic compiles its internal runtime manifest.
+  Optional scaffold inputs include `functions`, storage, authority/permission
+  hints, and `policy: true` for `policy.ts`.
 
-### gx.test({ files?, bundle_id?, function_name?, test_args?, env_vars?, d1_fixtures?, lint_only?, strict? })
+### gx.test({ files?, bundle_id?, function_name?, test_args?, env_vars?, d1_fixtures?, http_fixtures?, lint_only?, strict? })
 
 Test code in sandbox without deploying.
 
 - Provide exactly one of `files` or a `bundle_id` from `gx.stage`.
-- Executes function with test_args in real sandbox. Storage is ephemeral.
+- With a root `galactic.yaml`, validates and builds the exact release, then
+  executes every declared `spec.conformance.cases` entry. The per-call
+  `function_name` and `test_args` fields are for the legacy manifest path.
+- Each case receives invocation-local storage and memory. Structured database
+  operations require exact `fixtures.database` responses. AI, embeddings,
+  compute, notification, and routine-history bindings return deterministic
+  no-side-effect test responses.
+- Raw and credentialed HTTP can return an exact canned `fixtures.http` response
+  without contacting the endpoint or exposing a credential. Unmatched HTTP,
+  raw TCP, IMAP/SMTP, event publishing, and cross-Agent calls are recorded,
+  blocked, and disqualifying.
+- `fixtures.http` is an ordered array of 1–32 entries:
+  `{ id, kind: "raw" | "credential", credential_key?, request: { method, url,
+  body_sha256? }, response: { status, headers?, exactly one of body_text or
+  body_base64 } }`.
+  The method and complete WHATWG-normalized HTTP(S) URL match exactly; query
+  order is significant, `body_sha256` matches exact request bytes, and first
+  complete match wins. Credential fixtures require HTTPS and their declared
+  `credential_key`. Request headers are not match inputs; response redirects
+  are forbidden. The normalized fixture set is capped at 4 MiB; each case is
+  capped at 32 HTTP attempts, 256 KiB per request body, and 8 MiB of matched
+  request/response bytes.
+- HTTP fixtures are bounded canned responses, not Gmail, Slack, or provider
+  simulators. They do not model OAuth, pagination, quotas, webhook semantics,
+  templates, regex, or callbacks, and they never fall back to live network.
+- Basic qualification requires a successful strict build, zero lint errors,
+  every required case to pass, no observed undeclared effect, and no blocked
+  external attempt. It reports exact case, function, and function/effect-pair
+  coverage; declared but unobserved effects remain `untested`.
+- A successful YAML test returns a signed v2 attestation binding the exact
+  source, normalized document, prepared release, report, and protocol
+  revisions. Upload recompiles and verifies that release identity.
+- Legacy `manifest.json` Agents retain single-function `test_args` execution
+  and v1 attestation compatibility.
 - If `test_fixture.json` has a single function entry, `function_name` can be
   omitted and fixture args become the default test_args.
 - `test_fixture.json` entries can be direct args or an envelope like
-  `{ args, env_vars, d1_fixtures }`.
-- Use `env_vars` to inject secrets or base URLs into `galactic.env` during the
-  test run.
-- Use `d1_fixtures` to provide fixture-backed `galactic.db.run/all/first/batch`
-  responses when you need D1 behavior before deploy.
+  `{ args, env_vars, d1_fixtures, http_fixtures }`.
+- On the legacy path, use `env_vars` for ephemeral test values and
+  `d1_fixtures` for structured `galactic.db` responses and `http_fixtures` for
+  exact canned HTTP. In `galactic.yaml`, declare placeholder-only values,
+  database responses, and HTTP responses under each case's `fixtures`; never
+  commit a real credential or real provider payload.
 - `lint_only: true`: validate code conventions without executing (single-args
   check, no-shorthand-return, manifest sync, permission detection).
 - `strict: true`: lint warnings become errors.
@@ -455,21 +492,87 @@ Manage your wallet: balance, earnings, conversions, withdrawals, payouts.
 → `gx.set`. For later edits, stage only the changed files against the prior
 `bundle_id`.
 
-**Always include a manifest.json** alongside index.ts. The manifest enables
-per-function pricing in the dashboard, typed parameter schemas for better agent
-tool use, permission grants, Settings surfaces on public app pages, and a
-declared `access_policy` hook for custom-coded permission/monetization logic.
-Without it, functions are auto-detected from exports but lack parameter/return
-metadata. Structure:
-`{ "functions": { "fnName": { "description": "...", "parameters": { "paramName": { "type": "string", "required": true, "description": "What this param does" } } } }, "access_policy": { "mode": "module", "module": "policy.ts", "export": "planAccess" }, "env_vars": { "MY_KEY": { "scope": "per_user", "input": "password", "description": "..." } } }`.
-Parameters must be an object keyed by parameter name (NOT an array).
+**New TypeScript Agents must author one root `galactic.yaml` and must not
+author `manifest.json` beside it.** The document is the release's promise:
+typed function contracts, function-scoped authority, endpoints and setup
+variables, routines/interfaces/policies, and named `basic` conformance cases.
+Galactic compiles the internal runtime manifest. Declared functions must match
+the executable exports exactly (apart from a declared access-policy export).
+
+```yaml
+apiVersion: agents.connectgalactic.com/v1alpha1
+kind: Agent
+metadata:
+  name: Example Agent
+  version: 1.0.0
+spec:
+  functions:
+    fnName:
+      description: Do one bounded task.
+      parameters:
+        paramName:
+          type: string
+          required: true
+      authority:
+        level: read
+        effects:
+          storage.read: free
+  conformance:
+    profile: basic
+    cases:
+      - id: fn-basic
+        function: fnName
+        input:
+          paramName: example
+```
+
+An HTTP case adds exact canned requests under its own fixtures:
+
+```yaml
+fixtures:
+  http:
+    - id: fetch-example
+      kind: raw
+      request:
+        method: GET
+        url: https://api.example.com/v1/items?state=open
+      response:
+        status: 200
+        headers:
+          content-type: application/json
+        body_text: '{"items":[]}'
+```
+
+Parameters are objects keyed by parameter name, not arrays. Every function
+requires `authority.level` (`read`, `internal_write`, or `external_write`) and
+an effect map whose values are `ask` or `free`. Declare external hosts under
+`spec.network.allowed_destinations`; declare variable names under
+`spec.env_vars`, and bind vaulted credentials to one declared destination with
+`credential.destination` plus `credential.inject`. Never put secret values in
+source or conformance fixtures. Managed mail uses one shared protocol prefix:
+`IMAP_HOST`/`IMAP_USER`/`IMAP_PASS` (or a shared `*_IMAP_*` prefix), and the
+equivalent `SMTP_*` names. Its resolved host must also be declared under
+`allowed_destinations`; do not attach the HTTP-specific `credential` block to
+those mail variables. Declare the mail password `per_user` with
+`input: password`.
+
+At launch, `ask` means explicit approval during setup/activation and `free`
+means eligible for the owner's standing policy; neither value is a capability
+grant or a promise of a generic per-SDK-call prompt.
+
+Basic conformance is evidence about exercised cases, not a claim that every
+branch is safe. See
+[`docs/GALACTIC_YAML_V1ALPHA1.md`](docs/GALACTIC_YAML_V1ALPHA1.md) for the exact
+schema, all 19 stable effect IDs, fixtures, digest identities, and the legacy
+`manifest.json` migration path.
+
 `access_policy.module` records the source file, and `access_policy.export` must
 be exported from the bundled app entry surface, e.g.
 `export { planAccess } from "./policy.ts";`. Policy functions receive
 `{ app, caller, subject, input, metadata, static }` and return
 `{ effect: "allow", price_light?, charge_light?, free_quota_limit?, metadata? }`
-or `{ effect: "deny", reason }`. `gx.download` scaffolds the base manifest
-automatically.
+or `{ effect: "deny", reason }`. `gx.download` scaffolds the base
+`galactic.yaml` automatically.
 
 For expected operator-actionable failures, declare `operator_errors` keyed by the stable uppercase `Error.name`/type your code throws: `{ "operator_errors": { "UPSTREAM_TIMEOUT": { "summary": "The configured service did not respond.", "detail": "Review the failed run and verify the connection.", "retryable": true, "suggested_actions": ["inspect_run", "open_logs", "open_routine"] } } }`. Summary/detail must be secret-free. Suggested actions only prioritize harmless platform-generated navigation; Galactic still decides availability and owns every condition, target, label, authority check, `Run once`, approval, and resume control. Unknown fields and executable/privileged action declarations are rejected.
 
@@ -505,7 +608,8 @@ Static manifest pricing remains the fallback when no policy hook is configured.
 Agent code runs in a sandbox with the `galactic.*` SDK (alias: `ultralight.*` —
 both work; prefer `galactic.*` in new code). An Agent is not just a function —
 it inherits a whole backend: storage, a SQL database, AI, cross-Agent calls,
-payments, raw sockets, and secrets. Each capability and the permission it needs:
+payments, managed email, and vaulted credentials. Each capability and the
+permission it needs:
 
 | Capability                              | Call                                                                                                                         | Permission                          |
 | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
@@ -516,11 +620,14 @@ payments, raw sockets, and secrets. Each capability and the permission it needs:
 | SQL (D1, per-user isolation enforced)   | `galactic.db.run / all / first / batch`                                                                                      | —                                   |
 | Cross-app user memory                   | `galactic.remember / recall`                                                                                                 | —                                   |
 | Identity                                | `galactic.user` · `isAuthenticated()` · `requireAuth()`                                                                      | —                                   |
-| Secrets (decrypted)                     | `galactic.env.MY_KEY`                                                                                                        | declare in manifest `env_vars`      |
+| Setup configuration                     | `galactic.env.MY_VALUE` (vaulted password/credential values are not exposed)                                                 | declare in `spec.env_vars`           |
 | HTTPS fetch                             | `fetch(url)` (15s · 10MB · 20 concurrent)                                                                                    | —                                   |
-| **Raw TCP/TLS sockets**                 | `galactic.net.connectTls(host, port)` · `connectPlain`                                                                       | `net:connect`                       |
+| Managed IMAP/SMTP                       | `galactic.net.imapFetchUnseen(...)` · `smtpSend(...)`                                                                        | declare the exact email effect       |
 | Supabase (bring-your-own)               | `supabase` client (when configured)                                                                                          | —                                   |
 | Stdlib (global)                         | `_` (lodash) · `uuid` · `base64` · `hash` · `dateFns` · `schema` (Zod-like) · `markdown` · `str` · `jwt` · `http` · `crypto` | —                                   |
+
+Raw TCP/TLS sockets are not exposed in the Dynamic Worker runtime.
+`network.tcp` is reserved in v1alpha1 and does not create a socket capability.
 
 #### `galactic.ai(request)` — multimodal chat completion
 

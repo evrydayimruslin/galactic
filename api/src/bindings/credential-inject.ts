@@ -50,12 +50,21 @@ export function prepareCredentialRequest(
   } catch {
     throw new Error("invalid URL");
   }
-  if (target.protocol !== "https:" && target.protocol !== "http:") {
-    throw new Error(`scheme not allowed: ${target.protocol}`);
+  if (target.protocol !== "https:") {
+    throw new Error(
+      `credentialed requests require https, not ${target.protocol}`,
+    );
   }
   // The secret may ONLY be sent to its declared destination (a single host,
   // optionally wildcard/port) — reuses the Phase 2 host matcher.
-  if (!hostInAllowlist(target.hostname, target.port, [decl.destination])) {
+  if (
+    !hostInAllowlist(
+      target.hostname,
+      target.port,
+      [decl.destination],
+      target.protocol,
+    )
+  ) {
     throw new Error(
       `Credential "${credentialKey}" is only valid for ${decl.destination}, not ${target.hostname}`,
     );

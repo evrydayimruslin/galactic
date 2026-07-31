@@ -80,4 +80,5 @@ Deno.test('Public app contract: select allowlists never request secret columns o
   }
 
   assert(PUBLIC_APP_SERVING_SELECT.includes('storage_key'));
+  assert(PUBLIC_APP_SERVING_SELECT.includes('deployment_state'));
 });

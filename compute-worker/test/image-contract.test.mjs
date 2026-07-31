@@ -385,12 +385,20 @@ describe("Compute release supply-chain contract", () => {
     );
     const imageBuild = workflow.slice(
       workflow.indexOf("- name: Build and smoke exact image"),
+      workflow.indexOf("- name: Push image and resolve registry digest"),
+    );
+    const sbom = workflow.slice(
       workflow.indexOf("- name: Generate image SBOM"),
+      workflow.indexOf(
+        "- name: Gate all critical and fixable high image vulnerabilities",
+      ),
     );
     expect(jobHeader).not.toContain("CLOUDFLARE_API_TOKEN");
     expect(jobHeader).not.toContain("CLOUDFLARE_ACCOUNT_ID");
     expect(install).not.toContain("CLOUDFLARE_API_TOKEN");
     expect(imageBuild).not.toContain("CLOUDFLARE_API_TOKEN");
+    expect(sbom).not.toContain("CLOUDFLARE_API_TOKEN");
+    expect(sbom).not.toContain("CLOUDFLARE_ACCOUNT_ID");
   });
 
   it("keeps API deploy credentials out of dependency lifecycle steps", () => {

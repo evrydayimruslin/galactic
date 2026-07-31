@@ -1,0 +1,173 @@
+.neb-preauth-topbar {
+  padding-right: 37px;
+}
+
+.neb-preauth-signin {
+  min-height: 34px;
+  padding: 0 15px;
+  border: 1px solid var(--line-2);
+  background: var(--chip);
+  color: var(--ink-2);
+  cursor: pointer;
+  font-family: var(--mono) !important;
+  font-size: 11px;
+  letter-spacing: .06em;
+}
+
+.neb-preauth-signin:hover {
+  border-color: var(--accent-line-soft);
+  color: var(--ink);
+}
+
+.neb-preauth-app {
+  display: flex;
+  min-height: 100dvh;
+  align-items: center;
+  padding-top: 112px;
+}
+
+.neb-preauth-fleet {
+  width: 100%;
+  padding: 20px 6px 48px;
+}
+
+.neb-preauth-hero {
+  max-width: 680px;
+  margin-bottom: 40px;
+}
+
+.neb-preauth-hero h1 {
+  margin: 0 0 12px;
+  padding-bottom: .1em;
+  color: var(--hero);
+  font-family: var(--serif);
+  font-size: 46px;
+  font-weight: 500;
+  line-height: 1.1;
+  letter-spacing: -.015em;
+}
+
+.neb-preauth-hero p {
+  max-width: 60ch;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13.5px;
+  line-height: 1.65;
+}
+
+.neb-preauth-add-agent {
+  min-height: 196px;
+  text-decoration: none;
+}
+
+.neb-preauth-plus {
+  color: var(--accent-text);
+  font-family: var(--serif);
+  font-size: 26px;
+  line-height: 1;
+}
+
+.neb-preauth-add-label {
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.neb-preauth-add-agent > span:last-child {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: .05em;
+}
+
+.neb-preauth-example {
+  min-height: 196px;
+  cursor: default;
+  border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+  background: color-mix(in srgb, var(--card) 92%, var(--ground));
+  box-shadow:
+    -3px -3px 9px color-mix(in srgb, var(--ground) 76%, white),
+    4px 5px 12px color-mix(in srgb, var(--ink) 9%, transparent);
+  pointer-events: none;
+}
+
+.neb-preauth-example .neb-agent-name,
+.neb-preauth-example .neb-last-action-item {
+  color: var(--ink-2);
+}
+
+.neb-preauth-example .neb-card-no {
+  font-size: 10px;
+  text-transform: lowercase;
+}
+
+.neb-preauth-example .neb-agent-avatar {
+  color: var(--accent-text);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.neb-preauth-example .neb-last-actions {
+  display: flex;
+  min-height: 0;
+  align-items: end;
+  margin-top: 28px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.neb-preauth-example .neb-last-action-item {
+  width: 100%;
+}
+
+.neb-preauth-running {
+  color: var(--success-text);
+}
+
+.neb-preauth-running .neb-status-dot {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.neb-preauth-footnote {
+  margin: 36px 0 0;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.neb-preauth-footnote a {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--accent-text);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+@media (max-width: 720px) {
+  .neb-preauth-app {
+    align-items: start;
+    padding-top: 96px;
+  }
+
+  .neb-preauth-fleet {
+    padding-top: 8px;
+  }
+
+  .neb-preauth-hero {
+    margin-bottom: 28px;
+  }
+
+  .neb-preauth-hero h1 {
+    font-size: 40px;
+  }
+
+  .neb-preauth-example,
+  .neb-preauth-add-agent {
+    min-height: 176px;
+  }
+}

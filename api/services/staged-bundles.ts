@@ -1,16 +1,20 @@
-import { validateConnectedUploadFileSet } from './connected-upload-admission.ts';
+import { validateConnectedUploadFileSet } from "./connected-upload-admission.ts";
 import {
   computeDecodedSourceHash,
   type DecodedSourceFile,
   decodeSourceFileSet,
   type EncodedSourceFile,
   validateSourceFilePath,
-} from './test-attestation.ts';
-import type { FileUpload } from './storage.ts';
-import { canonicalJson, sha256Hex } from './trust.ts';
-import { bytesToBinaryString, isBinarySourcePath, sourceFileBytes } from './source-file-content.ts';
+} from "./test-attestation.ts";
+import type { FileUpload } from "./storage.ts";
+import { canonicalJson, sha256Hex } from "./trust.ts";
+import {
+  bytesToBinaryString,
+  isBinarySourcePath,
+  sourceFileBytes,
+} from "./source-file-content.ts";
 
-const BUNDLE_ID_PREFIX = 'gxb1_';
+const BUNDLE_ID_PREFIX = "gxb1_";
 const DEFAULT_RETENTION_SECONDS = 24 * 60 * 60;
 const MAX_RETENTION_SECONDS = 7 * 24 * 60 * 60;
 const MANIFEST_SCHEMA_VERSION = 1;
@@ -28,7 +32,7 @@ export interface StagedBundleFile {
   path: string;
   sha256: string;
   size_bytes: number;
-  encoding: 'text' | 'binary';
+  encoding: "text" | "binary";
 }
 
 export interface StagedBundleManifest {
@@ -94,22 +98,22 @@ export interface StageBundleResult {
 export class StagedBundleError extends Error {
   constructor(
     public readonly code:
-      | 'invalid_bundle_id'
-      | 'bundle_not_found'
-      | 'bundle_expired'
-      | 'bundle_corrupt'
-      | 'invalid_stage',
+      | "invalid_bundle_id"
+      | "bundle_not_found"
+      | "bundle_expired"
+      | "bundle_corrupt"
+      | "invalid_stage",
     message: string,
   ) {
     super(message);
-    this.name = 'StagedBundleError';
+    this.name = "StagedBundleError";
   }
 }
 
 function invalidStageError(error: unknown): StagedBundleError {
   if (error instanceof StagedBundleError) return error;
   return new StagedBundleError(
-    'invalid_stage',
+    "invalid_stage",
     error instanceof Error ? error.message : String(error),
   );
 }
@@ -119,7 +123,9 @@ function ownerStorageSegment(ownerId: string): string {
 }
 
 function bundleManifestKey(ownerId: string, bundleId: string): string {
-  return `staged-bundles/${ownerStorageSegment(ownerId)}/bundles/${bundleId}.json`;
+  return `staged-bundles/${
+    ownerStorageSegment(ownerId)
+  }/bundles/${bundleId}.json`;
 }
 
 function bundleBlobKey(ownerId: string, sha256: string): string {
@@ -127,7 +133,7 @@ function bundleBlobKey(ownerId: string, sha256: string): string {
 }
 
 async function computeBundleId(
-  files: Array<Pick<StagedBundleFile, 'path' | 'sha256' | 'encoding'>>,
+  files: Array<Pick<StagedBundleFile, "path" | "sha256" | "encoding">>,
 ): Promise<string> {
   const canonicalFiles = files
     .map(({ path, sha256, encoding }) => ({ path, sha256, encoding }))
@@ -141,12 +147,12 @@ async function computeBundleId(
 
 function parseBundleId(bundleId: unknown): string {
   if (
-    typeof bundleId !== 'string' ||
+    typeof bundleId !== "string" ||
     !new RegExp(`^${BUNDLE_ID_PREFIX}[a-f0-9]{64}$`).test(bundleId)
   ) {
     throw new StagedBundleError(
-      'invalid_bundle_id',
-      'bundle_id must be a valid Galactic staged bundle ID',
+      "invalid_bundle_id",
+      "bundle_id must be a valid Galactic staged bundle ID",
     );
   }
   return bundleId;
@@ -156,8 +162,8 @@ function retentionSeconds(value: number | undefined): number {
   if (value === undefined) return DEFAULT_RETENTION_SECONDS;
   if (!Number.isFinite(value) || value <= 0) {
     throw new StagedBundleError(
-      'invalid_stage',
-      'retentionSeconds must be a positive number',
+      "invalid_stage",
+      "retentionSeconds must be a positive number",
     );
   }
   return Math.min(MAX_RETENTION_SECONDS, Math.floor(value));
@@ -173,70 +179,70 @@ function parseManifest(
     value = JSON.parse(raw);
   } catch {
     throw new StagedBundleError(
-      'bundle_corrupt',
-      'Bundle manifest is not valid JSON',
+      "bundle_corrupt",
+      "Bundle manifest is not valid JSON",
     );
   }
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new StagedBundleError('bundle_corrupt', 'Bundle manifest is invalid');
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new StagedBundleError("bundle_corrupt", "Bundle manifest is invalid");
   }
   const manifest = value as Record<string, unknown>;
   if (
     manifest.schema_version !== MANIFEST_SCHEMA_VERSION ||
     manifest.bundle_id !== expectedBundleId ||
     manifest.owner_id !== ownerId ||
-    typeof manifest.source_hash !== 'string' ||
+    typeof manifest.source_hash !== "string" ||
     !/^[a-f0-9]{64}$/.test(manifest.source_hash) ||
-    typeof manifest.created_at !== 'string' ||
+    typeof manifest.created_at !== "string" ||
     !Number.isFinite(Date.parse(manifest.created_at)) ||
-    typeof manifest.expires_at !== 'string' ||
+    typeof manifest.expires_at !== "string" ||
     !Number.isFinite(Date.parse(manifest.expires_at)) ||
     !Array.isArray(manifest.files)
   ) {
-    throw new StagedBundleError('bundle_corrupt', 'Bundle manifest is invalid');
+    throw new StagedBundleError("bundle_corrupt", "Bundle manifest is invalid");
   }
 
   const seen = new Set<string>();
   const files = manifest.files.map((rawFile, index) => {
-    if (!rawFile || typeof rawFile !== 'object' || Array.isArray(rawFile)) {
+    if (!rawFile || typeof rawFile !== "object" || Array.isArray(rawFile)) {
       throw new StagedBundleError(
-        'bundle_corrupt',
-        'Bundle file metadata is invalid',
+        "bundle_corrupt",
+        "Bundle file metadata is invalid",
       );
     }
     const file = rawFile as Record<string, unknown>;
     if (
-      typeof file.path !== 'string' ||
+      typeof file.path !== "string" ||
       seen.has(file.path) ||
-      typeof file.sha256 !== 'string' ||
+      typeof file.sha256 !== "string" ||
       !/^[a-f0-9]{64}$/.test(file.sha256) ||
-      typeof file.size_bytes !== 'number' ||
+      typeof file.size_bytes !== "number" ||
       !Number.isSafeInteger(file.size_bytes) ||
       file.size_bytes < 0 ||
-      (file.encoding !== 'text' && file.encoding !== 'binary')
+      (file.encoding !== "text" && file.encoding !== "binary")
     ) {
       throw new StagedBundleError(
-        'bundle_corrupt',
-        'Bundle file metadata is invalid',
+        "bundle_corrupt",
+        "Bundle file metadata is invalid",
       );
     }
     try {
       validateSourceFilePath(file.path, index);
     } catch {
       throw new StagedBundleError(
-        'bundle_corrupt',
-        'Bundle manifest contains an invalid source path',
+        "bundle_corrupt",
+        "Bundle manifest contains an invalid source path",
       );
     }
     if (
-      (file.encoding === 'binary') !== isBinarySourcePath(file.path)
+      (file.encoding === "binary") !== isBinarySourcePath(file.path)
     ) {
       throw new StagedBundleError(
-        'bundle_corrupt',
+        "bundle_corrupt",
         `Bundle file encoding is invalid for ${file.path}`,
       );
     }
-    const encoding: StagedBundleFile['encoding'] = file.encoding;
+    const encoding: StagedBundleFile["encoding"] = file.encoding;
     seen.add(file.path);
     return {
       path: file.path,
@@ -247,8 +253,8 @@ function parseManifest(
   });
   if (files.length === 0) {
     throw new StagedBundleError(
-      'bundle_corrupt',
-      'Bundle manifest cannot be empty',
+      "bundle_corrupt",
+      "Bundle manifest cannot be empty",
     );
   }
   return {
@@ -273,8 +279,8 @@ async function fetchManifest(
     raw = await store.fetchTextFile(bundleManifestKey(ownerId, parsedId));
   } catch {
     throw new StagedBundleError(
-      'bundle_not_found',
-      'Staged bundle was not found',
+      "bundle_not_found",
+      "Staged bundle was not found",
     );
   }
   return parseManifest(raw, ownerId, parsedId);
@@ -283,8 +289,8 @@ async function fetchManifest(
 function assertNotExpired(manifest: StagedBundleManifest, now: Date): void {
   if (Date.parse(manifest.expires_at) <= now.getTime()) {
     throw new StagedBundleError(
-      'bundle_expired',
-      'Staged bundle has expired; stage the source again',
+      "bundle_expired",
+      "Staged bundle has expired; stage the source again",
     );
   }
 }
@@ -301,7 +307,7 @@ async function readBundleFiles(
       );
     } catch {
       throw new StagedBundleError(
-        'bundle_corrupt',
+        "bundle_corrupt",
         `Bundle content is missing for ${file.path}`,
       );
     }
@@ -310,11 +316,11 @@ async function readBundleFiles(
       bytes.byteLength !== file.size_bytes
     ) {
       throw new StagedBundleError(
-        'bundle_corrupt',
+        "bundle_corrupt",
         `Bundle content failed integrity verification for ${file.path}`,
       );
     }
-    if (file.encoding === 'binary') {
+    if (file.encoding === "binary") {
       return {
         path: file.path,
         content: bytesToBinaryString(bytes),
@@ -324,11 +330,11 @@ async function readBundleFiles(
     try {
       return {
         path: file.path,
-        content: new TextDecoder('utf-8', { fatal: true }).decode(bytes),
+        content: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
       };
     } catch {
       throw new StagedBundleError(
-        'bundle_corrupt',
+        "bundle_corrupt",
         `Bundle text is not valid UTF-8 for ${file.path}`,
       );
     }
@@ -343,16 +349,16 @@ export async function resolveStagedBundle(
   assertNotExpired(manifest, input.now ?? new Date());
   if (await computeBundleId(manifest.files) !== manifest.bundle_id) {
     throw new StagedBundleError(
-      'bundle_corrupt',
-      'Bundle manifest failed content-address verification',
+      "bundle_corrupt",
+      "Bundle manifest failed content-address verification",
     );
   }
   const files = await readBundleFiles(store, manifest);
   const sourceHash = await computeDecodedSourceHash(files);
   if (sourceHash !== manifest.source_hash) {
     throw new StagedBundleError(
-      'bundle_corrupt',
-      'Bundle source hash failed integrity verification',
+      "bundle_corrupt",
+      "Bundle source hash failed integrity verification",
     );
   }
   return { manifest, files };
@@ -365,18 +371,20 @@ export async function stageBundle(
   const now = input.now ?? new Date();
   const encodedChanges = input.files ?? [];
   if (!Array.isArray(encodedChanges)) {
-    throw new StagedBundleError('invalid_stage', 'files must be an array');
+    throw new StagedBundleError("invalid_stage", "files must be an array");
   }
   let changes: DecodedSourceFile[];
   try {
-    changes = encodedChanges.length > 0 ? decodeSourceFileSet(encodedChanges) : [];
+    changes = encodedChanges.length > 0
+      ? decodeSourceFileSet(encodedChanges)
+      : [];
   } catch (error) {
     throw invalidStageError(error);
   }
   if (!Array.isArray(input.deletePaths ?? [])) {
     throw new StagedBundleError(
-      'invalid_stage',
-      'delete_paths must be an array',
+      "invalid_stage",
+      "delete_paths must be an array",
     );
   }
   const deletePaths = input.deletePaths ?? [];
@@ -398,15 +406,15 @@ export async function stageBundle(
   for (const path of validatedDeletes) {
     if (changedPaths.has(path)) {
       throw new StagedBundleError(
-        'invalid_stage',
+        "invalid_stage",
         `A path cannot be changed and deleted in the same stage: ${path}`,
       );
     }
   }
   if (!input.baseBundleId && changes.length === 0) {
     throw new StagedBundleError(
-      'invalid_stage',
-      'files are required when base_bundle_id is not provided',
+      "invalid_stage",
+      "files are required when base_bundle_id is not provided",
     );
   }
 
@@ -429,8 +437,8 @@ export async function stageBundle(
     .sort((a, b) => a.path.localeCompare(b.path));
   if (files.length === 0) {
     throw new StagedBundleError(
-      'invalid_stage',
-      'A staged bundle cannot be empty',
+      "invalid_stage",
+      "A staged bundle cannot be empty",
     );
   }
   let totalBytes: number;
@@ -444,7 +452,7 @@ export async function stageBundle(
     path: file.path,
     sha256: await sha256Hex(sourceFileBytes(file)),
     size_bytes: sourceFileBytes(file).byteLength,
-    encoding: file.bytes ? 'binary' as const : 'text' as const,
+    encoding: file.bytes ? "binary" as const : "text" as const,
   })));
   const bundleId = await computeBundleId(fileMetadata);
   const sourceHash = await computeDecodedSourceHash(files);
@@ -482,7 +490,7 @@ export async function stageBundle(
   } catch (error) {
     if (
       !(error instanceof StagedBundleError) ||
-      error.code !== 'bundle_not_found'
+      error.code !== "bundle_not_found"
     ) {
       throw error;
     }
@@ -542,7 +550,7 @@ export async function stageBundle(
         await admission.release();
       } catch (releaseError) {
         console.error(
-          '[STAGED-BUNDLE] Failed to release publication admission',
+          "[STAGED-BUNDLE] Failed to release publication admission",
           releaseError,
         );
       }
@@ -559,13 +567,15 @@ export async function stageBundle(
         {
           name: sha256,
           content: blob.content,
-          contentType: 'application/octet-stream',
+          contentType: "application/octet-stream",
         },
       );
     }),
   );
-  const failedBlobWrite = blobWrites.find((result) => result.status === 'rejected');
-  if (failedBlobWrite?.status === 'rejected') {
+  const failedBlobWrite = blobWrites.find((result) =>
+    result.status === "rejected"
+  );
+  if (failedBlobWrite?.status === "rejected") {
     return await releaseFailedPublication(failedBlobWrite.reason);
   }
 
@@ -575,7 +585,7 @@ export async function stageBundle(
       {
         name: `${bundleId}.json`,
         content: manifestContent,
-        contentType: 'application/json',
+        contentType: "application/json",
       },
     );
   } catch (manifestWriteError) {

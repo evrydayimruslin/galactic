@@ -51,10 +51,21 @@ import {
   listTokens,
   revokeToken,
 } from "../services/tokens.ts";
+import {
+  BuilderHandoffSessionError,
+  createBuilderHandoffSession,
+  terminateBuilderHandoffSession,
+} from "../services/builder-handoff-sessions.ts";
+import {
+  BuilderHandoffDeploymentError,
+  deployBuilderHandoffCandidate,
+  getBuilderHandoffCandidateInvitation,
+  listBuilderHandoffCandidateInvitations,
+} from "../services/builder-handoff-deployments.ts";
 import { withSensitiveRouteRateLimit } from "../services/sensitive-route-rate-limit.ts";
 import {
-  LAUNCH_API_ROUTES,
   LAUNCH_AGENT_EXTENSION_HANDOFF_INTENTS,
+  LAUNCH_API_ROUTES,
   LAUNCH_CALLER_FUNCTION_POLICIES,
   LAUNCH_DEFERRED_CAPABILITIES,
   LAUNCH_HANDOFF_INTENTS,
@@ -71,8 +82,8 @@ import {
   type LaunchAgentAttentionProjection,
   type LaunchAgentCapacityResponse,
   type LaunchAgentCapacityUpdateRequest,
-  type LaunchAgentFunctionsResponse,
   type LaunchAgentExtensionHandoffIntent,
+  type LaunchAgentFunctionsResponse,
   type LaunchAgentHomeActionRequest,
   type LaunchAgentHomeResponse,
   type LaunchAgentInstallContext,
@@ -103,6 +114,10 @@ import {
   type LaunchByokSummaryResponse,
   type LaunchCallerFunctionPermissionsResponse,
   type LaunchCallerFunctionPermissionsUpdateRequest,
+  type LaunchCandidateDeployRequest,
+  type LaunchCandidateDeployResponse,
+  type LaunchCandidateDetailResponse,
+  type LaunchCandidateListResponse,
   type LaunchDiscoveryRetrievalSummary,
   type LaunchDiscoverySource,
   type LaunchFleetOrderUpdateRequest,
@@ -139,6 +154,7 @@ import {
   type LaunchPublicRoute,
   type LaunchRelevanceSummary,
   type LaunchSemanticSubjectType,
+  type LaunchSubscriptionCheckoutAttemptResponse,
   type LaunchSubscriptionCheckoutRequest,
   type LaunchSubscriptionRedirectResponse,
   type LaunchTrustCard,
@@ -156,7 +172,10 @@ import {
   type LaunchWalletTransaction,
   PERSISTENT_AGENT_LAUNCH_POLICY,
 } from "../../shared/contracts/launch.ts";
-import type { AppManifest } from "../../shared/contracts/manifest.ts";
+import {
+  type AppManifest,
+  isCanonicalAppVersion,
+} from "../../shared/contracts/manifest.ts";
 import { validateEnvVarValue } from "../../shared/contracts/env.ts";
 import {
   BYOK_PROVIDERS,
@@ -277,6 +296,7 @@ import {
   versionWasUploadedAfterLive,
 } from "../services/agent-home.ts";
 import {
+  activateMemberDeployedAgentCAS,
   AgentHomeRevisionError,
   approveAgentHomeCapabilitiesCAS,
   assertAgentHomeRevision,
@@ -303,17 +323,30 @@ import {
   loadLiveExecutedBundle,
   verifyExecutedBundle,
 } from "../services/executed-bundle.ts";
-import { readVersionSourceFiles } from "../services/code-verification.ts";
-import { findPersistedTestAttestation } from "../services/test-attestation.ts";
+import {
+  findPersistedTestAttestation,
+  verifyVersionQualificationEvidence,
+} from "../services/test-attestation.ts";
+import { isCurrentGalacticQualification } from "../services/galactic-qualified-release.ts";
 import { summarizeManifestAuthorityChanges } from "../services/manifest-authority.ts";
+import { createR2Service } from "../services/storage.ts";
+import {
+  canonicalJson,
+  sha256Hex,
+  verifyVersionTrustSignature,
+} from "../services/trust.ts";
 import {
   executeSetVersion,
   inspectLiveAppStorageAccounting,
 } from "./platform-mcp.ts";
 import {
+  cancelSubscriptionCheckoutAttempt,
   createSubscriptionCheckout,
   createSubscriptionPortal,
   getLaunchSubscription,
+  getSubscriptionCheckoutAttempt,
+  SubscriptionCheckoutAttemptNotFoundError,
+  SubscriptionCheckoutCancellationError,
   toLaunchCapacityResponse,
 } from "../services/subscriptions.ts";
 import {
@@ -472,6 +505,8 @@ const APP_SELECT = [
   "download_access",
   "current_version",
   "current_version_promoted_at",
+  "release_generation",
+  "deployment_state",
   "versions",
   "manifest",
   "exports",
@@ -510,6 +545,7 @@ interface AuthUser {
   id: string;
   email?: string;
   authSource?: string;
+  emailConfirmedAt?: string | null;
 }
 
 interface LaunchAppRow {
@@ -523,6 +559,8 @@ interface LaunchAppRow {
   download_access?: string | null;
   current_version?: string | null;
   current_version_promoted_at?: string | null;
+  release_generation?: number | string | null;
+  deployment_state?: string | null;
   versions?: string[] | null;
   manifest?: unknown;
   exports?: string[] | null;
@@ -783,6 +821,14 @@ function normalizeLaunchApiPath(pathname: string): string {
 
 export interface LaunchHandlerDependencies {
   compute?: ComputeLaunchHandlerDependencies;
+  candidates?: {
+    list?: typeof listBuilderHandoffCandidateInvitations;
+    get?: typeof getBuilderHandoffCandidateInvitation;
+    deploy?: typeof deployBuilderHandoffCandidate;
+    subscription?: typeof getLaunchSubscription;
+    checkoutAttempt?: typeof getSubscriptionCheckoutAttempt;
+    cancelCheckoutAttempt?: typeof cancelSubscriptionCheckoutAttempt;
+  };
 }
 
 export async function handleLaunch(
@@ -806,10 +852,124 @@ export async function handleLaunch(
       );
     }
 
-    if (
-      path === "/api/launch/subscription/checkout" ||
-      path === "/api/launch/subscription/portal"
-    ) {
+    if (path === "/api/launch/candidates") {
+      if (method !== "GET") return error("Method not allowed", 405);
+      const user = await requireLaunchUser(request);
+      requireAccountSessionForApiKeys(user);
+      const [candidates, subscription] = await Promise.all([
+        (dependencies.candidates?.list ??
+          listBuilderHandoffCandidateInvitations)(user.id),
+        (dependencies.candidates?.subscription ?? getLaunchSubscription)(
+          user.id,
+        ),
+      ]);
+      return privateLaunchJson(
+        {
+          candidates,
+          subscription,
+          generatedAt: new Date().toISOString(),
+        } satisfies LaunchCandidateListResponse,
+      );
+    }
+
+    const candidateMatch = path.match(
+      /^\/api\/launch\/candidates\/([^/]+)$/,
+    );
+    if (candidateMatch) {
+      if (method !== "GET") return error("Method not allowed", 405);
+      const user = await requireLaunchUser(request);
+      requireAccountSessionForApiKeys(user);
+      const candidateId = decodeURIComponent(candidateMatch[1]).trim();
+      if (!isUuid(candidateId)) return error("Invalid candidate id", 400);
+      const candidate = await (dependencies.candidates?.get ??
+        getBuilderHandoffCandidateInvitation)(
+          user.id,
+          candidateId,
+        );
+      if (!candidate) return error("Candidate not found", 404);
+      return privateLaunchJson(
+        {
+          candidate,
+          generatedAt: new Date().toISOString(),
+        } satisfies LaunchCandidateDetailResponse,
+      );
+    }
+
+    const candidateDeployMatch = path.match(
+      /^\/api\/launch\/candidates\/([^/]+)\/deploy$/,
+    );
+    if (candidateDeployMatch) {
+      if (method !== "POST") return error("Method not allowed", 405);
+      const user = await requireLaunchUser(request);
+      requireAccountSessionForApiKeys(user);
+      requireConfirmedEmailForBuilderHandoff(user);
+      const candidateId = decodeURIComponent(candidateDeployMatch[1]).trim();
+      if (!isUuid(candidateId)) return error("Invalid candidate id", 400);
+      const body = parseLaunchCandidateDeployRequest(
+        await readJsonBody<Record<string, unknown>>(request),
+      );
+      return privateLaunchJson(
+        await (dependencies.candidates?.deploy ??
+          deployBuilderHandoffCandidate)({
+            ownerId: user.id,
+            candidateId,
+            ...body,
+          }) satisfies LaunchCandidateDeployResponse,
+      );
+    }
+
+    const checkoutAttemptMatch = path.match(
+      /^\/api\/launch\/subscription\/checkout-attempts\/([^/]+)$/,
+    );
+    if (checkoutAttemptMatch) {
+      if (method !== "GET") return error("Method not allowed", 405);
+      const user = await requireLaunchUser(request);
+      if (!isAccountSessionAuthSource(user.authSource)) {
+        return error(
+          "Subscription management requires an account session",
+          403,
+        );
+      }
+      const attemptId = decodeURIComponent(checkoutAttemptMatch[1]).trim();
+      if (!isUuid(attemptId)) {
+        return error("Invalid subscription checkout attempt id", 400);
+      }
+      return privateLaunchJson(
+        await (dependencies.candidates?.checkoutAttempt ??
+          getSubscriptionCheckoutAttempt)({
+            userId: user.id,
+            attemptId,
+          }) satisfies LaunchSubscriptionCheckoutAttemptResponse,
+      );
+    }
+
+    const checkoutAttemptCancelMatch = path.match(
+      /^\/api\/launch\/subscription\/checkout-attempts\/([^/]+)\/cancel$/,
+    );
+    if (checkoutAttemptCancelMatch) {
+      const user = await requireLaunchUser(request);
+      if (!isAccountSessionAuthSource(user.authSource)) {
+        return error(
+          "Subscription management requires an account session",
+          403,
+        );
+      }
+      if (method !== "POST") return error("Method not allowed", 405);
+      const attemptId = decodeURIComponent(checkoutAttemptCancelMatch[1])
+        .trim();
+      if (!isUuid(attemptId)) {
+        return error("Invalid subscription checkout attempt id", 400);
+      }
+      return privateLaunchJson(
+        await (dependencies.candidates?.cancelCheckoutAttempt ??
+          cancelSubscriptionCheckoutAttempt)({
+            userId: user.id,
+            attemptId,
+          }) satisfies LaunchSubscriptionCheckoutAttemptResponse,
+      );
+    }
+
+    if (path === "/api/launch/subscription/checkout") {
       if (method !== "POST") return error("Method not allowed", 405);
       const user = await requireLaunchUser(request);
       if (!isAccountSessionAuthSource(user.authSource)) {
@@ -822,32 +982,51 @@ export async function handleLaunch(
         string,
         unknown
       >;
-      if (path.endsWith("/checkout") && body.plan !== "pro") {
+      if (body.plan !== "pro") {
         return error("plan must be pro", 400);
+      }
+      if (
+        typeof body.returnUrl !== "string" ||
+        typeof body.idempotencyKey !== "string"
+      ) {
+        return error("returnUrl and idempotencyKey are required", 400);
       }
       const siteOrigin = getEnv("LAUNCH_WEB_BASE_URL") ||
         new URL(request.url).origin;
-      const returnUrl = typeof body.returnUrl === "string"
-        ? body.returnUrl
-        : null;
-      const redirectUrl = path.endsWith("/checkout")
-        ? await createSubscriptionCheckout({
+      return privateLaunchJson(
+        await createSubscriptionCheckout({
           userId: user.id,
           plan: (body as unknown as LaunchSubscriptionCheckoutRequest).plan,
           requestOrigin: siteOrigin,
-          returnUrl,
-        })
-        : await createSubscriptionPortal({
+          returnUrl: body.returnUrl,
+          idempotencyKey: body.idempotencyKey,
+        }) satisfies LaunchSubscriptionRedirectResponse,
+      );
+    }
+
+    if (path === "/api/launch/subscription/portal") {
+      if (method !== "POST") return error("Method not allowed", 405);
+      const user = await requireLaunchUser(request);
+      if (!isAccountSessionAuthSource(user.authSource)) {
+        return error(
+          "Subscription management requires an account session",
+          403,
+        );
+      }
+      const body = await request.json().catch(() => ({})) as Record<
+        string,
+        unknown
+      >;
+      const siteOrigin = getEnv("LAUNCH_WEB_BASE_URL") ||
+        new URL(request.url).origin;
+      return privateLaunchJson({
+        url: await createSubscriptionPortal({
           userId: user.id,
           requestOrigin: siteOrigin,
-          returnUrl,
-        });
-      return privateLaunchJson(
-        {
-          url: redirectUrl,
-          generatedAt: new Date().toISOString(),
-        } satisfies LaunchSubscriptionRedirectResponse,
-      );
+          returnUrl: typeof body.returnUrl === "string" ? body.returnUrl : null,
+        }),
+        generatedAt: new Date().toISOString(),
+      });
     }
 
     if (
@@ -869,6 +1048,16 @@ export async function handleLaunch(
 
     if (path === "/api/launch/handoffs") {
       return await handleLaunchHandoff(request, method, null);
+    }
+    const handoffSessionMatch = path.match(
+      /^\/api\/launch\/handoffs\/([^/]+)$/,
+    );
+    if (handoffSessionMatch) {
+      return await handleLaunchHandoffSession(
+        request,
+        method,
+        handoffSessionMatch[1],
+      );
     }
 
     if (
@@ -1352,11 +1541,30 @@ export async function handleLaunch(
 
     return error("Launch endpoint not found", 404);
   } catch (err) {
+    if (err instanceof BuilderHandoffDeploymentError) {
+      return privateLaunchJson(
+        {
+          error: err.message,
+          code: err.code,
+          ...(err.causeCode ? { causeCode: err.causeCode } : {}),
+        },
+        err.status,
+      );
+    }
     if (err instanceof RequestValidationError) {
       return error(err.message, err.status);
     }
     if (err instanceof LaunchServiceUnavailableError) {
       return error(err.message, 503);
+    }
+    if (err instanceof SubscriptionCheckoutAttemptNotFoundError) {
+      return error(err.message, 404);
+    }
+    if (err instanceof SubscriptionCheckoutCancellationError) {
+      return privateLaunchJson(
+        { error: err.message, code: err.code },
+        err.status,
+      );
     }
     console.error("[LAUNCH] API facade failed:", err);
     return error("Launch API request failed", 500);
@@ -1450,6 +1658,8 @@ function buildLaunchStatus(request: Request): Record<string, unknown> {
       leaderboard: "/api/launch/leaderboard?kind=builder&period=30d",
       subscription: "/api/launch/subscription",
       subscriptionCheckout: "/api/launch/subscription/checkout",
+      subscriptionCheckoutCancel:
+        "/api/launch/subscription/checkout-attempts/{attemptId}/cancel",
       subscriptionPortal: "/api/launch/subscription/portal",
       capacity: "/api/launch/capacity",
       mcpPlatform: "/mcp/platform",
@@ -1792,7 +2002,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
           operationId: "createLaunchWorkspaceHandoff",
           summary: "Create a short-lived coding-agent workspace handoff",
           description:
-            "Creates an account-bound, reveal-once builder credential with a server-selected 30-minute expiry. Connect is the only enabled workspace intent; new-Agent publication remains disabled until a handoff can bind to exactly one created Agent.",
+            "Creates an account-bound, reveal-once builder credential with a server-selected 60-minute expiry. Agent intent is bound to one server-reserved Agent identity and may submit one qualified candidate; Connect is inspection-only.",
           security: [{ bearerAuth: [] }],
           requestBody: {
             required: true,
@@ -1813,12 +2023,36 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
           },
         },
       },
+      "/api/launch/handoffs/{id}": {
+        delete: {
+          operationId: "cancelLaunchHandoff",
+          summary: "Cancel a temporary coding-agent handoff",
+          description:
+            "Atomically cancels an active handoff and revokes its reveal-once credential.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+            description: "Builder handoff session id",
+          }],
+          responses: {
+            "200": { description: "Handoff cancelled and credential revoked" },
+            "400": { description: "Invalid handoff id" },
+            "401": { description: "Authentication required" },
+            "403": { description: "Account session required" },
+            "404": { description: "Handoff not found" },
+            "409": { description: "Handoff is already complete or terminal" },
+          },
+        },
+      },
       "/api/launch/agents/{id}/handoffs": {
         post: {
           operationId: "createLaunchAgentHandoff",
           summary: "Create a short-lived Agent-scoped coding-agent handoff",
           description:
-            "Creates a reveal-once builder credential constrained to the owned Agent and expiring in 30 minutes. Agent handoffs accept interface, function, or routine intents.",
+            "Creates a reveal-once builder credential constrained to the owned Agent and expiring in 60 minutes. Agent handoffs accept interface, function, or routine intents.",
           security: [{ bearerAuth: [] }],
           parameters: [{
             name: "id",
@@ -3218,9 +3452,11 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
           additionalProperties: false,
           required: ["intent", "description"],
           properties: {
-            intent: { type: "string", enum: ["connect"] },
+            intent: { type: "string", enum: ["agent", "connect"] },
             description: {
               type: "string",
+              description:
+                "Required for Agent builds; Connect may use an empty description.",
               maxLength: LAUNCH_HANDOFF_DESCRIPTION_MAX_LENGTH,
             },
           },
@@ -3275,7 +3511,12 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
                   type: "object",
                   required: ["kind"],
                   properties: {
-                    kind: { type: "string", enum: ["workspace", "agent"] },
+                    kind: {
+                      type: "string",
+                      enum: ["workspace", "new_agent", "agent"],
+                    },
+                    reservedAgentId: { type: "string", format: "uuid" },
+                    maxAgents: { type: "integer", const: 1 },
                     agentId: { type: "string" },
                     agentSlug: { type: ["string", "null"] },
                     agentName: { type: "string" },
@@ -5518,9 +5759,149 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
   publicSpec.paths["/api/launch/subscription/checkout"] = {
     post: {
       operationId: "createLaunchSubscriptionCheckout",
-      summary: "Create a Stripe Checkout Session for Pro",
+      summary: "Create or replay a durable Stripe Checkout attempt for Pro",
       security: [{ bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: jsonContent({
+          type: "object",
+          additionalProperties: false,
+          required: ["plan", "returnUrl", "idempotencyKey"],
+          properties: {
+            plan: { type: "string", const: "pro" },
+            returnUrl: { type: "string", minLength: 1 },
+            idempotencyKey: {
+              type: "string",
+              minLength: 8,
+              maxLength: 128,
+            },
+          },
+        }),
+      },
       responses: { "200": { description: "Stripe-hosted checkout redirect" } },
+    },
+  };
+  publicSpec.paths[
+    "/api/launch/subscription/checkout-attempts/{attemptId}"
+  ] = {
+    get: {
+      operationId: "getLaunchSubscriptionCheckoutAttempt",
+      summary: "Reconcile a durable subscription Checkout attempt",
+      security: [{ bearerAuth: [] }],
+      parameters: [{
+        name: "attemptId",
+        in: "path",
+        required: true,
+        schema: { type: "string", format: "uuid" },
+      }],
+      responses: {
+        "200": { description: "Checkout attempt and current membership state" },
+        "401": { description: "Authentication required" },
+        "403": { description: "Owner account session required" },
+      },
+    },
+  };
+  publicSpec.paths[
+    "/api/launch/subscription/checkout-attempts/{attemptId}/cancel"
+  ] = {
+    post: {
+      operationId: "cancelLaunchSubscriptionCheckoutAttempt",
+      summary:
+        "Reconcile an authenticated owner's Stripe Checkout cancel return",
+      security: [{ bearerAuth: [] }],
+      parameters: [{
+        name: "attemptId",
+        in: "path",
+        required: true,
+        schema: { type: "string", format: "uuid" },
+      }],
+      responses: {
+        "200": {
+          description:
+            "Cancelled live attempt, or immutable current terminal state",
+        },
+        "401": { description: "Authentication required" },
+        "403": { description: "Owner account session required" },
+        "404": { description: "Owned checkout attempt not found" },
+      },
+    },
+  };
+  publicSpec.paths["/api/launch/candidates"] = {
+    get: {
+      operationId: "listLaunchCandidates",
+      summary: "List the owner's immutable qualified deployment candidates",
+      security: [{ bearerAuth: [] }],
+      responses: {
+        "200": {
+          description:
+            "Owner-safe invitation projections and current membership state",
+        },
+        "401": { description: "Authentication required" },
+        "403": { description: "Owner account session required" },
+      },
+    },
+  };
+  publicSpec.paths["/api/launch/candidates/{candidateId}"] = {
+    get: {
+      operationId: "getLaunchCandidate",
+      summary: "Get one immutable qualified deployment candidate",
+      security: [{ bearerAuth: [] }],
+      parameters: [{
+        name: "candidateId",
+        in: "path",
+        required: true,
+        schema: { type: "string", format: "uuid" },
+      }],
+      responses: {
+        "200": { description: "Owner-safe invitation projection" },
+        "404": { description: "Candidate not found" },
+      },
+    },
+  };
+  publicSpec.paths["/api/launch/candidates/{candidateId}/deploy"] = {
+    post: {
+      operationId: "deployLaunchCandidate",
+      summary:
+        "Materialize an immutable qualified candidate into private setup",
+      security: [{ bearerAuth: [] }],
+      parameters: [{
+        name: "candidateId",
+        in: "path",
+        required: true,
+        schema: { type: "string", format: "uuid" },
+      }],
+      requestBody: {
+        required: true,
+        content: jsonContent({
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "idempotencyKey",
+            "archiveDigest",
+            "releaseDigest",
+            "reviewRevision",
+          ],
+          properties: {
+            idempotencyKey: {
+              type: "string",
+              minLength: 8,
+              maxLength: 128,
+            },
+            archiveDigest: { type: "string", pattern: "^[a-f0-9]{64}$" },
+            releaseDigest: { type: "string", pattern: "^[a-f0-9]{64}$" },
+            reviewRevision: {
+              type: "string",
+              pattern: "^gxr1:[a-f0-9]{64}$",
+            },
+          },
+        }),
+      },
+      responses: {
+        "200": { description: "Candidate deployment result or exact replay" },
+        "402": { description: "Active Pro membership required" },
+        "409": { description: "Stale review, lineage, or deployment conflict" },
+        "422": { description: "Candidate archive is not deployable" },
+      },
     },
   };
   publicSpec.paths["/api/launch/subscription/portal"] = {
@@ -5559,6 +5940,7 @@ async function handleLaunchApiKeys(
         "user:token_create",
         async () => {
           try {
+            requireConfirmedEmailForApiKeyCreation(user);
             const createRequest = parseLaunchApiKeyCreateRequest(
               await readJsonBody<Record<string, unknown>>(request),
             );
@@ -5686,12 +6068,117 @@ async function scheduleLaunchAccountByokReconciliation(
   );
 }
 
-const LAUNCH_HANDOFF_TTL_MS = 30 * 60 * 1000;
 const LAUNCH_HANDOFF_DESCRIPTION_MAX_LENGTH = 4_000;
-const LAUNCH_HANDOFF_BUILDER_SCOPES = [
-  "apps:read",
-  "agents:build",
-] as const;
+
+function parseLaunchCandidateDeployRequest(
+  body: Record<string, unknown>,
+): LaunchCandidateDeployRequest {
+  const allowedFields = new Set([
+    "idempotencyKey",
+    "archiveDigest",
+    "releaseDigest",
+    "reviewRevision",
+  ]);
+  const unsupportedField = Object.keys(body).find((key) =>
+    !allowedFields.has(key)
+  );
+  if (unsupportedField) {
+    throw new RequestValidationError(
+      `Unsupported candidate deployment field: ${unsupportedField}`,
+    );
+  }
+  for (
+    const field of [
+      "idempotencyKey",
+      "archiveDigest",
+      "releaseDigest",
+      "reviewRevision",
+    ] as const
+  ) {
+    if (typeof body[field] !== "string" || !body[field].trim()) {
+      throw new RequestValidationError(`${field} is required`);
+    }
+  }
+  return {
+    idempotencyKey: body.idempotencyKey as string,
+    archiveDigest: body.archiveDigest as string,
+    releaseDigest: body.releaseDigest as string,
+    reviewRevision: body.reviewRevision as string,
+  };
+}
+
+interface LaunchBuilderHandoffBaseLineage {
+  baseVersion: string;
+  baseSourceHash: string | null;
+  baseReleaseDigest: string | null;
+  baseStateDigest: string;
+  baseReleaseGeneration: number;
+}
+
+function normalizedLaunchManifestSnapshot(value: unknown): unknown {
+  if (typeof value !== "string") return value ?? null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+async function launchBuilderHandoffBaseLineage(
+  target: LaunchAppRow,
+): Promise<LaunchBuilderHandoffBaseLineage> {
+  const baseVersion = target.current_version;
+  if (!isCanonicalAppVersion(baseVersion)) {
+    throw new RequestValidationError(
+      "This Agent must have a canonical x.y.z release before it can receive a coding-agent handoff",
+      409,
+    );
+  }
+  const metadata =
+    [...versionMetadata(target)].reverse().find((entry) =>
+      entry.version === baseVersion
+    ) ?? null;
+  const proof = metadata
+    ? findPersistedTestAttestation([metadata], baseVersion)
+    : null;
+  const baseReleaseDigest = proof?.attestation.schema_version === 2 &&
+      /^[a-f0-9]{64}$/.test(proof.attestation.qualification.release_digest)
+    ? proof.attestation.qualification.release_digest
+    : null;
+  const baseSourceHash = typeof metadata?.source_hash === "string" &&
+      /^[a-f0-9]{64}$/.test(metadata.source_hash)
+    ? metadata.source_hash
+    : null;
+  const baseStateDigest = await sha256Hex(canonicalJson({
+    app_id: target.id,
+    current_version: baseVersion,
+    source_hash: baseSourceHash,
+    release_digest: baseReleaseDigest,
+    manifest: normalizedLaunchManifestSnapshot(target.manifest),
+  }));
+  const baseReleaseGeneration = typeof target.release_generation === "number"
+    ? target.release_generation
+    : typeof target.release_generation === "string" &&
+        /^\d+$/.test(target.release_generation)
+    ? Number(target.release_generation)
+    : NaN;
+  if (
+    !Number.isSafeInteger(baseReleaseGeneration) ||
+    baseReleaseGeneration < 0
+  ) {
+    throw new RequestValidationError(
+      "This Agent does not have reliable deployment lineage. Refresh it before creating a coding-agent handoff.",
+      409,
+    );
+  }
+  return {
+    baseVersion,
+    baseSourceHash,
+    baseReleaseDigest,
+    baseStateDigest,
+    baseReleaseGeneration,
+  };
+}
 
 export function parseLaunchHandoffCreateRequest(
   body: Record<string, unknown>,
@@ -5730,12 +6217,6 @@ export function parseLaunchHandoffCreateRequest(
       "Interface, function, and routine handoffs require an Agent target",
     );
   }
-  if (target === "workspace" && intent === "agent") {
-    throw new RequestValidationError(
-      "New-Agent handoffs are unavailable until Galactic can bind the credential to exactly one created Agent",
-    );
-  }
-
   if (typeof body.description !== "string") {
     throw new RequestValidationError("description must be a string");
   }
@@ -5763,6 +6244,7 @@ async function handleLaunchHandoff(
   }
   const user = await requireLaunchUser(request);
   requireAccountSessionForApiKeys(user);
+  requireConfirmedEmailForBuilderHandoff(user);
 
   return await withSensitiveRouteRateLimit(
     user.id,
@@ -5782,62 +6264,63 @@ async function handleLaunchHandoff(
           return error("Agent not found", 404);
         }
 
-        const now = new Date();
-        const expiresAt = new Date(now.getTime() + LAUNCH_HANDOFF_TTL_MS);
-        const suffix = crypto.randomUUID().slice(0, 8);
-        const targetLabel = (targetAgent?.slug || targetAgent?.id || "workspace")
-          .slice(0, 22);
-        const name =
-          `Handoff ${createRequest.intent} ${suffix} ${targetLabel}`
-          .slice(0, 50);
-        const result = await createToken(user.id, name, {
-          expiresAt,
-          scopes: [
-            ...LAUNCH_HANDOFF_BUILDER_SCOPES,
-            `handoff:${createRequest.intent}`,
-          ],
-          ...(targetAgent ? { app_ids: [targetAgent.id] } : {}),
-        });
-        const tokenExpiresAt = result.token.expires_at;
-        if (!tokenExpiresAt) {
-          await revokeToken(user.id, result.token.id).catch(() => {});
-          throw new Error("Short-lived credential was created without expiry");
-        }
-
-        const generatedAt = now.toISOString();
-        return privateLaunchJson({
-          success: true,
-          handoff: {
-            id: result.token.id,
-            intent: createRequest.intent,
-            status: "created",
-            target: targetAgent
-              ? {
-                kind: "agent",
-                agentId: targetAgent.id,
-                agentSlug: targetAgent.slug,
-                agentName: targetAgent.name || targetAgent.slug ||
-                  "Untitled Agent",
-              }
-              : { kind: "workspace" },
+        const result = targetAgent
+          ? await createBuilderHandoffSession({
+            ownerId: user.id,
+            intent: createRequest.intent as LaunchAgentExtensionHandoffIntent,
+            targetAppId: targetAgent.id,
             description: createRequest.description,
-            createdAt: result.token.created_at,
-            expiresAt: tokenExpiresAt,
-          },
-          credential: {
-            id: result.token.id,
-            tokenPrefix: result.token.token_prefix,
-            plaintextToken: result.plaintext_token,
-            scopes: result.token.scopes,
-            appIds: result.token.app_ids,
-            createdAt: result.token.created_at,
-            expiresAt: tokenExpiresAt,
-          },
-          platformMcpUrl: `${publicBaseUrl(request)}/mcp/platform`,
-          message:
-            "Short-lived coding-agent handoff created. The credential is revealed only in this response and expires in 30 minutes.",
-          generatedAt,
-        } satisfies LaunchHandoffCreateResponse);
+            ...await launchBuilderHandoffBaseLineage(targetAgent),
+          })
+          : await createBuilderHandoffSession({
+            ownerId: user.id,
+            intent: createRequest.intent as "agent" | "connect",
+            description: createRequest.description,
+          });
+        const generatedAt = new Date().toISOString();
+        const target = result.session.intent === "agent"
+          ? {
+            kind: "new_agent" as const,
+            reservedAgentId: result.session.targetAppId!,
+            maxAgents: 1 as const,
+          }
+          : targetAgent
+          ? {
+            kind: "agent" as const,
+            agentId: targetAgent.id,
+            agentSlug: targetAgent.slug,
+            agentName: targetAgent.name || targetAgent.slug ||
+              "Untitled Agent",
+          }
+          : { kind: "workspace" as const };
+        return privateLaunchJson(
+          {
+            success: true,
+            handoff: {
+              id: result.session.id,
+              intent: createRequest.intent,
+              status: result.session.status,
+              target,
+              description: createRequest.description,
+              createdAt: result.session.createdAt,
+              expiresAt: result.session.expiresAt,
+            },
+            credential: {
+              id: result.credential.id,
+              tokenPrefix: result.credential.tokenPrefix,
+              plaintextToken: result.credential.plaintextToken,
+              scopes: result.credential.scopes,
+              appIds: result.credential.appIds,
+              createdAt: result.credential.createdAt,
+              expiresAt: result.credential.expiresAt,
+            },
+            platformMcpUrl: `${publicBaseUrl(request)}/mcp/platform`,
+            message: result.session.intent === "connect"
+              ? "Inspection-only machine connection created. The credential is revealed only in this response and expires in 60 minutes."
+              : "Purpose-bound coding-agent handoff created. The credential is revealed only in this response, expires in 60 minutes, and can submit only its exact assigned candidate.",
+            generatedAt,
+          } satisfies LaunchHandoffCreateResponse,
+        );
       } catch (err) {
         if (isProSubscriptionError(err)) {
           return json(
@@ -5848,18 +6331,94 @@ async function handleLaunchHandoff(
         if (err instanceof RequestValidationError) {
           return error(err.message, err.status);
         }
+        if (err instanceof BuilderHandoffSessionError) {
+          if (err.code === "invalid_request") {
+            return error(err.message, 400);
+          }
+          if (err.code === "unauthorized") {
+            return error("Agent not found", 404);
+          }
+          if (
+            err.code === "conflict" ||
+            err.code === "consumed" ||
+            err.code === "quota_exceeded"
+          ) {
+            return error(err.message, 409);
+          }
+          console.error("[LAUNCH] Builder handoff persistence failed:", err);
+          return error(
+            "Builder handoff persistence is temporarily unavailable",
+            503,
+          );
+        }
         if (
           err instanceof Error &&
           (err.message.includes("already exists") ||
             err.message.includes("Token limit reached"))
         ) {
-          return error(err.message, err.message.includes("already exists") ? 409 : 403);
+          return error(
+            err.message,
+            err.message.includes("already exists") ? 409 : 403,
+          );
         }
         console.error("[LAUNCH] Coding-agent handoff creation failed:", err);
         return error("Failed to create coding-agent handoff", 500);
       }
     },
   );
+}
+
+async function handleLaunchHandoffSession(
+  request: Request,
+  method: string,
+  encodedHandoffId: string,
+): Promise<Response> {
+  if (method !== "DELETE") {
+    return error("Method not allowed for coding-agent handoff", 405);
+  }
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForApiKeys(user);
+  const handoffId = decodeURIComponent(encodedHandoffId).trim();
+  if (!isUuid(handoffId)) {
+    return error("Invalid coding-agent handoff id", 400);
+  }
+
+  try {
+    const session = await terminateBuilderHandoffSession({
+      ownerId: user.id,
+      tokenId: handoffId,
+      status: "cancelled",
+    });
+    return privateLaunchJson({
+      success: true,
+      handoff: {
+        id: session.id,
+        status: session.status,
+        updatedAt: session.updatedAt,
+      },
+      message:
+        "Coding-agent handoff cancelled. Its temporary credential can no longer be used.",
+      generatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    if (err instanceof BuilderHandoffSessionError) {
+      if (err.code === "unauthorized") {
+        return error("Coding-agent handoff not found", 404);
+      }
+      if (err.code === "invalid_request") {
+        return error(err.message, 400);
+      }
+      if (err.code === "conflict" || err.code === "consumed") {
+        return error(err.message, 409);
+      }
+      console.error("[LAUNCH] Builder handoff cancellation failed:", err);
+      return error(
+        "Builder handoff persistence is temporarily unavailable",
+        503,
+      );
+    }
+    throw err;
+  }
 }
 
 async function handleLaunchByok(
@@ -8196,19 +8755,57 @@ function canonicalVersionMetadata(row: LaunchAppRow): VersionMetadata[] {
   });
 }
 
-function newestTestedCandidateVersion(row: LaunchAppRow): string | null {
+function withoutTestAttestation(entry: VersionMetadata): VersionMetadata {
+  const { test_attestation: _invalidProof, ...safeEntry } = entry;
+  return safeEntry;
+}
+
+/**
+ * Only V2 qualification evidence may make a release an Agent Home candidate.
+ * Legacy V1 evidence did not bind its proof digest into VersionTrust, so it is
+ * retained in raw release history but is historical-only on trust-sensitive
+ * surfaces. Stripping an ineligible proof (rather than dropping the version)
+ * keeps safe release metadata visible without presenting it as promotable.
+ */
+async function eligibleAgentHomeVersionMetadata(
+  row: LaunchAppRow,
+): Promise<VersionMetadata[]> {
+  const metadata = canonicalVersionMetadata(row);
+  return await Promise.all(metadata.map(async (entry) => {
+    const persisted = findPersistedTestAttestation([entry], entry.version);
+    if (!persisted) return entry;
+    if (persisted.attestation.schema_version === 1) {
+      return withoutTestAttestation(entry);
+    }
+    if (
+      !isCurrentGalacticQualification(persisted.attestation.qualification) ||
+      !await verifyVersionQualificationEvidence(entry, {
+        appId: row.id,
+        version: entry.version,
+      })
+    ) {
+      return withoutTestAttestation(entry);
+    }
+    return entry;
+  }));
+}
+
+function newestTestedCandidateVersion(
+  row: LaunchAppRow,
+  metadata: VersionMetadata[],
+): string | null {
   const current = row.current_version || null;
   const available = new Set(
     Array.isArray(row.versions)
       ? row.versions
-      : versionMetadata(row).map((entry) => entry.version),
+      : metadata.map((entry) => entry.version),
   );
   // Uploads enforce unique versions, but legacy/corrupt rows can contain
   // duplicate metadata. Match the read-model rule exactly: the last row is
   // authoritative for a version, and an invalid replacement must not fall
   // back to a stale proof for potentially overwritten artifacts.
   const latestMetadata = new Map<string, VersionMetadata>();
-  for (const entry of canonicalVersionMetadata(row)) {
+  for (const entry of metadata) {
     latestMetadata.set(entry.version, entry);
   }
   const canonicalMetadata = [...latestMetadata.values()];
@@ -8228,14 +8825,35 @@ async function loadAgentHomeCandidateManifest(
   candidateVersion: string | null,
 ): Promise<AppManifest | null> {
   if (!candidateVersion || row.runtime === "gpu") return null;
+  const candidate = [...versionMetadata(row)].reverse().find((entry) =>
+    entry.version === candidateVersion
+  );
+  const trust = candidate?.trust;
+  if (
+    !trust ||
+    trust.app_id !== row.id ||
+    trust.version !== candidateVersion ||
+    !trust.manifest_hash ||
+    !await verifyVersionTrustSignature(trust)
+  ) {
+    return null;
+  }
   try {
-    const files = await readVersionSourceFiles(row.id, candidateVersion);
-    const manifestFile = files.find((file) => file.path === "manifest.json");
-    if (!manifestFile) return null;
-    const parsed = JSON.parse(manifestFile.content);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as AppManifest
-      : null;
+    // galactic.yaml is the authored document, while manifest.json is the
+    // compiler-derived runtime contract. readVersionSourceFiles intentionally
+    // hides the latter from gx.download, so Agent Home must load it directly
+    // from immutable version storage and verify the signed canonical hash.
+    const raw = await createR2Service().fetchTextFile(
+      `apps/${row.id}/${candidateVersion}/manifest.json`,
+    );
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    if (await sha256Hex(canonicalJson(parsed)) !== trust.manifest_hash) {
+      return null;
+    }
+    return parsed as AppManifest;
   } catch {
     return null;
   }
@@ -8415,7 +9033,11 @@ async function buildLaunchAgentHomeSnapshotAttempt(
     routineId,
   );
   const routine = routineResponse.routine;
-  const candidateVersion = newestTestedCandidateVersion(row);
+  const eligibleVersionMetadata = await eligibleAgentHomeVersionMetadata(row);
+  const candidateVersion = newestTestedCandidateVersion(
+    row,
+    eligibleVersionMetadata,
+  );
   const manifest = parseManifest(row.manifest);
   const runtimeManifest = typeof row.manifest === "string"
     ? row.manifest
@@ -8533,6 +9155,13 @@ async function buildLaunchAgentHomeSnapshotAttempt(
     budgetUsage: budget.usage,
     callsByRun: budget.callsByRun,
     capacity: capacityStatus ? toLaunchCapacityResponse(capacityStatus) : null,
+    deploymentState: row.deployment_state === "legacy" ||
+        row.deployment_state === "materializing" ||
+        row.deployment_state === "setup_required" ||
+        row.deployment_state === "ready" ||
+        row.deployment_state === "disabled"
+      ? row.deployment_state
+      : undefined,
     byokConfigured: Boolean(
       profile?.byok_enabled && profile.byok_provider &&
         profile.byok_configs.some((config) =>
@@ -8542,7 +9171,7 @@ async function buildLaunchAgentHomeSnapshotAttempt(
     release: {
       versions,
       currentVersion: row.current_version || null,
-      versionMetadata: canonicalVersionMetadata(row),
+      versionMetadata: eligibleVersionMetadata,
       promotedAt: row.current_version_promoted_at || null,
       executedVersion: liveBundle.attestation?.version || null,
       integrity,
@@ -9017,6 +9646,16 @@ type LaunchAgentHomeActionReconciliation =
   | "applied"
   | "repair_required";
 
+function launchReleaseGeneration(row: LaunchAppRow): number | null {
+  const value = typeof row.release_generation === "string" &&
+      /^[0-9]+$/.test(row.release_generation)
+    ? Number(row.release_generation)
+    : row.release_generation;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : null;
+}
+
 export function classifyLaunchAgentHomePromotionReconciliation(input: {
   databaseAtTarget: boolean;
   liveAtTarget: boolean;
@@ -9077,6 +9716,25 @@ async function reconcileLaunchAgentHomeAction(input: {
       liveAtTarget,
       storageCurrent: storage.current,
     });
+  }
+
+  if (input.action === "activate") {
+    const current = await reloadLaunchAgentHomeRow(
+      input.user.id,
+      input.row.id,
+    );
+    const releaseGeneration = launchReleaseGeneration(current);
+    if (
+      current.deployment_state === "ready" &&
+      releaseGeneration !== null &&
+      releaseGeneration > 0
+    ) {
+      const routineId = input.routineId ||
+        await fetchPrimaryRoutineId(input.user.id, input.row.id);
+      if (!routineId) return "applied";
+      const routine = await getRoutine(input.user.id, routineId);
+      return routine?.status === "active" ? "applied" : "not_applied";
+    }
   }
 
   const routineId = input.routineId ||
@@ -9165,6 +9823,12 @@ async function performLaunchAgentHomeAction(
     throw new RequestValidationError(
       "version is valid only for promote_candidate",
     );
+  }
+  // Membership unlocks deployment and execution, not staging or testing.
+  // Enforce that boundary before claiming a durable action so an unpaid
+  // attempt cannot create a replayable promotion/activation saga.
+  if (action === "promote_candidate" || action === "activate") {
+    await requireActiveProSubscription(user.id, { enabled: true });
   }
 
   if (action === "pause" && !managedRoutineId) {
@@ -9334,6 +9998,59 @@ async function performLaunchAgentHomeAction(
           },
         },
       );
+    } else if (
+      action === "activate" && row.deployment_state === "setup_required"
+    ) {
+      const releaseGeneration = launchReleaseGeneration(row);
+      if (releaseGeneration === null || releaseGeneration < 1) {
+        throw new RequestValidationError(
+          "Agent deployment lineage is unavailable; deployment repair is required",
+          409,
+        );
+      }
+      const routineId = managedRoutineId ||
+        await fetchPrimaryRoutineId(user.id, row.id);
+      const routine = routineId ? await getRoutine(user.id, routineId) : null;
+      if (routineId && !routine) {
+        throw new RequestValidationError(
+          "Agent routine setup changed; refresh before activating",
+          409,
+        );
+      }
+      const managedBlockers = managedRoutineId && routine
+        ? await collectLaunchRoutineBlockers(user.id, routine)
+        : home!.state.blockers;
+      if (
+        managedRoutineId
+          ? managedBlockers.length > 0
+          : !home!.actions.canActivate
+      ) {
+        const err = new RequestValidationError(
+          "Agent cannot activate until every setup and integrity blocker is resolved",
+          409,
+        ) as RequestValidationError & {
+          blockers?: LaunchAgentRoutineBlocker[];
+        };
+        err.blockers = managedBlockers;
+        throw err;
+      }
+      if (routine) {
+        if (routine.status !== "paused" && routine.status !== "error") {
+          throw new RequestValidationError(
+            `Routine is ${routine.status} and cannot be activated`,
+            409,
+          );
+        }
+        await validateRoutineLaunchActivation(user.id, routine);
+      }
+      await activateMemberDeployedAgentCAS({
+        appId: row.id,
+        userId: user.id,
+        expectedRevision,
+        expectedReleaseGeneration: releaseGeneration,
+        authSource: user.authSource,
+        routineId,
+      });
     } else {
       const routineId = managedRoutineId ||
         await fetchPrimaryRoutineId(user.id, row.id);
@@ -9368,7 +10085,6 @@ async function performLaunchAgentHomeAction(
           capabilityIds: capabilityIds || [],
         });
       } else if (action === "activate") {
-        await requireActiveProSubscription(user.id);
         if (routine.status !== "active") {
           if (routine.status !== "paused" && routine.status !== "error") {
             throw new RequestValidationError(
@@ -9730,6 +10446,12 @@ async function handleLaunchAgentHomeRoute(
       return agentHomeJson({
         error: err.message,
         ...(blockers ? { blockers } : {}),
+      }, err.status);
+    }
+    if (isProSubscriptionError(err)) {
+      return agentHomeJson({
+        error: err.message,
+        code: err.code,
       }, err.status);
     }
     if (err instanceof RoutinePlatformError) {
@@ -13668,13 +14390,32 @@ function toLaunchApiKeySummary(token: ApiToken): LaunchApiKeySummary {
 }
 
 function requireAccountSessionForApiKeys(user: AuthUser): void {
-  if (
-    user.authSource === "api_token" ||
-    user.authSource === "routine_actor" ||
-    user.authSource === "sandbox_actor"
-  ) {
+  if (!isAccountSessionAuthSource(user.authSource)) {
     throw new RequestValidationError(
       "API key management requires an account session",
+      403,
+    );
+  }
+}
+
+function requireConfirmedEmailForBuilderHandoff(user: AuthUser): void {
+  if (!user.emailConfirmedAt) {
+    throw new RequestValidationError(
+      "Use the sign-in link in your email before creating a coding-agent handoff",
+      403,
+    );
+  }
+}
+
+export function requireConfirmedEmailForApiKeyCreation(
+  user: {
+    authSource?: string;
+    emailConfirmedAt?: string | null;
+  },
+): void {
+  if (user.authSource === "supabase" && !user.emailConfirmedAt) {
+    throw new RequestValidationError(
+      "Confirm your email before creating a Galactic Key",
       403,
     );
   }
