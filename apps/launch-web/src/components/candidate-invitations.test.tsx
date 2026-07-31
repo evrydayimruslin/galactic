@@ -361,6 +361,49 @@ describe("candidate invitations", () => {
     expect(markup).not.toContain(">Deploy 1 selected Agent</button>");
   });
 
+  it("surfaces a specific legacy-lineage blocker before generic stale copy", () => {
+    const blockerMessage =
+      "This extension candidate predates reliable release lineage. Create a fresh handoff.";
+    const markup = renderToStaticMarkup(
+      <CandidateInvitations
+        location={{ pathname: "/", search: "" }}
+        navigate={vi.fn() as LaunchNavigate}
+        onReload={vi.fn()}
+        response={{
+          ...response(true),
+          candidates: [candidate({
+            blocker: {
+              code: "candidate_base_generation_missing",
+              message: blockerMessage,
+            },
+            intent: "function",
+            status: "stale",
+            target: {
+              agentId: "33333333-3333-4333-8333-333333333333",
+              agentName: "Inbox Keeper",
+              agentSlug: "inbox-keeper",
+              baseLineage: {
+                releaseDigest: null,
+                sourceHash: null,
+                stateDigest: "9".repeat(64),
+                version: "1.0.0",
+              },
+              currentVersion: "1.0.0",
+              kind: "extension",
+              lineageStatus: "stale",
+            },
+          })],
+        }}
+      />,
+    );
+
+    expect(markup).toContain(blockerMessage);
+    expect(markup).not.toContain(
+      "Base release changed — rebuild and test this extension",
+    );
+    expect(markup).not.toContain(">Deploy 1 selected Agent</button>");
+  });
+
   it("renders an actionable empty review instead of a blank funnel", () => {
     const markup = renderToStaticMarkup(
       <CandidateInvitations
