@@ -840,7 +840,12 @@ function validateSessionShape(session: BuilderHandoffSessionRecord): void {
     ? session.baseVersion !== null &&
       /^\d+\.\d+\.\d+$/.test(session.baseVersion) &&
       session.baseStateDigest !== null &&
-      session.baseReleaseGeneration !== null
+      // M7 deliberately preserved pre-M7 extension handoffs with a null
+      // generation so the invitation can tell the owner to rebuild them.
+      // Creation and deployment still require an exact generation; rejecting
+      // the row here would make one legacy candidate hide the entire cohort.
+      (session.baseReleaseGeneration === null ||
+        session.baseReleaseGeneration >= 0)
     : session.baseVersion === null &&
       session.baseSourceHash === null &&
       session.baseReleaseDigest === null &&

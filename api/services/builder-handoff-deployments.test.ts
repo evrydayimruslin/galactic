@@ -114,7 +114,9 @@ function uploadedSession(input: {
     baseReleaseDigest: extension ? BASE_RELEASE_DIGEST : null,
     baseStateDigest: extension ? BASE_STATE_DIGEST : null,
     baseReleaseGeneration: extension
-      ? (input.baseReleaseGeneration ?? 3)
+      ? (input.baseReleaseGeneration === undefined
+        ? 3
+        : input.baseReleaseGeneration)
       : null,
     status,
     statusVersion: status === "promoted" ? 5 : 4,
@@ -758,6 +760,91 @@ Deno.test("extension invitation becomes stale when current target lineage moved"
   assert(appRead);
   assertEquals(appRead.searchParams.get("owner_id"), `eq.${OWNER_ID}`);
   assertEquals(appRead.searchParams.get("id"), `eq.${EXISTING_AGENT_ID}`);
+});
+
+Deno.test("pre-M7 extension remains visible but cannot reach deployment", async () => {
+  const session = uploadedSession({
+    intent: "function",
+    targetAppId: EXISTING_AGENT_ID,
+    baseReleaseGeneration: null,
+  });
+  const healthy = uploadedSession({ id: SESSION_TWO_ID });
+  const harness = fetchHarness({
+    targetApp: {
+      id: EXISTING_AGENT_ID,
+      owner_id: OWNER_ID,
+      slug: "inbox-steward",
+      name: "Inbox Steward",
+      visibility: "private",
+      current_version: "1.0.0",
+      manifest: {
+        name: "Inbox Steward",
+        version: "1.0.0",
+        type: "mcp",
+        entry: { functions: "index.ts" },
+      },
+      version_metadata: [],
+      deleted_at: null,
+      release_generation: 3,
+    },
+    rpc: () => {
+      throw new Error("legacy extension must not reach a deployment claim");
+    },
+  });
+  const options = invitationOptions({
+    sessions: [session, healthy],
+    fetch: harness,
+  });
+  const summaries = new Map([
+    [session.id, verifiedSummary(session)],
+    [healthy.id, verifiedSummary(healthy)],
+  ]);
+  options.loadInvitation = (_store, binding) =>
+    Promise.resolve(summaries.get(binding.sessionId)!);
+
+  const invitations = await listBuilderHandoffCandidateInvitations(
+    OWNER_ID,
+    options,
+  );
+  assertEquals(
+    invitations.map((candidate) => [candidate.id, candidate.status]),
+    [
+      [session.id, "stale"],
+      [healthy.id, "ready"],
+    ],
+  );
+
+  const invitation = await candidateInvitation(session, options);
+
+  assertEquals(invitation.status, "stale");
+  assertEquals(
+    invitation.blocker,
+    {
+      code: "candidate_base_generation_missing",
+      message:
+        "This extension candidate predates reliable release lineage. Create a fresh handoff.",
+    },
+  );
+
+  const error = await assertRejects(
+    () =>
+      deployBuilderHandoffCandidate(
+        {
+          ownerId: OWNER_ID,
+          candidateId: session.id,
+          idempotencyKey: "pre-m7-extension-review",
+          archiveDigest: invitation.archive.digest,
+          releaseDigest: invitation.evidence.releaseDigest,
+          reviewRevision: invitation.reviewRevision,
+        },
+        options,
+      ),
+    BuilderHandoffDeploymentError,
+  ) as BuilderHandoffDeploymentError;
+  assertEquals(error.code, "stale");
+  assertEquals(error.status, 409);
+  assertEquals(error.causeCode, "candidate_base_generation_missing");
+  assertEquals(harness.rpcCalls, []);
 });
 
 Deno.test("review, archive, and release digest mismatches fail before the deployment claim", async () => {
