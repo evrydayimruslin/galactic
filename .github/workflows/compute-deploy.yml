@@ -6,8 +6,10 @@ name: Compute Deploy
 # admission-OFF rollback version, deploys the exact Compute digest, and then
 # applies the immutable release policy. A preserve_off release proves the live
 # binding while leaving admission disabled; an enable_global release additionally
-# proves one bounded admitted job end to end. It never creates or replaces
-# secrets, migrations, queues, buckets, or approval policy.
+# proves one bounded admitted job end to end. If the compatible live API is
+# globally enabled, the workflow first turns that exact API/Compute pair into a
+# verified admission-OFF rollback baseline before any Compute mutation. It never
+# creates or replaces secrets, migrations, queues, buckets, or approval policy.
 on:
   workflow_dispatch:
     inputs:
@@ -376,6 +378,451 @@ jobs:
             ]}' \
             > "$EVIDENCE_DIR/api-secret-attestation.json"
           rm -f "$secret_list"
+
+      - name: Inspect the current-source API and Compute pair
+        id: inspect_off_bridge
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          api_status="$RUNNER_TEMP/off-bridge-current-api-status.json"
+          compute_status="$RUNNER_TEMP/off-bridge-current-compute-status.json"
+          api_version="$RUNNER_TEMP/off-bridge-current-api-version.json"
+          compute_version="$RUNNER_TEMP/off-bridge-current-compute-version.json"
+          current_state="$EVIDENCE_DIR/pre-rollout-current-pair.json"
+
+          pushd api >/dev/null
+          npx wrangler deployments status --name "$API_WORKER" --json \
+            > "$api_status"
+          npx wrangler deployments status --name "$COMPUTE_WORKER" --json \
+            > "$compute_status"
+          api_version_id="$(jq -er '
+            if (.versions | length) == 1 and
+               ((.versions[0].percentage | tonumber) == 100)
+            then .versions[0].version_id
+            else error("API is not one stable 100% version")
+            end
+          ' "$api_status")"
+          compute_version_id="$(jq -er '
+            if (.versions | length) == 1 and
+               ((.versions[0].percentage | tonumber) == 100)
+            then .versions[0].version_id
+            else error("Compute is not one stable 100% version")
+            end
+          ' "$compute_status")"
+          version_id_pattern='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          if ! [[ "$api_version_id" =~ $version_id_pattern ]] || \
+             ! [[ "$compute_version_id" =~ $version_id_pattern ]]; then
+            echo "Cloudflare returned a malformed current Worker version ID." >&2
+            exit 1
+          fi
+          npx wrangler versions view "$api_version_id" \
+            --name "$API_WORKER" --json > "$api_version"
+          npx wrangler versions view "$compute_version_id" \
+            --name "$COMPUTE_WORKER" --json > "$compute_version"
+          popd >/dev/null
+
+          node scripts/release/verify-api-compute-off-bridge.mjs \
+            current "$REQUESTED_TARGET" "api-$GITHUB_SHA" \
+            "$api_status" "$api_version" \
+            "$compute_status" "$compute_version" \
+            > "$current_state"
+          policy="$(jq -er '.policy' "$current_state")"
+          digest="$(jq -er '.environment_digest' "$current_state")"
+          if [ "$REQUESTED_TARGET" = "production" ] && \
+             [ "$policy" != "off" ]; then
+            echo "Production must already have a current-source admission-OFF rollback pair." >&2
+            exit 1
+          fi
+          {
+            echo "policy=$policy"
+            echo "environment_digest=$digest"
+            echo "api_version_id=$api_version_id"
+            echo "compute_version_id=$compute_version_id"
+          } >> "$GITHUB_OUTPUT"
+          echo "Verified the exact current-source API/Compute pair ($policy)." \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify the current exact container before any API mutation
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CURRENT_COMPUTE_DIGEST: ${{ steps.inspect_off_bridge.outputs.environment_digest }}
+        run: |
+          set -euo pipefail
+          current_image="registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/$IMAGE_REPOSITORY@$CURRENT_COMPUTE_DIGEST"
+          container_list="$RUNNER_TEMP/off-bridge-current-container-list.json"
+          pushd compute-worker >/dev/null
+          npx wrangler containers list --json > "$container_list"
+          popd >/dev/null
+          node compute-worker/scripts/verify-container-readiness.mjs \
+            "$container_list" "$CONTAINER_APPLICATION" "$current_image" \
+            > "$EVIDENCE_DIR/pre-rollout-current-container-readiness.json"
+
+      - name: Upload and verify a no-traffic admission-OFF API bridge
+        id: upload_off_bridge
+        if: >-
+          ${{
+            inputs.target == 'staging' &&
+            steps.inspect_off_bridge.outputs.policy == 'global'
+          }}
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CURRENT_COMPUTE_DIGEST: ${{ steps.inspect_off_bridge.outputs.environment_digest }}
+        run: |
+          set -euo pipefail
+          current_state="$EVIDENCE_DIR/pre-rollout-current-pair.json"
+          bridge_state="$EVIDENCE_DIR/pre-rollout-off-uploaded.json"
+          uploaded_version="$RUNNER_TEMP/off-bridge-uploaded-api-version.json"
+          upload_output="$RUNNER_TEMP/off-bridge-upload-output.ndjson"
+          bridge_tag="api-$GITHUB_SHA-pre-off"
+
+          pushd api >/dev/null
+          npx wrangler versions upload \
+            --config wrangler.toml --env staging \
+            --dry-run \
+            --var COMPUTE_ENABLED:0 \
+            --var "COMPUTE_ENVIRONMENT_DIGEST:$CURRENT_COMPUTE_DIGEST" \
+            --var COMPUTE_ROLLOUT_MODE:canary \
+            --var COMPUTE_CANARY_ALLOWLIST: \
+            --keep-vars --strict \
+            --outdir "$EVIDENCE_DIR/pre-rollout-off-api-dry-run"
+
+          : > "$upload_output"
+          WRANGLER_OUTPUT_FILE_PATH="$upload_output" \
+            npx wrangler versions upload \
+              --config wrangler.toml --env staging \
+              --tag "$bridge_tag" \
+              --message "No-traffic pre-rollout admission-OFF bridge run $GITHUB_RUN_ID" \
+              --var COMPUTE_ENABLED:0 \
+              --var "COMPUTE_ENVIRONMENT_DIGEST:$CURRENT_COMPUTE_DIGEST" \
+              --var COMPUTE_ROLLOUT_MODE:canary \
+              --var COMPUTE_CANARY_ALLOWLIST: \
+              --keep-vars --strict \
+              | tee "$EVIDENCE_DIR/pre-rollout-off-api-upload.txt"
+          bridge_version_id="$(jq -ser --arg worker "$API_WORKER" '
+            if length == 1 and
+               .[0].type == "version-upload" and
+               .[0].version == 1 and
+               .[0].worker_name == $worker and
+               (.[0].version_id | type) == "string"
+            then .[0].version_id
+            else error("Wrangler did not emit one exact version-upload record")
+            end
+          ' "$upload_output")"
+          if ! [[ "$bridge_version_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+            echo "Wrangler returned a malformed uploaded API version ID." >&2
+            exit 1
+          fi
+          npx wrangler versions view "$bridge_version_id" \
+            --name "$API_WORKER" --json > "$uploaded_version"
+          popd >/dev/null
+
+          node scripts/release/verify-api-compute-off-bridge.mjs \
+            uploaded "$REQUESTED_TARGET" "$current_state" \
+            "$uploaded_version" "$bridge_version_id" "$bridge_tag" \
+            > "$bridge_state"
+          {
+            echo "verified=true"
+            echo "version_id=$bridge_version_id"
+            echo "version_tag=$bridge_tag"
+          } >> "$GITHUB_OUTPUT"
+          echo "Uploaded and verified a no-traffic admission-OFF API bridge." \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Promote the exact verified admission-OFF API bridge
+        id: promote_off_bridge
+        if: steps.upload_off_bridge.outputs.verified == 'true'
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          BRIDGE_VERSION_ID: ${{ steps.upload_off_bridge.outputs.version_id }}
+        run: |
+          set -euo pipefail
+          api_status="$RUNNER_TEMP/off-bridge-pre-promote-api-status.json"
+          compute_status="$RUNNER_TEMP/off-bridge-pre-promote-compute-status.json"
+          api_version="$RUNNER_TEMP/off-bridge-pre-promote-api-version.json"
+          compute_version="$RUNNER_TEMP/off-bridge-pre-promote-compute-version.json"
+          unchanged_state="$RUNNER_TEMP/off-bridge-unchanged-current-pair.json"
+
+          pushd api >/dev/null
+          npx wrangler deployments status --name "$API_WORKER" --json \
+            > "$api_status"
+          npx wrangler deployments status --name "$COMPUTE_WORKER" --json \
+            > "$compute_status"
+          api_version_id="$(jq -er '
+            if (.versions | length) == 1 and
+               ((.versions[0].percentage | tonumber) == 100)
+            then .versions[0].version_id
+            else error("API changed before bridge promotion")
+            end
+          ' "$api_status")"
+          compute_version_id="$(jq -er '
+            if (.versions | length) == 1 and
+               ((.versions[0].percentage | tonumber) == 100)
+            then .versions[0].version_id
+            else error("Compute changed before bridge promotion")
+            end
+          ' "$compute_status")"
+          npx wrangler versions view "$api_version_id" \
+            --name "$API_WORKER" --json > "$api_version"
+          npx wrangler versions view "$compute_version_id" \
+            --name "$COMPUTE_WORKER" --json > "$compute_version"
+          popd >/dev/null
+          node scripts/release/verify-api-compute-off-bridge.mjs \
+            current "$REQUESTED_TARGET" "api-$GITHUB_SHA" \
+            "$api_status" "$api_version" \
+            "$compute_status" "$compute_version" \
+            > "$unchanged_state"
+          cmp --silent \
+            "$EVIDENCE_DIR/pre-rollout-current-pair.json" "$unchanged_state" || {
+            echo "The live API/Compute pair drifted after bridge verification." >&2
+            exit 1
+          }
+
+          echo "attempted=true" >> "$GITHUB_OUTPUT"
+          pushd api >/dev/null
+          npx wrangler versions deploy "$BRIDGE_VERSION_ID@100%" \
+            --config wrangler.toml --env staging \
+            --name "$API_WORKER" --yes \
+            --message "Promote verified admission-OFF bridge run $GITHUB_RUN_ID" \
+            | tee "$EVIDENCE_DIR/pre-rollout-off-api-promotion.txt"
+          popd >/dev/null
+
+      - name: Verify the promoted admission-OFF API bridge
+        id: verify_off_bridge
+        if: steps.promote_off_bridge.outputs.attempted == 'true'
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CURRENT_COMPUTE_DIGEST: ${{ steps.inspect_off_bridge.outputs.environment_digest }}
+          BRIDGE_VERSION_ID: ${{ steps.upload_off_bridge.outputs.version_id }}
+        run: |
+          set -euo pipefail
+          api_status="$RUNNER_TEMP/off-bridge-promoted-api-status.json"
+          compute_status="$RUNNER_TEMP/off-bridge-promoted-compute-status.json"
+          api_version="$RUNNER_TEMP/off-bridge-promoted-api-version.json"
+          compute_version="$RUNNER_TEMP/off-bridge-promoted-compute-version.json"
+          bridge_state="$EVIDENCE_DIR/pre-rollout-off-uploaded.json"
+          expected_compute_version_id="$(jq -er '.compute.version_id' "$bridge_state")"
+
+          pushd api >/dev/null
+          bridge_ready=false
+          for read_attempt in {1..12}; do
+            if npx wrangler deployments status \
+                 --name "$API_WORKER" --json > "$api_status" &&
+               npx wrangler deployments status \
+                 --name "$COMPUTE_WORKER" --json > "$compute_status" &&
+               jq -e --arg id "$BRIDGE_VERSION_ID" '
+                 (.versions | length) == 1 and
+                 ((.versions[0].percentage | tonumber) == 100) and
+                 .versions[0].version_id == $id
+               ' "$api_status" >/dev/null &&
+               jq -e --arg id "$expected_compute_version_id" '
+                 (.versions | length) == 1 and
+                 ((.versions[0].percentage | tonumber) == 100) and
+                 .versions[0].version_id == $id
+               ' "$compute_status" >/dev/null; then
+              bridge_ready=true
+              break
+            fi
+            sleep 5
+          done
+          [ "$bridge_ready" = "true" ] || {
+            echo "The exact OFF bridge did not become the stable API deployment." >&2
+            exit 1
+          }
+          npx wrangler versions view "$BRIDGE_VERSION_ID" \
+            --name "$API_WORKER" --json > "$api_version"
+          npx wrangler versions view "$expected_compute_version_id" \
+            --name "$COMPUTE_WORKER" --json > "$compute_version"
+          popd >/dev/null
+          node scripts/release/verify-api-compute-off-bridge.mjs \
+            promoted "$REQUESTED_TARGET" "$bridge_state" \
+            "$api_status" "$api_version" \
+            "$compute_status" "$compute_version" \
+            > "$EVIDENCE_DIR/pre-rollout-off-promoted.json"
+
+          current_image="registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/$IMAGE_REPOSITORY@$CURRENT_COMPUTE_DIGEST"
+          container_list="$RUNNER_TEMP/off-bridge-promoted-container-list.json"
+          pushd compute-worker >/dev/null
+          npx wrangler containers list --json > "$container_list"
+          popd >/dev/null
+          node compute-worker/scripts/verify-container-readiness.mjs \
+            "$container_list" "$CONTAINER_APPLICATION" "$current_image" \
+            > "$EVIDENCE_DIR/pre-rollout-off-container-readiness.json"
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the admission-OFF binding path before Compute mutation
+        id: verify_off_binding_before_mutation
+        if: >-
+          ${{
+            success() &&
+            (
+              steps.inspect_off_bridge.outputs.policy == 'off' ||
+              steps.verify_off_bridge.outputs.verified == 'true'
+            )
+          }}
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_STAGING_PROJECT_ID: ${{ (inputs.target == 'staging' && secrets.SUPABASE_STAGING_PROJECT_ID) || '' }}
+          SUPABASE_PRODUCTION_PROJECT_ID: ${{ (inputs.target == 'production' && secrets.SUPABASE_PRODUCTION_PROJECT_ID) || '' }}
+          ULTRALIGHT_TOKEN: ${{ (inputs.target == 'staging' && secrets.ULTRALIGHT_TOKEN_STAGING) || (inputs.target == 'production' && secrets.ULTRALIGHT_TOKEN) }}
+          GALACTIC_SMOKE_APP_ID: ${{ (inputs.target == 'staging' && secrets.GALACTIC_SMOKE_APP_ID_STAGING) || (inputs.target == 'production' && secrets.GALACTIC_SMOKE_APP_ID) }}
+          COMPUTE_RELEASE_SHA: ${{ github.sha }}
+          COMPUTE_RELEASE_RUN_ID: ${{ github.run_id }}
+          COMPUTE_RELEASE_EVIDENCE_DIR: ${{ github.workspace }}/compute-release-evidence/pre-rollout-off-binding
+        run: |
+          set -euo pipefail
+          mkdir -p "$COMPUTE_RELEASE_EVIDENCE_DIR"
+          node scripts/smoke/with-staging-owner-session.mjs \
+            --target "$REQUESTED_TARGET" \
+            -- node scripts/smoke/compute-admitted-smoke.mjs --preflight-only
+          preflight="$COMPUTE_RELEASE_EVIDENCE_DIR/compute-preflight-$REQUESTED_TARGET.json"
+          jq -e \
+            --arg target "$REQUESTED_TARGET" \
+            --arg sha "$GITHUB_SHA" \
+            --arg run_id "$GITHUB_RUN_ID" '
+              .schema_version == 1 and
+              .kind == "galactic_compute_binding_preflight" and
+              .verified == true and
+              .target == $target and
+              .candidate_sha == $sha and
+              .workflow_run_id == $run_id and
+              .fixture_policy.enabled == false and
+              .probe.action == "status" and
+              .probe.run_id == "00000000-0000-4000-8000-000000000000" and
+              .probe.observed_http_status == 500 and
+              .probe.observed_public_compute_code == "COMPUTE_RUN_NOT_FOUND"
+            ' "$preflight" >/dev/null
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Reassert the exact OFF bridge after an ambiguous promotion
+        if: >-
+          ${{
+            always() &&
+            steps.upload_off_bridge.outputs.verified == 'true' &&
+            steps.promote_off_bridge.outputs.attempted == 'true' &&
+            (
+              steps.promote_off_bridge.outcome != 'success' ||
+              steps.verify_off_bridge.outcome != 'success' ||
+              steps.verify_off_binding_before_mutation.outcome != 'success'
+            )
+          }}
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_STAGING_PROJECT_ID: ${{ secrets.SUPABASE_STAGING_PROJECT_ID }}
+          ULTRALIGHT_TOKEN: ${{ secrets.ULTRALIGHT_TOKEN_STAGING }}
+          GALACTIC_SMOKE_APP_ID: ${{ secrets.GALACTIC_SMOKE_APP_ID_STAGING }}
+          COMPUTE_RELEASE_SHA: ${{ github.sha }}
+          COMPUTE_RELEASE_RUN_ID: ${{ github.run_id }}
+          COMPUTE_RELEASE_EVIDENCE_DIR: ${{ github.workspace }}/compute-release-evidence/pre-rollout-off-recovery-binding
+          CURRENT_COMPUTE_DIGEST: ${{ steps.inspect_off_bridge.outputs.environment_digest }}
+          BRIDGE_VERSION_ID: ${{ steps.upload_off_bridge.outputs.version_id }}
+        run: |
+          set -euo pipefail
+          api_status="$RUNNER_TEMP/off-bridge-recovery-api-status.json"
+          compute_status="$RUNNER_TEMP/off-bridge-recovery-compute-status.json"
+          api_version="$RUNNER_TEMP/off-bridge-recovery-api-version.json"
+          compute_version="$RUNNER_TEMP/off-bridge-recovery-compute-version.json"
+          bridge_state="$EVIDENCE_DIR/pre-rollout-off-uploaded.json"
+          expected_compute_version_id="$(jq -er '.compute.version_id' "$bridge_state")"
+          promotion_log="$EVIDENCE_DIR/pre-rollout-off-api-recovery-promotion.txt"
+          : > "$promotion_log"
+
+          bridge_ready=false
+          for promotion_attempt in {1..3}; do
+            set +e
+            pushd api >/dev/null
+            npx wrangler versions deploy "$BRIDGE_VERSION_ID@100%" \
+              --config wrangler.toml --env staging \
+              --name "$API_WORKER" --yes \
+              --message "Reassert verified admission-OFF bridge run $GITHUB_RUN_ID attempt $promotion_attempt" \
+              | tee -a "$promotion_log"
+            promotion_rc="${PIPESTATUS[0]}"
+            popd >/dev/null
+            set -e
+            echo "OFF bridge reassert attempt $promotion_attempt returned $promotion_rc." \
+              >> "$GITHUB_STEP_SUMMARY"
+
+            for read_attempt in {1..6}; do
+              pushd api >/dev/null
+              if npx wrangler deployments status \
+                   --name "$API_WORKER" --json > "$api_status" &&
+                 npx wrangler deployments status \
+                   --name "$COMPUTE_WORKER" --json > "$compute_status" &&
+                 jq -e --arg id "$BRIDGE_VERSION_ID" '
+                   (.versions | length) == 1 and
+                   ((.versions[0].percentage | tonumber) == 100) and
+                   .versions[0].version_id == $id
+                 ' "$api_status" >/dev/null &&
+                 jq -e --arg id "$expected_compute_version_id" '
+                   (.versions | length) == 1 and
+                   ((.versions[0].percentage | tonumber) == 100) and
+                   .versions[0].version_id == $id
+                 ' "$compute_status" >/dev/null; then
+                bridge_ready=true
+              fi
+              popd >/dev/null
+              if [ "$bridge_ready" = "true" ]; then break 2; fi
+              sleep 5
+            done
+          done
+          [ "$bridge_ready" = "true" ] || {
+            echo "CRITICAL: the exact admission-OFF API bridge could not be reasserted." >&2
+            exit 1
+          }
+
+          pushd api >/dev/null
+          npx wrangler versions view "$BRIDGE_VERSION_ID" \
+            --name "$API_WORKER" --json > "$api_version"
+          npx wrangler versions view "$expected_compute_version_id" \
+            --name "$COMPUTE_WORKER" --json > "$compute_version"
+          popd >/dev/null
+          node scripts/release/verify-api-compute-off-bridge.mjs \
+            promoted "$REQUESTED_TARGET" "$bridge_state" \
+            "$api_status" "$api_version" \
+            "$compute_status" "$compute_version" \
+            > "$EVIDENCE_DIR/pre-rollout-off-recovered.json"
+
+          current_image="registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/$IMAGE_REPOSITORY@$CURRENT_COMPUTE_DIGEST"
+          container_list="$RUNNER_TEMP/off-bridge-recovery-container-list.json"
+          pushd compute-worker >/dev/null
+          npx wrangler containers list --json > "$container_list"
+          popd >/dev/null
+          node compute-worker/scripts/verify-container-readiness.mjs \
+            "$container_list" "$CONTAINER_APPLICATION" "$current_image" \
+            > "$EVIDENCE_DIR/pre-rollout-off-recovery-container-readiness.json"
+
+          mkdir -p "$COMPUTE_RELEASE_EVIDENCE_DIR"
+          node scripts/smoke/with-staging-owner-session.mjs \
+            --target staging \
+            -- node scripts/smoke/compute-admitted-smoke.mjs --preflight-only
+          preflight="$COMPUTE_RELEASE_EVIDENCE_DIR/compute-preflight-staging.json"
+          jq -e '
+            .schema_version == 1 and
+            .kind == "galactic_compute_binding_preflight" and
+            .verified == true and
+            .target == "staging" and
+            .fixture_policy.enabled == false and
+            .probe.observed_public_compute_code == "COMPUTE_RUN_NOT_FOUND"
+          ' "$preflight" >/dev/null || {
+            echo "CRITICAL: the reasserted admission-OFF bridge failed its binding preflight." >&2
+            exit 1
+          }
+          echo "Reasserted the same preverified admission-OFF API version; Compute was not mutated." \
+            >> "$GITHUB_STEP_SUMMARY"
 
       - name: Capture the stable API and Compute rollback pair before mutation
         id: capture_stable

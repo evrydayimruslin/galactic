@@ -15,9 +15,11 @@ import {
   isCandidateDeploymentEligible,
   MEMBERSHIP_CHECKOUT_IDEMPOTENCY_KEY,
   MEMBERSHIP_CHECKOUT_SELECTION_KEY,
+  needsCandidateDeploymentReconciliation,
   persistMembershipCandidateSelection,
   restoreMembershipCandidateSelection,
   retainMembershipCheckoutKeyAfterFailure,
+  shouldReloadAfterCandidateDeployment,
 } from "./candidate-deployment";
 
 const CANDIDATE = {
@@ -87,6 +89,27 @@ describe("candidate deployment client boundary", () => {
         lineageStatus: "stale",
       },
     })).toBe(false);
+  });
+
+  it("keeps pending deployments in reconciliation until the durable list catches up", () => {
+    expect(needsCandidateDeploymentReconciliation(CANDIDATE)).toBe(false);
+    expect(needsCandidateDeploymentReconciliation(CANDIDATE, "pending")).toBe(
+      true,
+    );
+    expect(needsCandidateDeploymentReconciliation(CANDIDATE, "deploying")).toBe(
+      true,
+    );
+    expect(needsCandidateDeploymentReconciliation({
+      ...CANDIDATE,
+      status: "deploying",
+    }, "failed")).toBe(true);
+    expect(needsCandidateDeploymentReconciliation(CANDIDATE, "failed")).toBe(
+      false,
+    );
+
+    expect(shouldReloadAfterCandidateDeployment(["pending"])).toBe(true);
+    expect(shouldReloadAfterCandidateDeployment(["completed"])).toBe(true);
+    expect(shouldReloadAfterCandidateDeployment(["failed"])).toBe(false);
   });
 
   it("persists and reuses one key for a lost deployment response", () => {
@@ -161,6 +184,12 @@ describe("candidate deployment client boundary", () => {
       "candidate-1:r1|candidate-2:r1",
       eligible,
     )).toEqual(new Set(["candidate-2"]));
+    expect(restoreMembershipCandidateSelection(
+      storage,
+      "candidate-1:r1|candidate-2:r1",
+      eligible,
+      new Set(["candidate-1"]),
+    )).toEqual(new Set(["candidate-2", "candidate-1"]));
     expect(restoreMembershipCandidateSelection(
       storage,
       "candidate-1:r2|candidate-2:r1",

@@ -1,4 +1,5 @@
 import type {
+  LaunchCandidateDeployResponse,
   LaunchCandidateInvitation,
   LaunchSubscriptionResponse,
 } from "../../../../shared/contracts/launch.ts";
@@ -105,6 +106,7 @@ export function restoreMembershipCandidateSelection(
   storage: CandidateAttemptStorage | null,
   signature: string,
   eligibleIds: ReadonlySet<string>,
+  requiredIds: ReadonlySet<string> = new Set(),
 ): Set<string> | null {
   try {
     const raw = storage?.getItem(MEMBERSHIP_CHECKOUT_SELECTION_KEY);
@@ -115,7 +117,13 @@ export function restoreMembershipCandidateSelection(
       !Array.isArray(parsed.ids) ||
       !parsed.ids.every((id) => typeof id === "string")
     ) return null;
-    return new Set(parsed.ids.filter((id) => eligibleIds.has(id)));
+    const selected = new Set(
+      parsed.ids.filter((id) => eligibleIds.has(id)),
+    );
+    for (const id of requiredIds) {
+      if (eligibleIds.has(id)) selected.add(id);
+    }
+    return selected;
   } catch {
     return null;
   }
@@ -150,6 +158,30 @@ export function isCandidateDeploymentEligible(
     candidate.blocker === null &&
     (candidate.target.kind !== "extension" ||
       candidate.target.lineageStatus === "current");
+}
+
+export type CandidateDeploymentClientState =
+  | "deploying"
+  | LaunchCandidateDeployResponse["status"];
+
+/**
+ * A pending POST response has not yet reached the candidate-list projection.
+ * Keep that local state authoritative until a reload reports the durable
+ * deployment so the UI cannot fall back to offering a fresh-looking deploy.
+ */
+export function needsCandidateDeploymentReconciliation(
+  candidate: Pick<LaunchCandidateInvitation, "status">,
+  clientState?: CandidateDeploymentClientState,
+): boolean {
+  return candidate.status === "deploying" ||
+    clientState === "deploying" ||
+    clientState === "pending";
+}
+
+export function shouldReloadAfterCandidateDeployment(
+  states: readonly CandidateDeploymentClientState[],
+): boolean {
+  return states.some((state) => state === "pending" || state === "completed");
 }
 
 export function candidateInvitationHero(count: number): string {
