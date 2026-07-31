@@ -152,7 +152,7 @@ export async function recoverStagingSupabaseDataPlane({
   initialProbeDelayMs = INITIAL_DATA_PLANE_PROBE_DELAY_MS,
   recoveryPollDelayMs = RECOVERY_POLL_DELAY_MS,
   log = console.log,
-}) {
+} = {}) {
   const managementAccessToken = requiredString(
     env?.SUPABASE_ACCESS_TOKEN,
     "SUPABASE_ACCESS_TOKEN",

@@ -51,6 +51,17 @@ test("recovery CLI is explicit and staging-only", () => {
   }
 });
 
+test("default invocation fails closed with a typed environment error", async () => {
+  await assert.rejects(
+    recoverStagingSupabaseDataPlane({
+      env: Object.create(null),
+    }),
+    (error) =>
+      error instanceof StagingDataPlaneRecoveryError &&
+      error.code === "missing_environment",
+  );
+});
+
 test("responsive canonical PostgREST never reads health or restarts", async () => {
   let healthCalls = 0;
   let restartCalls = 0;
