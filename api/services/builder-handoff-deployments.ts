@@ -898,6 +898,8 @@ async function invitationTarget(
       blocker: null,
     };
   }
+  const baseReleaseGeneration = releaseGeneration(session);
+  const missingReliableLineage = baseReleaseGeneration === null;
   const row = await readTargetApp(
     session.ownerId,
     session.targetAppId!,
@@ -905,7 +907,6 @@ async function invitationTarget(
     deps,
   );
   const stateDigest = row ? await currentBaseStateDigest(row) : null;
-  const expectedReleaseGeneration = releaseGeneration(session);
   const currentReleaseGeneration = typeof row?.release_generation === "number"
     ? row.release_generation
     : typeof row?.release_generation === "string" &&
@@ -916,8 +917,8 @@ async function invitationTarget(
     row.deleted_at !== null ||
     row.visibility !== "private" ||
     row.current_version !== session.baseVersion ||
-    expectedReleaseGeneration === null ||
-    currentReleaseGeneration !== expectedReleaseGeneration ||
+    missingReliableLineage ||
+    currentReleaseGeneration !== baseReleaseGeneration ||
     stateDigest !== session.baseStateDigest;
   return {
     target: {
@@ -935,7 +936,13 @@ async function invitationTarget(
       lineageStatus: stale ? "stale" : "current",
     },
     stale,
-    blocker: stale
+    blocker: missingReliableLineage
+      ? {
+        code: "candidate_base_generation_missing",
+        message:
+          "This extension candidate predates reliable release lineage. Create a fresh handoff.",
+      }
+      : stale
       ? {
         code: "candidate_base_stale",
         message:

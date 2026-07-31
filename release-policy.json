@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "release_tag": "v0.4.75",
+  "release_tag": "v0.4.76",
   "compute": {
     "artifact": "deploy_exact_candidate",
     "admission": "preserve_off"

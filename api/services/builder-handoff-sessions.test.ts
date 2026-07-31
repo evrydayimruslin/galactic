@@ -713,6 +713,40 @@ Deno.test("candidate session projection separately bounds uploaded work and rece
   ]);
 });
 
+Deno.test("candidate session projection preserves a pre-M7 extension for fail-closed review", async () => {
+  const legacyExtension = lifecycleRow("uploaded", 4);
+  Object.assign(legacyExtension, {
+    intent: "function",
+    target_app_id: EXISTING_AGENT_ID,
+    base_version: "1.2.3",
+    base_source_hash: BASE_SOURCE_HASH,
+    base_release_digest: BASE_RELEASE_DIGEST,
+    base_state_digest: BASE_STATE_DIGEST,
+    base_release_generation: null,
+    uploaded_app_id: EXISTING_AGENT_ID,
+  });
+  const fetchFn: typeof fetch = (input) => {
+    const url = new URL(String(input));
+    return Promise.resolve(
+      rpcJson(
+        url.searchParams.get("status") === "eq.uploaded"
+          ? [legacyExtension]
+          : [],
+      ),
+    );
+  };
+
+  const sessions = await listBuilderHandoffCandidateSessions(
+    OWNER_ID,
+    serviceOptions(fetchFn),
+  );
+
+  assertEquals(sessions.length, 1);
+  assertEquals(sessions[0].intent, "function");
+  assertEquals(sessions[0].status, "uploaded");
+  assertEquals(sessions[0].baseReleaseGeneration, null);
+});
+
 Deno.test("builder handoff termination returns durable credential revocation", async () => {
   const capturedBodies: Record<string, unknown>[] = [];
   const fetchFn: typeof fetch = async (_input, init) => {
