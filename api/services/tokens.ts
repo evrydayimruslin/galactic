@@ -12,6 +12,11 @@
 import { createClient } from '@supabase/supabase-js';
 import { getEnv } from '../lib/env.ts';
 import { requireActiveProSubscription } from './pro-subscription.ts';
+import {
+  ApiTokenAuthenticationError,
+  AuthServiceUnavailableError,
+  isApiTokenAuthenticationError,
+} from './auth-errors.ts';
 
 interface UserApiTokenRow {
   id: string;
@@ -81,11 +86,29 @@ interface Database {
 type UserApiTokenInsertPayload = Database['public']['Tables']['user_api_tokens']['Insert'];
 type TokensSupabaseClient = ReturnType<typeof createTokensSupabaseClient>;
 
+/** Bound the complete authoritative token + owner read chain. */
+const API_TOKEN_AUTH_READ_TIMEOUT_MS = 9_000;
+
+function remainingAuthReadTime(deadlineMs: number): number {
+  return Math.max(1, deadlineMs - Date.now());
+}
+
 // Lazy Supabase client — CF Workers env not available at module init
 let _supabase: TokensSupabaseClient | undefined;
 
 function createTokensSupabaseClient() {
-  return createClient<Database, 'public'>(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'));
+  return createClient<Database, 'public'>(
+    getEnv('SUPABASE_URL'),
+    getEnv('SUPABASE_SERVICE_ROLE_KEY'),
+    {
+      global: {
+        // Resolve fetch at call time. Besides making the Worker runtime
+        // explicit, this keeps focused tests from pinning a temporary mock in
+        // the process-lifetime client.
+        fetch: (input, init) => globalThis.fetch(input, init),
+      },
+    },
+  );
 }
 
 function getSupabase(): TokensSupabaseClient {
@@ -94,6 +117,11 @@ function getSupabase(): TokensSupabaseClient {
   }
 
   return _supabase;
+}
+
+/** @internal Focused-test seam for first-use configuration failures. */
+export function resetTokensSupabaseClientForTesting(): void {
+  _supabase = undefined;
 }
 
 // The repo does not yet have a shared generated Supabase schema, so `from(...)`
@@ -105,6 +133,110 @@ function tokensTable() {
 
 function usersTable() {
   return getSupabase().from('users' as never) as any;
+}
+
+interface SupabaseReadResult<T> {
+  data: T | null;
+  error: unknown;
+}
+
+interface AbortableSupabaseRead<T> extends PromiseLike<SupabaseReadResult<T>> {
+  abortSignal(signal: AbortSignal): PromiseLike<SupabaseReadResult<T>>;
+}
+
+/**
+ * Supabase/PostgREST can otherwise inherit a roughly minute-long platform
+ * network timeout. Race the query and abort its fetch so authentication has a
+ * deterministic retryable failure bound.
+ */
+export async function runBoundedAuthRead<T>(
+  queryFactory: () => AbortableSupabaseRead<T>,
+  timeoutMs = API_TOKEN_AUTH_READ_TIMEOUT_MS,
+): Promise<SupabaseReadResult<T>> {
+  let query: AbortableSupabaseRead<T>;
+  try {
+    // Client initialization and query-builder construction are synchronous and
+    // can throw on a missing/malformed Worker binding. Those are
+    // infrastructure failures, never invalid credentials.
+    query = queryFactory();
+  } catch {
+    throw new AuthServiceUnavailableError();
+  }
+
+  const controller = new AbortController();
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      controller.abort();
+      reject(new AuthServiceUnavailableError());
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([
+      Promise.resolve(query.abortSignal(controller.signal)),
+      timeout,
+    ]);
+  } catch (error) {
+    if (error instanceof AuthServiceUnavailableError) throw error;
+    throw new AuthServiceUnavailableError();
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** `.single()` represents an authoritative miss as PGRST116 / HTTP 406. */
+function isSupabaseSingleRowMissing(error: unknown): boolean {
+  if (!isRecord(error)) return false;
+  // Keep compatibility with older PostgREST and focused mocks that omit code.
+  const message = typeof error.message === 'string'
+    ? error.message.trim().toLowerCase()
+    : '';
+  const details = typeof error.details === 'string'
+    ? error.details.trim().toLowerCase()
+    : '';
+  const explicitlyEmpty = message === 'no rows' ||
+    /\b0 rows\b/u.test(message) ||
+    /\b0 rows\b/u.test(details);
+  // PGRST116 also represents multiple rows. Treat that as a corrupt/invalid
+  // authoritative response (503), never as an ordinary invalid credential.
+  if (error.code !== undefined && error.code !== 'PGRST116') return false;
+  return explicitlyEmpty;
+}
+
+function validNullableString(value: unknown): boolean {
+  return value === null || typeof value === 'string';
+}
+
+function validNullableStringArray(value: unknown): boolean {
+  return value === null ||
+    (Array.isArray(value) && value.every((item) => typeof item === 'string'));
+}
+
+function isValidTokenRow(value: unknown): value is UserApiTokenRow {
+  if (!isRecord(value)) return false;
+  return typeof value.id === 'string' && value.id.length > 0 &&
+    typeof value.user_id === 'string' && value.user_id.length > 0 &&
+    typeof value.token_hash === 'string' &&
+    validNullableString(value.token_salt) &&
+    validNullableString(value.plaintext_token) &&
+    validNullableStringArray(value.scopes) &&
+    validNullableStringArray(value.app_ids) &&
+    validNullableStringArray(value.function_names) &&
+    validNullableString(value.expires_at);
+}
+
+function isValidUserRow(value: unknown): value is UserRow {
+  if (!isRecord(value)) return false;
+  return typeof value.id === 'string' && value.id.length > 0 &&
+    typeof value.email === 'string' && value.email.length > 0 &&
+    (value.tier === null || typeof value.tier === 'string') &&
+    (value.provisional === null || typeof value.provisional === 'boolean') &&
+    validNullableString(value.last_active_at);
 }
 
 // Token prefix for easy identification. New keys are minted as `gx_`; the
@@ -318,6 +450,35 @@ async function backfillCanonicalTokenHash(
   if (error) {
     throw new Error(`Failed to backfill canonical token hash: ${error.message}`);
   }
+}
+
+type BestEffortTokenWrite = 'canonical_hash_backfill' | 'last_used_update';
+
+/**
+ * Observe every fire-and-forget token maintenance write to completion. Both a
+ * Supabase `{ error }` result and a rejected fetch are contained, and the log
+ * is deliberately limited to a fixed operation label.
+ */
+export function observeBestEffortTokenWrite(
+  write: PromiseLike<unknown>,
+  operation: BestEffortTokenWrite,
+): void {
+  const label = operation === 'canonical_hash_backfill'
+    ? 'Canonical token hash backfill'
+    : 'Token last-used update';
+  void Promise.resolve(write)
+    .then((result) => {
+      if (isRecord(result) && result.error) {
+        console.warn(`[TOKEN] ${label} unavailable`);
+        return;
+      }
+      if (operation === 'canonical_hash_backfill') {
+        console.log('[TOKEN] Canonical token hash backfilled');
+      }
+    })
+    .catch(() => {
+      console.warn(`[TOKEN] ${label} unavailable`);
+    });
 }
 
 /**
@@ -559,63 +720,95 @@ export async function validateToken(
   token: string,
   clientIp?: string
 ): Promise<ValidatedToken | null> {
+  try {
+    return await validateTokenForAuthentication(token, clientIp);
+  } catch (error) {
+    if (isApiTokenAuthenticationError(error)) return null;
+    throw error;
+  }
+}
+
+async function validateTokenForAuthentication(
+  token: string,
+  clientIp?: string,
+  deadlineMs = Date.now() + API_TOKEN_AUTH_READ_TIMEOUT_MS,
+): Promise<ValidatedToken> {
   // Quick format check
   if (!hasApiTokenPrefix(token)) {
     console.log(`[TOKEN] Rejected: missing prefix "gx_"/"ul_" — got "${token.substring(0, 6)}..."`);
-    return null;
+    throw new ApiTokenAuthenticationError('invalid');
   }
   if (token.length !== 35) {
     console.log(`[TOKEN] Rejected: wrong length — expected 35, got ${token.length} (prefix: ${token.substring(0, 8)})`);
-    return null;
+    throw new ApiTokenAuthenticationError('invalid');
   }
 
   const tokenPrefix = token.substring(0, 8);
   console.log(`[TOKEN] Validating token with prefix: ${tokenPrefix}`);
 
   // Look up token by prefix first (indexed), then verify hash
-  const { data, error } = await tokensTable()
-    .select('id, user_id, token_hash, token_salt, plaintext_token, scopes, app_ids, function_names, expires_at')
-    .eq('token_prefix', tokenPrefix)
-    .single();
+  const { data, error } = await runBoundedAuthRead<UserApiTokenRow>(
+    () =>
+      tokensTable()
+        .select('id, user_id, token_hash, token_salt, plaintext_token, scopes, app_ids, function_names, expires_at')
+        .eq('token_prefix', tokenPrefix)
+        .single(),
+    remainingAuthReadTime(deadlineMs),
+  );
 
-  if (error || !data) {
-    console.log(`[TOKEN] Prefix lookup FAILED for "${tokenPrefix}" — error: ${error?.message || 'no rows'}, code: ${error?.code || 'n/a'}`);
-    return null;
+  if (error) {
+    if (isSupabaseSingleRowMissing(error)) {
+      console.log(`[TOKEN] Prefix lookup found no token for "${tokenPrefix}"`);
+      throw new ApiTokenAuthenticationError('invalid');
+    }
+    console.error('[TOKEN] Prefix lookup unavailable');
+    throw new AuthServiceUnavailableError();
+  }
+  if (!isValidTokenRow(data)) {
+    console.error('[TOKEN] Prefix lookup returned an invalid response');
+    throw new AuthServiceUnavailableError();
   }
   console.log(`[TOKEN] Prefix lookup OK — token_id: ${data.id}, user_id: ${data.user_id}, state: ${classifyApiTokenCompatibility(data)}`);
 
   const verification = await verifyApiTokenRecord(token, data);
   if (!verification.valid) {
     console.log(`[TOKEN] Validation failed for token_id: ${data.id} (reason: ${verification.reason || 'unknown'})`);
-    return null;
+    throw new ApiTokenAuthenticationError('invalid');
   }
   if (verification.canonical_update) {
-    try {
-      await backfillCanonicalTokenHash(data.id, verification.canonical_update);
-      console.log(`[TOKEN] Canonical token hash backfilled for token_id: ${data.id}`);
-    } catch (err) {
-      console.warn('[TOKEN] Failed to backfill canonical token hash', err);
-    }
+    // Migration is not part of the authentication decision: the legacy
+    // plaintext has already matched in constant time. Do not let a best-effort
+    // compatibility write consume the shared token + owner read deadline.
+    observeBestEffortTokenWrite(
+      backfillCanonicalTokenHash(data.id, verification.canonical_update),
+      'canonical_hash_backfill',
+    );
   }
   console.log(`[TOKEN] Hash verified OK for token_id: ${data.id}`);
 
   // Check expiry
   if (data.expires_at) {
     const expiryMs = Date.parse(data.expires_at);
-    if (!Number.isFinite(expiryMs) || expiryMs <= Date.now()) {
+    if (!Number.isFinite(expiryMs)) {
+      console.error('[TOKEN] Prefix lookup returned an invalid expiry');
+      throw new AuthServiceUnavailableError();
+    }
+    if (expiryMs <= Date.now()) {
       console.log(`[TOKEN] EXPIRED — token_id: ${data.id}, expired_at: ${data.expires_at}`);
-      return null;
+      throw new ApiTokenAuthenticationError('expired');
     }
   }
 
   // Update last used (fire and forget - don't wait)
-  tokensTable()
-    .update({
-      last_used_at: new Date().toISOString(),
-      last_used_ip: clientIp || null,
-    })
-    .eq('id', data.id)
-    .then(() => {}); // Ignore result
+  observeBestEffortTokenWrite(
+    tokensTable()
+      .update({
+        last_used_at: new Date().toISOString(),
+        last_used_ip: clientIp || null,
+      })
+      .eq('id', data.id),
+    'last_used_update',
+  );
 
   console.log(`[TOKEN] Validation SUCCESS — token_id: ${data.id}, user_id: ${data.user_id}`);
   return {
@@ -648,6 +841,8 @@ interface TokenVerdict {
   scopes?: string[];
   tokenExpiresAt?: string | null;
 }
+
+type AuthenticatedApiTokenUser = TokenVerdict;
 
 const TOKEN_VERDICT_TTL_MS = 60_000;
 const TOKEN_VERDICT_MAX_ENTRIES = 2_000;
@@ -735,17 +930,10 @@ export function invalidateTokenVerdictsForUser(userId: string): void {
  * Get user info from a validated token
  * Used by auth middleware to get full user context
  */
-export async function getUserFromToken(token: string, clientIp?: string): Promise<{
-  id: string;
-  email: string;
-  tier: string;
-  provisional?: boolean;
-  tokenId: string;
-  tokenAppIds?: string[] | null;
-  tokenFunctionNames?: string[] | null;
-  tokenExpiresAt?: string | null;
-  scopes?: string[];
-} | null> {
+export async function getUserFromTokenForAuthentication(
+  token: string,
+  clientIp?: string,
+): Promise<AuthenticatedApiTokenUser> {
   const cacheKey = await tokenVerdictKey(token);
   const cached = tokenVerdictCache.get(cacheKey);
   if (
@@ -773,31 +961,48 @@ export async function getUserFromToken(token: string, clientIp?: string): Promis
 
   console.log(`[TOKEN] getUserFromToken called — token length: ${token.length}, prefix: ${token.substring(0, 8)}`);
 
-  const validated = await validateToken(token, clientIp);
-  if (!validated) {
-    console.log(`[TOKEN] getUserFromToken: validateToken returned null`);
-    return null;
-  }
+  const deadlineMs = Date.now() + API_TOKEN_AUTH_READ_TIMEOUT_MS;
+  const validated = await validateTokenForAuthentication(
+    token,
+    clientIp,
+    deadlineMs,
+  );
 
   // Get user from database (include provisional + last_active_at for expiry check)
-  const { data: user, error } = await usersTable()
-    .select('id, email, tier, provisional, last_active_at')
-    .eq('id', validated.user_id)
-    .single();
+  const { data: user, error } = await runBoundedAuthRead<UserRow>(
+    () =>
+      usersTable()
+        .select('id, email, tier, provisional, last_active_at')
+        .eq('id', validated.user_id)
+        .single(),
+    remainingAuthReadTime(deadlineMs),
+  );
 
-  if (error || !user) {
-    console.log(`[TOKEN] getUserFromToken: user lookup FAILED for user_id: ${validated.user_id} — error: ${error?.message || 'no user found'}`);
-    return null;
+  if (error) {
+    if (isSupabaseSingleRowMissing(error)) {
+      console.log('[TOKEN] API token owner no longer exists');
+      throw new ApiTokenAuthenticationError('invalid');
+    }
+    console.error('[TOKEN] API token owner lookup unavailable');
+    throw new AuthServiceUnavailableError();
+  }
+  if (!isValidUserRow(user) || user.id !== validated.user_id) {
+    console.error('[TOKEN] API token owner lookup returned an invalid response');
+    throw new AuthServiceUnavailableError();
   }
   console.log(`[TOKEN] getUserFromToken: user found — email: ${user.email}, tier: ${user.tier}, provisional: ${user.provisional}`);
 
   // Reject expired provisional users (no MCP call in 24 hours)
   if (user.provisional && user.last_active_at) {
     const lastActive = new Date(user.last_active_at).getTime();
+    if (!Number.isFinite(lastActive)) {
+      console.error('[TOKEN] API token owner lookup returned invalid activity state');
+      throw new AuthServiceUnavailableError();
+    }
     const twentyFourHoursAgo = Date.now() - (24 * 60 * 60 * 1000);
     if (lastActive < twentyFourHoursAgo) {
       console.log(`[TOKEN] getUserFromToken: provisional user EXPIRED — last_active: ${user.last_active_at}`);
-      return null; // Expired provisional — treat as invalid token
+      throw new ApiTokenAuthenticationError('expired');
     }
   }
 
@@ -815,6 +1020,23 @@ export async function getUserFromToken(token: string, clientIp?: string): Promis
   };
   cacheTokenVerdict(cacheKey, verdict);
   return { ...verdict };
+}
+
+/**
+ * Compatibility surface for token-management callers. Authentication
+ * middleware uses the strict variant above so it can preserve invalid versus
+ * expired 401s. Infrastructure failures always remain retryable errors.
+ */
+export async function getUserFromToken(
+  token: string,
+  clientIp?: string,
+): Promise<AuthenticatedApiTokenUser | null> {
+  try {
+    return await getUserFromTokenForAuthentication(token, clientIp);
+  } catch (error) {
+    if (isApiTokenAuthenticationError(error)) return null;
+    throw error;
+  }
 }
 
 /**

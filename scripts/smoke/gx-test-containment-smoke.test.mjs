@@ -3,7 +3,11 @@ import { test } from 'node:test';
 import {
   assessContainmentResults,
   callGxTest,
+  containmentApiBase,
   containmentProbeFiles,
+  formatGxTestHttpFailure,
+  PRODUCTION_API_BASE,
+  safeDiagnostic,
   stagingApiBase,
 } from './gx-test-containment-smoke.mjs';
 
@@ -53,14 +57,26 @@ test('probe fixture is self-contained and uses only an invalid outbound domain',
   assert.doesNotMatch(combined, /ultralight-api-staging/u);
 });
 
-test('staging URL validation rejects production and non-origin URLs', () => {
+test('target validation requires an explicit exact production origin', () => {
   assert.equal(
     stagingApiBase('https://staging.example.test/'),
     'https://staging.example.test',
   );
   assert.throws(
     () => stagingApiBase('https://api.connectgalactic.com'),
-    /staging-only/u,
+    /--target production/u,
+  );
+  assert.equal(
+    containmentApiBase(PRODUCTION_API_BASE, 'production'),
+    PRODUCTION_API_BASE,
+  );
+  assert.throws(
+    () => containmentApiBase('https://example.com', 'production'),
+    /may target only/u,
+  );
+  assert.throws(
+    () => containmentApiBase(PRODUCTION_API_BASE, 'unknown'),
+    /must be staging or production/u,
   );
   assert.throws(
     () => stagingApiBase('http://staging.example.test'),
@@ -99,6 +115,61 @@ test('gx.test request keeps the token in the header and decodes structured conte
   assert.equal(body.params.arguments.function_name, 'state_and_stub_probe');
   assert.equal(body.params.arguments.strict, true);
   assert.equal(JSON.stringify(body).includes(TOKEN), false);
+});
+
+test('non-2xx diagnostics expose only bounded structured JSON-RPC fields', async () => {
+  const rawBodySecret = 'raw-body-value-that-must-not-appear';
+  await assert.rejects(
+    () => callGxTest({
+      apiBase: 'https://staging.example.test',
+      token: TOKEN,
+      functionName: 'state_and_stub_probe',
+      testArgs: { marker: 'one' },
+      fetchImpl: async () => Response.json({
+        jsonrpc: '2.0',
+        id: 'one',
+        error: {
+          code: -32603,
+          message: `Authentication failed for Bearer ${TOKEN}`,
+          data: {
+            type: 'AUTH_SERVICE_UNAVAILABLE',
+            raw: rawBodySecret,
+            bearer: TOKEN,
+          },
+        },
+        ignored: rawBodySecret,
+      }, { status: 503 }),
+    }),
+    (error) => {
+      assert.match(error.message, /gx\.test\[state_and_stub_probe\]/u);
+      assert.match(error.message, /HTTP 503/u);
+      assert.match(error.message, /jsonrpc_code=-32603/u);
+      assert.match(error.message, /type=AUTH_SERVICE_UNAVAILABLE/u);
+      assert.match(error.message, /Bearer \[REDACTED\]/u);
+      assert.equal(error.message.includes(TOKEN), false);
+      assert.equal(error.message.includes(rawBodySecret), false);
+      return true;
+    },
+  );
+});
+
+test('diagnostics redact bearer, API token, JWT, and secret assignments', () => {
+  const jwt = 'eyJabcdefgh.ijklmnop.qrstuvwx';
+  const diagnostic = safeDiagnostic(
+    `Bearer ${TOKEN}; token=${TOKEN}; password=hunter2; jwt=${jwt}`,
+    [TOKEN],
+  );
+  assert.equal(diagnostic.includes(TOKEN), false);
+  assert.equal(diagnostic.includes('hunter2'), false);
+  assert.equal(diagnostic.includes(jwt), false);
+  assert.match(diagnostic, /\[REDACTED\]/u);
+
+  const bounded = formatGxTestHttpFailure({
+    functionName: `probe-${'x'.repeat(200)}`,
+    status: 503,
+    body: { error: { code: -32603, message: 'retry later' } },
+  });
+  assert(bounded.length < 180);
 });
 
 test('assessment requires local state, deterministic stubs, effect latches, and no cache', () => {
@@ -163,5 +234,17 @@ test('assessment fails if a caught effect attests or ambient cache is usable', (
       'detached outbound effects remain disqualifying',
       'ambient Cache API is unavailable',
     ],
+  );
+  assert.match(
+    result.checks.find((item) =>
+      item.name === 'caught external effects remain disqualifying'
+    ).detail,
+    /success=false; attestation=present/u,
+  );
+  assert.match(
+    result.checks.find((item) =>
+      item.name === 'ambient Cache API is unavailable'
+    ).detail,
+    /cache_usable=true/u,
   );
 });

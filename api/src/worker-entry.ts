@@ -70,7 +70,6 @@ export {
   TestNotifyBinding,
   TestOutboundBinding,
   TestRunsBinding,
-  TestRuntimeSessionFactory,
 } from "./bindings/test-runtime-bindings.ts";
 export { NetworkBinding } from "./bindings/network-binding.ts";
 export { EventsBinding } from "./bindings/events-binding.ts";
@@ -78,6 +77,7 @@ export { OutboundBinding } from "./bindings/outbound-binding.ts";
 export { CredentialBinding } from "./bindings/credential-binding.ts";
 export { CapacityDynamicTail } from "./bindings/capacity-dynamic-tail.ts";
 export { ComputeControlPlane } from "./compute-control-plane-entrypoint.ts";
+export { GxTestSession } from "./gx-test-session.ts";
 
 // ============================================
 // SECURITY & CORS HEADERS

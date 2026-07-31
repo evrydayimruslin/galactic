@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Staging-only gx.test containment certification.
+// Deployed gx.test containment certification.
 //
 // This exercises the deployed Dynamic Worker / ctx.exports RPC graph, not the
 // local mocks. It intentionally does not upload an Agent and never serializes a
@@ -9,6 +9,7 @@
 // Usage:
 //   ULTRALIGHT_TOKEN=ul_... \
 //     node scripts/smoke/gx-test-containment-smoke.mjs \
+//       [--target staging|production] \
 //       [--url https://ultralight-api-staging.rgn4jz429m.workers.dev] \
 //       [--output /path/to/gx-test-containment.json]
 
@@ -19,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from '../analysis/_shared.mjs';
 
 export const STAGING_API_BASE = 'https://ultralight-api-staging.rgn4jz429m.workers.dev';
+export const PRODUCTION_API_BASE = 'https://api.connectgalactic.com';
 const REQUEST_TIMEOUT_MS = 90_000;
 const REQUIRED_BLOCKED_EFFECTS = Object.freeze([
   'agent_call',
@@ -33,7 +35,7 @@ function manifest() {
   return {
     name: 'gx.test containment probe',
     version: '1.0.0',
-    description: 'Ephemeral staging-only probe for the gx.test containment boundary.',
+    description: 'Ephemeral deployed probe for the gx.test containment boundary.',
     type: 'mcp',
     entry: { functions: 'index.js' },
     flight_recorder: true,
@@ -257,7 +259,7 @@ export async function cache_capability_probe(input = {}) {
   }
 }
 
-// Strict gx.test lint requires an Agent UI surface even though this staging
+// Strict gx.test lint requires an Agent UI surface even though this deployment
 // probe never invokes it. Keep the probe deployable without adding any new
 // capability or state to the containment exercise.
 export async function ui() {
@@ -278,14 +280,29 @@ function requiredString(value, label) {
   return normalized;
 }
 
-export function stagingApiBase(value) {
-  const normalized = requiredString(value || STAGING_API_BASE, 'Staging API URL')
+function containmentTarget(value) {
+  const target = String(value || 'staging').trim().toLowerCase();
+  if (target !== 'staging' && target !== 'production') {
+    throw new Error('gx.test containment target must be staging or production.');
+  }
+  return target;
+}
+
+export function containmentApiBase(value, target = 'staging') {
+  const resolvedTarget = containmentTarget(target);
+  const defaultBase = resolvedTarget === 'production'
+    ? PRODUCTION_API_BASE
+    : STAGING_API_BASE;
+  const label = resolvedTarget === 'production'
+    ? 'Production API URL'
+    : 'Staging API URL';
+  const normalized = requiredString(value || defaultBase, label)
     .replace(/\/+$/u, '');
   let parsed;
   try {
     parsed = new URL(normalized);
   } catch {
-    throw new Error('Staging API URL is invalid.');
+    throw new Error(`${label} is invalid.`);
   }
   if (
     parsed.protocol !== 'https:' ||
@@ -295,39 +312,104 @@ export function stagingApiBase(value) {
     parsed.search ||
     parsed.pathname !== '/'
   ) {
-    throw new Error('Staging API URL must be a bare HTTPS origin.');
+    throw new Error(`${label} must be a bare HTTPS origin.`);
   }
-  if (normalized === 'https://api.connectgalactic.com') {
-    throw new Error('gx.test containment certification is staging-only.');
+  if (
+    resolvedTarget === 'production' &&
+    normalized !== PRODUCTION_API_BASE
+  ) {
+    throw new Error(
+      `Production gx.test containment may target only ${PRODUCTION_API_BASE}.`,
+    );
+  }
+  if (resolvedTarget === 'staging' && normalized === PRODUCTION_API_BASE) {
+    throw new Error(
+      'Production gx.test containment requires --target production.',
+    );
   }
   return normalized;
 }
 
-function safeDiagnostic(value, secrets = []) {
+export function stagingApiBase(value) {
+  return containmentApiBase(value, 'staging');
+}
+
+export function safeDiagnostic(value, secrets = []) {
   let text = value instanceof Error ? value.message : String(value || '');
   for (const secret of secrets) {
     if (secret) text = text.replaceAll(secret, '[REDACTED]');
   }
   text = text
+    .replace(/\bBearer\s+[^\s,;]+/giu, 'Bearer [REDACTED]')
     .replace(/\b(?:ul|gx)_[A-Za-z0-9._~-]{12,}\b/gu, '[REDACTED_TOKEN]')
     .replace(
       /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/gu,
       '[REDACTED_JWT]',
+    )
+    .replace(
+      /\b(api[_-]?key|authorization|password|secret|token)\s*[:=]\s*["']?[^\s,"';}]+/giu,
+      '$1=[REDACTED]',
     );
   return text.slice(0, 500);
 }
 
-function decodeToolResult(responseBody) {
+function safeCallLabel(value, secrets = []) {
+  const redacted = safeDiagnostic(value, secrets)
+    .replace(/[^A-Za-z0-9_.:[\]-]+/gu, '_')
+    .replace(/^_+|_+$/gu, '')
+    .slice(0, 80);
+  return redacted || 'unknown';
+}
+
+function record(value) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value
+    : null;
+}
+
+/**
+ * Extract only a bounded JSON-RPC diagnostic. Never serialize the response
+ * body: auth gateways and intermediaries can put credentials in arbitrary
+ * fields that are not safe CI output.
+ */
+export function formatGxTestHttpFailure({
+  functionName,
+  status,
+  body,
+  secrets = [],
+}) {
+  const label = safeCallLabel(functionName, secrets);
+  const error = record(record(body)?.error);
+  const data = record(error?.data);
+  const parts = [
+    `gx.test[${label}] returned HTTP ${Number.isInteger(status) ? status : 'unknown'}`,
+  ];
+  if (typeof error?.code === 'number' && Number.isFinite(error.code)) {
+    parts.push(`jsonrpc_code=${error.code}`);
+  }
+  if (typeof data?.type === 'string' && data.type.trim()) {
+    parts.push(`type=${safeCallLabel(data.type, secrets)}`);
+  }
+  if (typeof error?.message === 'string' && error.message.trim()) {
+    parts.push(`message=${safeDiagnostic(error.message, secrets).slice(0, 240)}`);
+  }
+  return `${parts.join('; ')}.`;
+}
+
+function decodeToolResult(responseBody, secrets = []) {
   if (responseBody?.error) {
     throw new Error(
-      `MCP error: ${safeDiagnostic(responseBody.error.message || 'unknown')}`,
+      `MCP error: ${safeDiagnostic(
+        responseBody.error.message || 'unknown',
+        secrets,
+      )}`,
     );
   }
   const result = responseBody?.result;
   if (!result) throw new Error('MCP response did not include a result.');
   if (result.isError) {
     throw new Error(
-      safeDiagnostic(result.content?.[0]?.text || 'gx.test failed'),
+      safeDiagnostic(result.content?.[0]?.text || 'gx.test failed', secrets),
     );
   }
   if (result.structuredContent !== undefined) return result.structuredContent;
@@ -372,19 +454,30 @@ export async function callGxTest({
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
-    throw new Error(`gx.test request failed: ${safeDiagnostic(error, [token])}`);
+    const label = safeCallLabel(functionName, [token]);
+    throw new Error(
+      `gx.test[${label}] request failed: ${safeDiagnostic(error, [token])}`,
+    );
   }
 
   let body;
   try {
     body = await response.json();
   } catch {
-    throw new Error(`gx.test returned non-JSON (HTTP ${response.status}).`);
+    const label = safeCallLabel(functionName, [token]);
+    throw new Error(
+      `gx.test[${label}] returned non-JSON (HTTP ${response.status}).`,
+    );
   }
   if (!response.ok) {
-    throw new Error(`gx.test returned HTTP ${response.status}.`);
+    throw new Error(formatGxTestHttpFailure({
+      functionName,
+      status: response.status,
+      body,
+      secrets: [token],
+    }));
   }
-  return decodeToolResult(body);
+  return decodeToolResult(body, [token]);
 }
 
 function hasAttestation(result) {
@@ -426,8 +519,52 @@ function check(name, passed, detail) {
   return {
     name,
     status: passed ? 'passed' : 'failed',
-    ...(detail ? { detail } : {}),
+    ...(!passed && detail ? { detail } : {}),
   };
+}
+
+function resultDiagnostic(value) {
+  if (!value || typeof value !== 'object') return 'result=missing';
+  const parts = [
+    `success=${
+      value.success === true
+        ? 'true'
+        : value.success === false
+          ? 'false'
+          : 'missing'
+    }`,
+    `attestation=${hasAttestation(value) ? 'present' : 'absent'}`,
+  ];
+  if (typeof value.runtime_invoked === 'boolean') {
+    parts.push(`runtime_invoked=${value.runtime_invoked}`);
+  }
+  if (value.lint_passed === false) {
+    const lintRules = Array.isArray(value.lint?.issues)
+      ? value.lint.issues
+          .filter((issue) => issue?.severity === 'error')
+          .map((issue) => String(issue?.rule || 'unknown'))
+          .slice(0, 10)
+      : [];
+    parts.push(`strict_lint=${lintRules.join(',') || 'failed'}`);
+  }
+  if (typeof value.error_code === 'string') {
+    parts.push(`error_code=${safeDiagnostic(value.error_code)}`);
+  }
+  if (typeof value.error_type === 'string') {
+    parts.push(`error_type=${safeDiagnostic(value.error_type)}`);
+  }
+  if (typeof value.error === 'string') {
+    parts.push(`error=${safeDiagnostic(value.error)}`);
+  }
+  return parts.join('; ');
+}
+
+function stateDiagnostic(value, marker) {
+  return [
+    resultDiagnostic(value),
+    `before_empty=${nullState(value?.result?.before)}`,
+    `after_matches=${expectedAfter(value?.result?.after, marker)}`,
+  ].join('; ');
 }
 
 export function assessContainmentResults({
@@ -447,6 +584,7 @@ export function assessContainmentResults({
         hasAttestation(first) &&
         nullState(first.result?.before) &&
         expectedAfter(first.result?.after, firstMarker),
+      stateDiagnostic(first, firstMarker),
     ),
     check(
       'fresh invocation starts with empty DATA and MEMORY',
@@ -454,34 +592,50 @@ export function assessContainmentResults({
         hasAttestation(second) &&
         nullState(second.result?.before) &&
         expectedAfter(second.result?.after, secondMarker),
+      stateDiagnostic(second, secondMarker),
     ),
     check(
       'AI, embeddings, notifications, and run history use test stubs',
       expectedStubs(first?.result?.stubs) &&
         expectedStubs(second?.result?.stubs),
+      [
+        `first_stubs=${expectedStubs(first?.result?.stubs)}`,
+        `second_stubs=${expectedStubs(second?.result?.stubs)}`,
+        `first_${resultDiagnostic(first)}`,
+        `second_${resultDiagnostic(second)}`,
+      ].join('; '),
     ),
     check(
       'caught external effects remain disqualifying',
       effects?.success === false &&
         !hasAttestation(effects) &&
         REQUIRED_BLOCKED_EFFECTS.every((effect) => effectError.includes(effect)),
-      REQUIRED_BLOCKED_EFFECTS.filter((effect) => !effectError.includes(effect)).join(', ') ||
-        undefined,
+      [
+        `missing_effects=${
+          REQUIRED_BLOCKED_EFFECTS
+            .filter((effect) => !effectError.includes(effect))
+            .join(',') || 'none'
+        }`,
+        resultDiagnostic(effects),
+      ].join('; '),
     ),
     check(
       'detached outbound effects remain disqualifying',
       detached?.success === false &&
         !hasAttestation(detached) &&
         String(detached?.error || '').includes('outbound_http'),
+      resultDiagnostic(detached),
     ),
     check(
       'ambient Cache API is unavailable',
       cache?.success === true &&
         hasAttestation(cache) &&
         cache?.result?.usable === false,
-      cache?.result?.usable === true
-        ? 'Dynamic Worker received a usable ambient Cache API.'
-        : undefined,
+      [
+        resultDiagnostic(cache),
+        `cache_defined=${cache?.result?.defined === true}`,
+        `cache_usable=${cache?.result?.usable === true}`,
+      ].join('; '),
     ),
   ];
   return {
@@ -491,12 +645,14 @@ export function assessContainmentResults({
 }
 
 export async function runContainmentSmoke({
-  apiBase = STAGING_API_BASE,
+  apiBase,
+  target = 'staging',
   token,
   fetchImpl = fetch,
   now = () => new Date(),
 }) {
-  const resolvedApiBase = stagingApiBase(apiBase);
+  const resolvedTarget = containmentTarget(target);
+  const resolvedApiBase = containmentApiBase(apiBase, resolvedTarget);
   const resolvedToken = requiredString(token, 'ULTRALIGHT_TOKEN');
   const nonce = randomUUID();
   const firstMarker = `${nonce}-first`;
@@ -531,7 +687,7 @@ export async function runContainmentSmoke({
   return {
     schema_version: 1,
     suite: 'gx-test-containment',
-    target: 'staging',
+    target: resolvedTarget,
     api_origin: resolvedApiBase,
     generated_at: now().toISOString(),
     passed: assessment.passed,
@@ -548,14 +704,18 @@ async function main() {
       'Pass ULTRALIGHT_TOKEN through the environment, not the command line.',
     );
   }
-  const apiBase = stagingApiBase(
-    args.get('--url') || process.env.ULTRALIGHT_API_URL || STAGING_API_BASE,
+  const target = containmentTarget(
+    args.get('--target') || process.env.GX_TEST_CONTAINMENT_TARGET || 'staging',
+  );
+  const apiBase = containmentApiBase(
+    args.get('--url') || process.env.ULTRALIGHT_API_URL,
+    target,
   );
   const token = requiredString(
     process.env.ULTRALIGHT_TOKEN,
     'ULTRALIGHT_TOKEN',
   );
-  const report = await runContainmentSmoke({ apiBase, token });
+  const report = await runContainmentSmoke({ apiBase, target, token });
   for (const item of report.checks) {
     const output = `${item.status.toUpperCase()} [${item.name}]`;
     if (item.status === 'passed') console.log(output);

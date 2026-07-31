@@ -1,9 +1,9 @@
 name: Compute Admission
 
-# Compute Deploy now owns release enablement and certifies an immutable
-# admission-OFF API version before it enables globally. This manual workflow is
-# the fail-safe: it only promotes that exact certified OFF version. It never
-# rebuilds or uploads source.
+# Compute Deploy owns release admission policy and always certifies an immutable
+# admission-OFF API version. A release may preserve that version or explicitly
+# enable global admission. This manual fail-safe only promotes the exact
+# certified OFF version; it never rebuilds or uploads source.
 on:
   workflow_dispatch:
     inputs:
@@ -184,7 +184,8 @@ jobs:
 
           common_filter='.
             | . as $release
-            | (.schema_version == 3 or .schema_version == 4 or .schema_version == 5) and
+            | (.schema_version == 3 or .schema_version == 4 or
+               .schema_version == 5 or .schema_version == 6) and
               .environment == $target and .git_sha == $release_sha and
               (
                 (.schema_version == 3 and .admission_enabled == false and
@@ -207,7 +208,75 @@ jobs:
                    (.binding_preflight.verified == true and
                     .binding_preflight.evidence_file == ("compute-preflight-" + $target + ".json") and
                     (.binding_preflight.sha256 | test("^[0-9a-f]{64}$")))
-                 ))
+                 )) or
+                (.schema_version == 6 and
+                 (keys == ["active_api", "active_compute_worker", "admission_enabled",
+                   "admission_mode", "artifact_retention", "artifact_storage",
+                   "base_image", "binding_preflight", "canary_allowlist",
+                   "certified_admission_off_api", "deployed_image", "environment",
+                   "environment_digest", "generated_at", "git_ref", "git_sha",
+                   "policy_after", "policy_before", "release_mode", "release_policy",
+                   "rollout_mode", "schema_migrations", "schema_version",
+                   "workflow_run_id"]) and
+                 .release_mode == "policy_preserved" and
+                 .admission_mode == "preserve_off" and
+                 .workflow_run_id == $release_run_id and
+                 .admission_enabled == false and
+                 .rollout_mode == "canary" and .canary_allowlist == [] and
+                 (.certified_admission_off_api | keys ==
+                   ["version_id", "version_tag", "worker"]) and
+                 .certified_admission_off_api.version_tag ==
+                   ("api-" + $release_sha + "-admission-off") and
+                 (.active_api | keys ==
+                   ["canary_allowlist", "enabled", "rollout_mode", "version_id",
+                    "version_tag", "worker"]) and
+                 .active_api.worker == $api_worker and
+                 .active_api.version_id ==
+                   .certified_admission_off_api.version_id and
+                 .active_api.version_tag ==
+                   .certified_admission_off_api.version_tag and
+                 .active_api.enabled == false and
+                 .active_api.rollout_mode == "canary" and
+                 .active_api.canary_allowlist == [] and
+                 (.active_compute_worker | keys ==
+                   ["environment_digest", "evidence_file", "sha256", "version_id",
+                    "version_tag", "worker"]) and
+                 .active_compute_worker.environment_digest ==
+                   .environment_digest and
+                 .active_compute_worker.evidence_file ==
+                   "active-preserve-off-compute-version.json" and
+                 (.active_compute_worker.sha256 |
+                   test("^[0-9a-f]{64}$")) and
+                 (.binding_preflight | keys ==
+                   ["evidence_file", "sha256", "verified"]) and
+                 .binding_preflight.verified == true and
+                 .binding_preflight.evidence_file ==
+                   ("compute-preflight-" + $target + ".json") and
+                 (.binding_preflight.sha256 | test("^[0-9a-f]{64}$")) and
+                 (.release_policy | keys ==
+                   ["admission", "artifact", "evidence_file", "sha256"]) and
+                 .release_policy.evidence_file == "release-policy.json" and
+                 .release_policy.artifact == "deploy_exact_candidate" and
+                 .release_policy.admission == "preserve_off" and
+                 (.release_policy.sha256 | test("^[0-9a-f]{64}$")) and
+                 (.policy_before | keys ==
+                   ["admission_enabled", "canary_allowlist", "evidence_file",
+                    "rollout_mode", "sha256"]) and
+                 .policy_before.evidence_file == "pre-rollout-api-version.json" and
+                 .policy_before.admission_enabled == false and
+                 .policy_before.rollout_mode == "canary" and
+                 .policy_before.canary_allowlist == [] and
+                 (.policy_before.sha256 | test("^[0-9a-f]{64}$")) and
+                 (.policy_after | keys ==
+                   ["admission_enabled", "canary_allowlist", "evidence_file",
+                    "rollout_mode", "sha256"]) and
+                 .policy_after.evidence_file ==
+                   "active-preserve-off-api-version.json" and
+                 .policy_after.admission_enabled == false and
+                 .policy_after.rollout_mode == "canary" and
+                 .policy_after.canary_allowlist == [] and
+                 (.policy_after.sha256 | test("^[0-9a-f]{64}$")) and
+                 (has("admitted_smoke") | not))
               ) and
               (.environment_digest | test("^sha256:[0-9a-f]{64}$")) and
               (.base_image | test("^docker\\.io/cloudflare/sandbox:0\\.12\\.3-python@sha256:[0-9a-f]{64}$")) and
@@ -229,6 +298,7 @@ jobs:
           jq -e \
             --arg target "$REQUESTED_TARGET" \
             --arg release_sha "$release_sha" \
+            --arg release_run_id "$RELEASE_RUN_ID_INPUT" \
             --arg api_worker "$API_WORKER" \
             --arg compute_worker "$COMPUTE_WORKER" \
             --arg migration_manifest_sha256 "$migration_manifest_sha256" \
@@ -255,11 +325,12 @@ jobs:
               exit 1
             }
           fi
-          if [ "$release_schema_version" = "5" ]; then
+          if [ "$release_schema_version" = "5" ] || \
+             [ "$release_schema_version" = "6" ]; then
             preflight_file="$(jq -er '.binding_preflight.evidence_file' "$release_json")"
             preflight_path="$release_dir/$preflight_file"
             [ -f "$preflight_path" ] || {
-              echo "The globally enabled release is missing binding-preflight evidence." >&2
+              echo "The release is missing binding-preflight evidence." >&2
               exit 1
             }
             declared_preflight_sha256="$(jq -er '.binding_preflight.sha256' "$release_json")"
@@ -268,6 +339,146 @@ jobs:
               echo "Binding-preflight evidence does not match release.json." >&2
               exit 1
             }
+          fi
+          if [ "$release_schema_version" = "6" ]; then
+            release_policy_file="$(jq -er '.release_policy.evidence_file' "$release_json")"
+            release_policy_path="$release_dir/$release_policy_file"
+            [ -f "$release_policy_path" ] || {
+              echo "The preserve_off release is missing release-policy.json." >&2
+              exit 1
+            }
+            declared_policy_sha256="$(jq -er '.release_policy.sha256' "$release_json")"
+            actual_policy_sha256="$(sha256sum "$release_policy_path" | cut -d ' ' -f 1)"
+            [ "$actual_policy_sha256" = "$declared_policy_sha256" ] || {
+              echo "release-policy.json does not match release.json." >&2
+              exit 1
+            }
+            jq -e \
+              --arg target "$REQUESTED_TARGET" \
+              --arg git_ref "$(jq -er '.git_ref' "$release_json")" '
+                type == "object" and
+                keys == ["compute", "release_tag", "schema_version"] and
+                .schema_version == 1 and
+                (.release_tag | type == "string" and test("^v[0-9A-Za-z][0-9A-Za-z._-]*$")) and
+                (.compute | type == "object") and
+                (.compute | keys == ["admission", "artifact"]) and
+                .compute.artifact == "deploy_exact_candidate" and
+                .compute.admission == "preserve_off" and
+                ($target != "production" or $git_ref == ("refs/tags/" + .release_tag))
+              ' "$release_policy_path" >/dev/null || {
+                echo "release-policy.json is not the exact preserve_off policy for this release." >&2
+                exit 1
+              }
+
+            policy_before_file="$(jq -er '.policy_before.evidence_file' "$release_json")"
+            policy_after_file="$(jq -er '.policy_after.evidence_file' "$release_json")"
+            active_compute_file="$(jq -er '.active_compute_worker.evidence_file' "$release_json")"
+            for bound_file in "$policy_before_file" "$policy_after_file" "$active_compute_file"; do
+              [ -f "$release_dir/$bound_file" ] || {
+                echo "The preserve_off release is missing $bound_file." >&2
+                exit 1
+              }
+            done
+            for binding in policy_before policy_after active_compute_worker; do
+              bound_file="$(jq -er --arg binding "$binding" '.[$binding].evidence_file' "$release_json")"
+              declared_sha256="$(jq -er --arg binding "$binding" '.[$binding].sha256' "$release_json")"
+              actual_sha256="$(sha256sum "$release_dir/$bound_file" | cut -d ' ' -f 1)"
+              [ "$actual_sha256" = "$declared_sha256" ] || {
+                echo "$bound_file does not match release.json." >&2
+                exit 1
+              }
+            done
+
+            jq -e '
+              def value($name):
+                [.selected_bindings[]? |
+                  select(.type == "plain_text" and .name == $name) | .text] as $values
+                | if ($values | length) == 1 then $values[0] else null end;
+              .schema_version == 1 and .admission_enabled == false and
+              value("COMPUTE_ENABLED") == "0" and
+              value("COMPUTE_ROLLOUT_MODE") == "canary" and
+              value("COMPUTE_CANARY_ALLOWLIST") == "" and
+              (value("COMPUTE_ENVIRONMENT_DIGEST") |
+                test("^sha256:[0-9a-f]{64}$"))
+            ' "$release_dir/$policy_before_file" >/dev/null || {
+              echo "Pre-rollout policy evidence does not prove admission OFF." >&2
+              exit 1
+            }
+            jq -e \
+              --arg id "$(jq -er '.active_api.version_id' "$release_json")" \
+              --arg tag "$(jq -er '.active_api.version_tag' "$release_json")" \
+              --arg digest "$(jq -er '.environment_digest' "$release_json")" \
+              --arg compute "$COMPUTE_WORKER" \
+              --arg queue "$QUEUE_NAME" \
+              --arg bucket "$ARTIFACT_BUCKET" '
+                def value($name):
+                  [.selected_bindings[]? |
+                    select(.type == "plain_text" and .name == $name) | .text] as $values
+                  | if ($values | length) == 1 then $values[0] else null end;
+                .schema_version == 1 and .id == $id and .tag == $tag and
+                .admission_enabled == false and .rollout_mode == "canary" and
+                .canary_allowlist == [] and
+                value("COMPUTE_ENABLED") == "0" and
+                value("COMPUTE_ENVIRONMENT_DIGEST") == $digest and
+                value("COMPUTE_ROLLOUT_MODE") == "canary" and
+                value("COMPUTE_CANARY_ALLOWLIST") == "" and
+                any(.selected_bindings[]?; .type == "service" and
+                  .name == "COMPUTE_PLANE" and .service == $compute and
+                  .entrypoint == "ComputePlane") and
+                any(.selected_bindings[]?; .type == "queue" and
+                  .name == "COMPUTE_QUEUE" and .queue_name == $queue) and
+                any(.selected_bindings[]?; .type == "r2_bucket" and
+                  .name == "COMPUTE_ARTIFACTS" and .bucket_name == $bucket)
+              ' "$release_dir/$policy_after_file" >/dev/null || {
+                echo "Post-rollout policy evidence does not prove the exact OFF API." >&2
+                exit 1
+              }
+            jq -e \
+              --arg id "$(jq -er '.active_compute_worker.version_id' "$release_json")" \
+              --arg tag "$(jq -er '.active_compute_worker.version_tag' "$release_json")" \
+              --arg digest "$(jq -er '.environment_digest' "$release_json")" \
+              --arg api "$API_WORKER" \
+              --arg bucket "$ARTIFACT_BUCKET" '
+                .schema_version == 1 and .id == $id and .tag == $tag and
+                .environment_digest == $digest and
+                any(.selected_bindings[]?; .type == "plain_text" and
+                  .name == "COMPUTE_ENVIRONMENT_DIGEST" and .text == $digest) and
+                any(.selected_bindings[]?; .type == "service" and
+                  .name == "CONTROL_PLANE" and .service == $api and
+                  .entrypoint == "ComputeControlPlane") and
+                any(.selected_bindings[]?; .type == "r2_bucket" and
+                  .name == "COMPUTE_ARTIFACTS" and .bucket_name == $bucket)
+              ' "$release_dir/$active_compute_file" >/dev/null || {
+                echo "Active Compute evidence does not prove the exact released version." >&2
+                exit 1
+              }
+            jq -e \
+              --arg target "$REQUESTED_TARGET" \
+              --arg sha "$release_sha" \
+              --arg run_id "$RELEASE_RUN_ID_INPUT" '
+                .schema_version == 1 and
+                .kind == "galactic_compute_binding_preflight" and
+                .verified == true and .target == $target and
+                .candidate_sha == $sha and
+                (.workflow_run_id | tostring) == $run_id and
+                .fixture_policy.enabled == false and
+                .probe.action == "status" and
+                .probe.run_id == "00000000-0000-4000-8000-000000000000" and
+                .probe.observed_http_status == 500 and
+                .probe.observed_public_compute_code == "COMPUTE_RUN_NOT_FOUND"
+              ' "$preflight_path" >/dev/null || {
+                echo "Binding-preflight evidence does not prove the OFF RPC/DB path." >&2
+                exit 1
+              }
+            for forbidden_global_claim in \
+              active-global-api-version.json \
+              compute-admitted-"$REQUESTED_TARGET".json \
+              post-smoke-live-fence.json; do
+              [ ! -e "$release_dir/$forbidden_global_claim" ] || {
+                echo "preserve_off evidence contains a forbidden global claim." >&2
+                exit 1
+              }
+            done
           fi
 
           release_schema_run_id="$(jq -er '.schema_migrations.schema_workflow_run_id' "$release_json")"
@@ -293,6 +504,13 @@ jobs:
           certified_compute_tag="$(jq -er '.active_compute_worker.version_tag' "$release_json")"
           release_digest="$(jq -er '.environment_digest' "$release_json")"
           release_image="$(jq -er '.deployed_image' "$release_json")"
+          if [ "$release_schema_version" = "6" ]; then
+            release_admission_mode=preserve_off
+          elif [ "$release_schema_version" = "5" ]; then
+            release_admission_mode=enable_global
+          else
+            release_admission_mode=legacy
+          fi
           {
             echo "CERTIFIED_OFF_API_VERSION_ID=$certified_api_id"
             echo "CERTIFIED_OFF_API_VERSION_TAG=$certified_api_tag"
@@ -302,13 +520,31 @@ jobs:
             echo "RELEASE_DEPLOYED_IMAGE=$release_image"
             echo "RELEASE_SCHEMA_RUN_ID=$release_schema_run_id"
             echo "RELEASE_GIT_SHA=$release_sha"
+            echo "RELEASE_ADMISSION_MODE=$release_admission_mode"
           } >> "$GITHUB_ENV"
-          jq '{schema_version, environment, git_sha, git_ref, deployed_image,
-            environment_digest, admission_enabled, rollout_mode,
-            canary_allowlist, certified_admission_off_api, active_api,
-            active_compute_worker, binding_preflight, admitted_smoke, schema_migrations,
-            artifact_storage, artifact_retention}' \
+          jq '
+            . as $release |
+            {schema_version, environment, git_sha, git_ref, deployed_image,
+             environment_digest, admission_enabled, rollout_mode,
+             canary_allowlist, certified_admission_off_api, active_api,
+             active_compute_worker, binding_preflight, admitted_smoke,
+             schema_migrations, artifact_storage, artifact_retention} |
+            if $release.schema_version == 6 then
+              del(.admitted_smoke) + {
+                release_mode: $release.release_mode,
+                admission_mode: $release.admission_mode,
+                workflow_run_id: $release.workflow_run_id,
+                policy_before: $release.policy_before,
+                policy_after: $release.policy_after,
+                release_policy: $release.release_policy
+              }
+            else . end
+          ' \
             "$release_json" > "$EVIDENCE_DIR/source-release.json"
+          if [ "$release_schema_version" = "6" ]; then
+            cp "$release_dir/release-policy.json" \
+              "$EVIDENCE_DIR/source-release-policy.json"
+          fi
           cp "$schema_run_evidence" "$EVIDENCE_DIR/source-schema-workflow-run.json"
           cp "$schema_job_evidence" "$EVIDENCE_DIR/source-schema-workflow-job.json"
           jq '{id, event, conclusion, head_sha, head_branch, path, run_attempt, created_at, updated_at}' \

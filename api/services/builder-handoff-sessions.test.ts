@@ -7,6 +7,7 @@ import {
 import {
   advanceBuilderHandoffSession,
   authenticateBuilderHandoffSession,
+  BUILDER_HANDOFF_AUTH_TIMEOUT_MS,
   BUILDER_HANDOFF_RECENT_PROMOTED_LIMIT,
   BUILDER_HANDOFF_RECENT_PROMOTED_WINDOW_MS,
   BUILDER_HANDOFF_TTL_SECONDS,
@@ -146,6 +147,7 @@ function serviceOptions(
   overrides: {
     randomUUID?: () => string;
     randomBytes?: (length: number) => Uint8Array;
+    authenticationTimeoutMs?: number;
   } = {},
 ) {
   return {
@@ -388,6 +390,71 @@ Deno.test("builder handoff authentication rejects non-exact scopes before persis
   ) as BuilderHandoffSessionError;
   assertEquals(error.code, "unauthorized");
   assertEquals(calls, 0);
+});
+
+Deno.test({
+  name:
+    "builder handoff authentication bounds a never-settling persistence fetch",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    let requestSignal: AbortSignal | null | undefined;
+    const fetchFn: typeof fetch = (_input, init) => {
+      requestSignal = init?.signal;
+      // Deliberately ignore AbortSignal. The explicit race must still settle
+      // authentication and the late promise must not become an unhandled error.
+      return new Promise<Response>(() => {});
+    };
+
+    const error = await assertRejects(
+      () =>
+        authenticateBuilderHandoffSession(
+          {
+            ownerId: OWNER_ID,
+            tokenId: SESSION_ID,
+            scopes: ["apps:read", "agents:build", "handoff:agent"],
+          },
+          serviceOptions(fetchFn, { authenticationTimeoutMs: 1 }),
+        ),
+      BuilderHandoffSessionError,
+    ) as BuilderHandoffSessionError;
+
+    assertEquals(error.code, "service_unavailable");
+    assertEquals(
+      error.message,
+      "Builder handoff persistence is temporarily unavailable",
+    );
+    assert(requestSignal instanceof AbortSignal);
+    assertEquals(requestSignal.aborted, true);
+    assertEquals(BUILDER_HANDOFF_AUTH_TIMEOUT_MS <= 9_000, true);
+  },
+});
+
+Deno.test("builder handoff authentication maps and redacts transport failures", async () => {
+  const fetchFn: typeof fetch = () =>
+    Promise.reject(
+      new Error("database password=must-not-leak; service-role=also-secret"),
+    );
+  const error = await assertRejects(
+    () =>
+      authenticateBuilderHandoffSession(
+        {
+          ownerId: OWNER_ID,
+          tokenId: SESSION_ID,
+          scopes: ["apps:read", "agents:build", "handoff:agent"],
+        },
+        serviceOptions(fetchFn),
+      ),
+    BuilderHandoffSessionError,
+  ) as BuilderHandoffSessionError;
+
+  assertEquals(error.code, "service_unavailable");
+  assertEquals(
+    error.message,
+    "Builder handoff persistence is temporarily unavailable",
+  );
+  assertEquals(error.message.includes("must-not-leak"), false);
+  assertEquals(error.message.includes("service-role"), false);
 });
 
 Deno.test("builder handoff lifecycle carries exact evidence and treats an exact retest as idempotent", async () => {

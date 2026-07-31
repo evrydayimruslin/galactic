@@ -10,6 +10,10 @@ import {
   verifySupabaseAccessToken,
 } from "./request-auth.ts";
 import { createRoutineActorToken } from "./routine-auth.ts";
+import {
+  AUTH_SERVICE_UNAVAILABLE,
+  classifyPublicAuthenticationError,
+} from "./auth-errors.ts";
 
 const HANDOFF_TEST_ENV = {
   SUPABASE_URL: "https://supabase.test",
@@ -411,6 +415,7 @@ Deno.test({
     const previousFetch = globalThis.fetch;
     const tokenLookups = new Map<string, number>();
     let durableAuthCalls = 0;
+    let durableAuthUnavailable = false;
     let proEntitlementCalls = 0;
 
     globalThis.__env = {
@@ -469,6 +474,15 @@ Deno.test({
         )
       ) {
         durableAuthCalls += 1;
+        if (durableAuthUnavailable) {
+          return new Response(
+            JSON.stringify({ message: "database secret=must-not-leak" }),
+            {
+              status: 503,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
         const bodyText = input instanceof Request
           ? await input.clone().text()
           : String(init?.body ?? "");
@@ -596,6 +610,23 @@ Deno.test({
         0,
         "credential authentication never hides terminal handoff state behind billing",
       );
+
+      durableAuthUnavailable = true;
+      let unavailable: unknown;
+      try {
+        await authenticateRequest(
+          bearerRequest("/mcp/platform", fixtures.valid.plaintext),
+          "bearer_only",
+        );
+      } catch (error) {
+        unavailable = error;
+      }
+      assertEquals(classifyPublicAuthenticationError(unavailable), {
+        status: 503,
+        type: AUTH_SERVICE_UNAVAILABLE,
+        message: "Authentication service is temporarily unavailable",
+      });
+      assertEquals(durableAuthCalls, 5);
     } finally {
       globalThis.fetch = previousFetch;
       globalThis.__env = previousEnv;

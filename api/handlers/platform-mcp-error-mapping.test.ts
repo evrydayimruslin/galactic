@@ -2,10 +2,16 @@ import { assertEquals, assertRejects } from 'https://deno.land/std@0.210.0/asser
 import {
   capabilityErrorToToolCode,
   jsonRpcErrorHttpStatus,
+  platformMcpAuthenticationErrorResponse,
   projectCapabilityError,
   readInspectPermissionRows,
 } from './platform-mcp.ts';
+import { appMcpAuthenticationErrorResponse } from './mcp.ts';
 import { ProjectCapsuleError } from '../services/project-capsule.ts';
+import {
+  ApiTokenAuthenticationError,
+  AuthServiceUnavailableError,
+} from '../services/auth-errors.ts';
 
 Deno.test('platform MCP maps capability admission failures to public JSON-RPC codes', () => {
   assertEquals(capabilityErrorToToolCode('rate_limited'), -32000);
@@ -24,6 +30,65 @@ Deno.test('platform MCP maps capability admission failures to public JSON-RPC co
     jsonRpcErrorHttpStatus(capabilityErrorToToolCode('internal')),
     500,
   );
+});
+
+Deno.test('both MCP handlers map typed API-token failures without leaking infrastructure detail', async () => {
+  const request = new Request('https://api.example.test/mcp/platform', {
+    headers: { host: 'api.example.test' },
+  });
+  const unavailable = new AuthServiceUnavailableError();
+  unavailable.message =
+    'postgres password=must-not-leak; Bearer gx_ffffffffffffffffffffffffffffffff';
+  const cases = [
+    {
+      error: new ApiTokenAuthenticationError('invalid'),
+      status: 401,
+      code: -32001,
+      type: 'AUTH_API_TOKEN_INVALID',
+      message: 'Invalid API token',
+    },
+    {
+      error: new ApiTokenAuthenticationError('expired'),
+      status: 401,
+      code: -32001,
+      type: 'AUTH_TOKEN_EXPIRED',
+      message: 'API token has expired',
+    },
+    {
+      error: unavailable,
+      status: 503,
+      code: -32603,
+      type: 'AUTH_SERVICE_UNAVAILABLE',
+      message: 'Authentication service is temporarily unavailable',
+    },
+  ];
+
+  for (const handler of [
+    platformMcpAuthenticationErrorResponse,
+    appMcpAuthenticationErrorResponse,
+  ]) {
+    for (const expected of cases) {
+      const response = handler(request, 'rpc-1', expected.error);
+      assertEquals(response instanceof Response, true);
+      assertEquals(response?.status, expected.status);
+      const body = await response?.json();
+      assertEquals(body, {
+        jsonrpc: '2.0',
+        id: 'rpc-1',
+        error: {
+          code: expected.code,
+          message: expected.message,
+          data: { type: expected.type },
+        },
+      });
+      assertEquals(JSON.stringify(body).includes('must-not-leak'), false);
+      assertEquals(JSON.stringify(body).includes('gx_ffffffff'), false);
+      assertEquals(
+        response?.headers.has('WWW-Authenticate'),
+        expected.status === 401,
+      );
+    }
+  }
 });
 
 Deno.test('project permission projection fails closed when authoritative storage is unavailable', async () => {

@@ -23,6 +23,36 @@ describe("developer-v1 image contract", () => {
     const toolchainPackage = JSON.parse(fixture("toolchain/package.json"));
     expect(dockerfile).toContain("cloudflare/sandbox:0.12.3-python");
     expect(dockerfile).toContain('"playwright@${PLAYWRIGHT_VERSION}"');
+    expect(dockerfile).toContain(
+      '"chrome-for-testing-beta@${CHROME_FOR_TESTING_VERSION}"',
+    );
+    expect(dockerfile).toContain(
+      "ARG CHROME_FOR_TESTING_VERSION=152.0.7977.8",
+    );
+    expect(dockerfile).toContain(
+      "931865951a28fccf0491a7f5e0a2fe1a0605765210a4ce4a4758d9d3d97d0b77",
+    );
+    expect(dockerfile).toContain(
+      "9615c0c2557b614a87605e7149372ef50cff8fe8c52e7ebb855efd0cea6b1501",
+    );
+    expect(dockerfile).toContain(
+      "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_FOR_TESTING_VERSION}/linux64/chrome-linux64.zip",
+    );
+    expect(dockerfile).toContain(
+      "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_FOR_TESTING_VERSION}/linux64/chrome-headless-shell-linux64.zip",
+    );
+    expect(dockerfile).toContain(
+      "unzip -q \"/tmp/${chrome_archive}\" -d /ms-playwright/chromium-1234",
+    );
+    expect(dockerfile).toContain(
+      "rm -rf /ms-playwright/chromium-1234",
+    );
+    expect(dockerfile).toContain(
+      "/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-linux64",
+    );
+    expect(dockerfile).toContain("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1");
+    expect(dockerfile).toContain("playwright install ffmpeg");
+    expect(dockerfile).not.toContain("playwright install --with-deps chromium");
     expect(dockerfile).toContain("/node_modules/playwright");
     expect(dockerfile).toContain("/node_modules/playwright-core");
     expect(toolchainPackage.dependencies.playwright).toBe(
@@ -41,7 +71,7 @@ describe("developer-v1 image contract", () => {
       "accessSync(chromium.executablePath(), constants.X_OK)",
     );
     expect(smoke).toContain("await chromium.launch({ headless: true })");
-    expect(smoke).toContain('browser.version() !== "151.0.7922.34"');
+    expect(smoke).toContain('browser.version() !== "152.0.7977.8"');
     expect(smoke).toContain('page.goto("data:text/html,<title>compute-smoke</title>")');
     expect(smoke).toContain("/node_modules/playwright-core");
   });

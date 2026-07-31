@@ -1,9 +1,9 @@
 // Bounded, invocation-owned state for gx.test.
 //
-// The production adapter is held by a Cloudflare RpcTarget for exactly one
-// gx.test execution. Keeping the storage mechanics in this runtime-neutral
-// class makes the real semantics directly testable without importing
-// `cloudflare:workers` into Deno.
+// The production adapter is a SQLite-backed Durable Object for exactly one
+// gx.test execution. This runtime-neutral in-memory implementation shares its
+// normalization and bounds with that adapter so the semantics remain directly
+// testable without importing `cloudflare:workers` into Deno.
 
 import {
   isUlTestBlockedEffect,
@@ -14,36 +14,38 @@ import {
   type UlTestObservedEffect,
 } from "./ul-test-runtime.ts";
 
-type TestMemoryScope = "agent" | "user";
+export type TestMemoryScope = "agent" | "user";
 
 interface TestStateEntry {
   value: unknown;
   sizeBytes: number;
 }
 
-const MAX_KEYS_PER_NAMESPACE = 1_024;
-const MAX_KEY_BYTES = 4 * 1024;
-const MAX_VALUE_BYTES = 1024 * 1024;
-const MAX_EXECUTION_STATE_BYTES = 4 * 1024 * 1024;
+export const TEST_RUNTIME_STATE_LIMITS = Object.freeze({
+  max_keys_per_namespace: 1_024,
+  max_key_bytes: 4 * 1024,
+  max_value_bytes: 1024 * 1024,
+  max_execution_state_bytes: 4 * 1024 * 1024,
+});
 
 export const HTTP_TEST_EXECUTION_LIMITS = Object.freeze({
   max_attempts: 32,
   max_exchange_bytes: 8 * 1024 * 1024,
 });
 
-function boundedKey(key: string): string {
+export function boundedTestStateKey(key: string): string {
   const bytes = new TextEncoder().encode(key).byteLength;
-  if (bytes > MAX_KEY_BYTES) {
+  if (bytes > TEST_RUNTIME_STATE_LIMITS.max_key_bytes) {
     throw new Error("gx.test state key exceeds 4 KiB");
   }
   return key;
 }
 
-function normalizedDataKey(key: string): string {
-  return boundedKey(key.replace(/[^a-zA-Z0-9\-_\/]/g, "_"));
+export function normalizeTestAppDataKey(key: string): string {
+  return boundedTestStateKey(key.replace(/[^a-zA-Z0-9\-_\/]/g, "_"));
 }
 
-function keySizeBytes(key: string): number {
+export function testStateKeySizeBytes(key: string): number {
   return new TextEncoder().encode(key).byteLength;
 }
 
@@ -51,12 +53,16 @@ function assertNamespaceCapacity(
   namespace: ReadonlyMap<string, unknown>,
   key: string,
 ): void {
-  if (!namespace.has(key) && namespace.size >= MAX_KEYS_PER_NAMESPACE) {
+  if (
+    !namespace.has(key) &&
+    namespace.size >= TEST_RUNTIME_STATE_LIMITS.max_keys_per_namespace
+  ) {
     throw new Error("gx.test state key limit reached");
   }
 }
 
-function normalizeValue(value: unknown): {
+export function normalizeTestStateValue(value: unknown): {
+  json: string;
   value: unknown;
   sizeBytes: number;
 } {
@@ -66,21 +72,29 @@ function normalizeValue(value: unknown): {
   const serialized = JSON.stringify(value);
   const json = serialized ?? "null";
   const bytes = new TextEncoder().encode(json).byteLength;
-  if (bytes > MAX_VALUE_BYTES) {
+  if (bytes > TEST_RUNTIME_STATE_LIMITS.max_value_bytes) {
     throw new Error("gx.test state value exceeds 1 MiB");
   }
   return {
+    json,
     value: JSON.parse(json),
     sizeBytes: bytes,
   };
+}
+
+export function normalizeTestMemoryKey(
+  scope: TestMemoryScope,
+  key: string,
+): string {
+  return boundedTestStateKey(`${scope}:${key}`);
 }
 
 /**
  * The complete mutable state of one gx.test run.
  *
  * A session is never shared by execution id or looked up through module-global
- * state. The Cloudflare adapter owns one instance behind one RpcTarget stub and
- * explicitly closes it on every host exit path.
+ * state. The Cloudflare adapter owns one randomly named Durable Object and
+ * explicitly seals and closes it on every host exit path.
  */
 export class TestRuntimeStateStore {
   #appData = new Map<string, TestStateEntry>();
@@ -100,7 +114,7 @@ export class TestRuntimeStateStore {
 
   #reserveBytes(nextBytes: number, previousBytes = 0): void {
     const total = this.#totalBytes - previousBytes + nextBytes;
-    if (total > MAX_EXECUTION_STATE_BYTES) {
+    if (total > TEST_RUNTIME_STATE_LIMITS.max_execution_state_bytes) {
       throw new Error("gx.test state exceeds 4 MiB");
     }
     this.#totalBytes = total;
@@ -112,10 +126,11 @@ export class TestRuntimeStateStore {
 
   storeAppData(key: string, value: unknown): void {
     this.#assertOpen();
-    const normalizedKey = normalizedDataKey(key);
+    const normalizedKey = normalizeTestAppDataKey(key);
     assertNamespaceCapacity(this.#appData, normalizedKey);
-    const normalized = normalizeValue(value);
-    const sizeBytes = keySizeBytes(normalizedKey) + normalized.sizeBytes;
+    const normalized = normalizeTestStateValue(value);
+    const sizeBytes = testStateKeySizeBytes(normalizedKey) +
+      normalized.sizeBytes;
     this.#reserveBytes(
       sizeBytes,
       this.#appData.get(normalizedKey)?.sizeBytes,
@@ -128,13 +143,13 @@ export class TestRuntimeStateStore {
 
   loadAppData(key: string): unknown {
     this.#assertOpen();
-    const entry = this.#appData.get(normalizedDataKey(key));
+    const entry = this.#appData.get(normalizeTestAppDataKey(key));
     return entry ? structuredClone(entry.value) : null;
   }
 
   removeAppData(key: string): void {
     this.#assertOpen();
-    const normalizedKey = normalizedDataKey(key);
+    const normalizedKey = normalizeTestAppDataKey(key);
     const existing = this.#appData.get(normalizedKey);
     if (existing) this.#releaseBytes(existing.sizeBytes);
     this.#appData.delete(normalizedKey);
@@ -142,7 +157,7 @@ export class TestRuntimeStateStore {
 
   listAppData(prefix = ""): string[] {
     this.#assertOpen();
-    const boundedPrefix = boundedKey(prefix);
+    const boundedPrefix = boundedTestStateKey(prefix);
     return [...this.#appData.keys()]
       .filter((key) => key.startsWith(boundedPrefix))
       .sort();
@@ -154,10 +169,10 @@ export class TestRuntimeStateStore {
     value: unknown,
   ): void {
     this.#assertOpen();
-    const scopedKey = boundedKey(`${scope}:${key}`);
+    const scopedKey = normalizeTestMemoryKey(scope, key);
     assertNamespaceCapacity(this.#memory, scopedKey);
-    const normalized = normalizeValue(value);
-    const sizeBytes = keySizeBytes(scopedKey) + normalized.sizeBytes;
+    const normalized = normalizeTestStateValue(value);
+    const sizeBytes = testStateKeySizeBytes(scopedKey) + normalized.sizeBytes;
     this.#reserveBytes(sizeBytes, this.#memory.get(scopedKey)?.sizeBytes);
     this.#memory.set(scopedKey, {
       value: normalized.value,
@@ -167,7 +182,7 @@ export class TestRuntimeStateStore {
 
   recallMemory(scope: TestMemoryScope, key: string): unknown {
     this.#assertOpen();
-    const scopedKey = boundedKey(`${scope}:${key}`);
+    const scopedKey = normalizeTestMemoryKey(scope, key);
     const entry = this.#memory.get(scopedKey);
     return entry ? structuredClone(entry.value) : null;
   }

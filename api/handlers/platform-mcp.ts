@@ -8,6 +8,7 @@
 import { stringify as stringifyYaml } from "yaml";
 
 import { error, json } from "./response.ts";
+import { mcpAuthenticationErrorResponse } from "./mcp-auth-error-response.ts";
 import { authenticate } from "./auth.ts";
 import { isApiToken, validateToken } from "../services/tokens.ts";
 import { renderAgentOgCard } from "../services/og-card.ts";
@@ -4789,6 +4790,19 @@ export async function handlePlatformMcp(request: Request): Promise<Response> {
       );
     }
   } catch (authErr) {
+    const typedAuthResponse = platformMcpAuthenticationErrorResponse(
+      request,
+      rpcRequest.id,
+      authErr,
+    );
+    if (typedAuthResponse) {
+      console.error("Platform MCP API-token authentication failed", {
+        method: rpcRequest.method,
+        hasAuthHeader: !!request.headers.get("Authorization"),
+        status: typedAuthResponse.status,
+      });
+      return typedAuthResponse;
+    }
     const message = authErr instanceof Error
       ? authErr.message
       : "Authentication required";
@@ -5000,6 +5014,20 @@ export async function handlePlatformMcp(request: Request): Promise<Response> {
       `Internal error: ${err instanceof Error ? err.message : "Unknown error"}`,
     );
   }
+}
+
+export function platformMcpAuthenticationErrorResponse(
+  request: Request,
+  id: JsonRpcRequestId | undefined,
+  authError: unknown,
+): Response | null {
+  return mcpAuthenticationErrorResponse({
+    request,
+    id,
+    error: authError,
+    authRequiredCode: AUTH_REQUIRED,
+    internalErrorCode: INTERNAL_ERROR,
+  });
 }
 
 /**

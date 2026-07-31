@@ -226,3 +226,38 @@ Deno.test("/api/discover falls back to legacy aggregate app embeddings when subj
     },
   );
 });
+
+Deno.test("/api/discover/status bounds its best-effort database metric", async () => {
+  let countSignal: AbortSignal | null = null;
+  await withDiscoverEnv(
+    async () => {
+      const response = await handleDiscover(
+        new Request("https://ultralight.test/api/discover/status"),
+      );
+      const body = await response.json() as {
+        app_count: number;
+        authenticated: boolean;
+      };
+
+      assertEquals(response.status, 200);
+      assertEquals(body.authenticated, false);
+      assertEquals(body.app_count, 7);
+      assertEquals(countSignal instanceof AbortSignal, true);
+    },
+    async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (
+        url.startsWith(
+          "https://supabase.test/rest/v1/apps?visibility=eq.public",
+        )
+      ) {
+        assertEquals(init?.method, "HEAD");
+        countSignal = init?.signal ?? null;
+        return new Response(null, {
+          headers: { "content-range": "0-0/7" },
+        });
+      }
+      return jsonResponse([]);
+    },
+  );
+});

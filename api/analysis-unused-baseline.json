@@ -31,12 +31,6 @@
     },
     {
       "exports": [
-        "getComputeQueue"
-      ],
-      "file": "lib/env.ts"
-    },
-    {
-      "exports": [
         "SITE_BASE"
       ],
       "file": "lib/urls.ts"
@@ -358,32 +352,6 @@
       ]
     },
     {
-      "file": "services/capabilities/attention.test.ts",
-      "files": [
-        "services/capabilities/attention.test.ts"
-      ]
-    },
-    {
-      "file": "services/capabilities/db-inspect.test.ts",
-      "files": [
-        "services/capabilities/db-inspect.test.ts"
-      ]
-    },
-    {
-      "file": "services/capabilities/registry.test.ts",
-      "files": [
-        "services/capabilities/registry.test.ts"
-      ]
-    },
-    {
-      "exports": [
-        "getCapabilityById",
-        "listCapabilities",
-        "toMcpTool"
-      ],
-      "file": "services/capabilities/registry.ts"
-    },
-    {
       "file": "services/capability-suggestion-telemetry.ts",
       "types": [
         "CapabilityGapShortcomingInput",
@@ -615,21 +583,9 @@
       ]
     },
     {
-      "file": "services/compute/agent-call-executor.test.ts",
-      "files": [
-        "services/compute/agent-call-executor.test.ts"
-      ]
-    },
-    {
       "file": "services/compute/agent-call-executor.ts",
       "types": [
         "ComputeAgentCallExecutorDeps"
-      ]
-    },
-    {
-      "file": "services/compute/alerts.test.ts",
-      "files": [
-        "services/compute/alerts.test.ts"
       ]
     },
     {
@@ -640,22 +596,10 @@
       ]
     },
     {
-      "file": "services/compute/artifacts.test.ts",
-      "files": [
-        "services/compute/artifacts.test.ts"
-      ]
-    },
-    {
       "exports": [
         "listComputeArtifacts"
       ],
       "file": "services/compute/artifacts.ts"
-    },
-    {
-      "file": "services/compute/authority.test.ts",
-      "files": [
-        "services/compute/authority.test.ts"
-      ]
     },
     {
       "exports": [
@@ -664,16 +608,6 @@
       "file": "services/compute/authority.ts"
     },
     {
-      "file": "services/compute/capacity-settlement.test.ts",
-      "files": [
-        "services/compute/capacity-settlement.test.ts"
-      ]
-    },
-    {
-      "exports": [
-        "MAX_COMPUTE_CAPACITY_SETTLEMENT_INTENT_BYTES",
-        "settleOrDeferComputeCapacity"
-      ],
       "file": "services/compute/capacity-settlement.ts",
       "types": [
         "ComputeCapacitySettlementDeps",
@@ -681,30 +615,9 @@
       ]
     },
     {
-      "file": "services/compute/config.test.ts",
-      "files": [
-        "services/compute/config.test.ts"
-      ]
-    },
-    {
-      "exports": [
-        "resolveComputeRuntimeConfig"
-      ],
       "file": "services/compute/config.ts",
       "types": [
         "ComputeRuntimeConfig"
-      ]
-    },
-    {
-      "file": "services/compute/database.test.ts",
-      "files": [
-        "services/compute/database.test.ts"
-      ]
-    },
-    {
-      "file": "services/compute/manifest.test.ts",
-      "files": [
-        "services/compute/manifest.test.ts"
       ]
     },
     {
@@ -761,24 +674,9 @@
       ]
     },
     {
-      "file": "services/compute/sql-fail-closed-migrations.test.ts",
-      "files": [
-        "services/compute/sql-fail-closed-migrations.test.ts"
-      ]
-    },
-    {
-      "file": "services/compute/tokens.test.ts",
-      "files": [
-        "services/compute/tokens.test.ts"
-      ]
-    },
-    {
       "exports": [
         "COMPUTE_JOB_TOKEN_PREFIX",
-        "computeJobTokenDigest",
-        "introspectComputeJobTokenPrincipal",
-        "parseComputeJobToken",
-        "verifyPreparedComputeJobToken"
+        "computeJobTokenDigest"
       ],
       "file": "services/compute/tokens.ts"
     },
@@ -1077,15 +975,7 @@
       "file": "services/gpu/benchmark.ts"
     },
     {
-      "file": "services/gpu/billing.test.ts",
-      "files": [
-        "services/gpu/billing.test.ts"
-      ]
-    },
-    {
       "exports": [
-        "computeGpuCallCost",
-        "estimateMaxGpuCost",
         "extractUnitCount"
       ],
       "file": "services/gpu/billing.ts",
@@ -1095,16 +985,8 @@
       ]
     },
     {
-      "file": "services/gpu/builder.test.ts",
-      "files": [
-        "services/gpu/builder.test.ts"
-      ]
-    },
-    {
       "exports": [
-        "getGpuConcurrency",
-        "GpuConcurrencyError",
-        "releaseGpuSlot"
+        "GpuConcurrencyError"
       ],
       "file": "services/gpu/concurrency.ts",
       "types": [
@@ -1131,16 +1013,6 @@
       "file": "services/gpu/feature-flag.ts"
     },
     {
-      "file": "services/gpu/image-builder.test.ts",
-      "files": [
-        "services/gpu/image-builder.test.ts"
-      ]
-    },
-    {
-      "exports": [
-        "generateGpuImageDockerfile",
-        "resolveBaseImage"
-      ],
       "file": "services/gpu/image-builder.ts",
       "types": [
         "DispatchGpuImageBuildParams",
@@ -1168,12 +1040,6 @@
       "file": "services/gpu/pricing-display.ts"
     },
     {
-      "file": "services/gpu/runpod.test.ts",
-      "files": [
-        "services/gpu/runpod.test.ts"
-      ]
-    },
-    {
       "file": "services/gpu/runpod.ts",
       "types": [
         "RunPodTemplateResolution",
@@ -1181,21 +1047,6 @@
       ]
     },
     {
-      "file": "services/gpu/smoke-test.ts",
-      "files": [
-        "services/gpu/smoke-test.ts"
-      ]
-    },
-    {
-      "file": "services/gpu/status.test.ts",
-      "files": [
-        "services/gpu/status.test.ts"
-      ]
-    },
-    {
-      "exports": [
-        "resolveGpuStatusDetails"
-      ],
       "file": "services/gpu/status.ts",
       "types": [
         "GpuStatusDetails",
@@ -1204,21 +1055,6 @@
       ]
     },
     {
-      "file": "services/gpu/test-endpoint.ts",
-      "files": [
-        "services/gpu/test-endpoint.ts"
-      ]
-    },
-    {
-      "file": "services/gpu/test-pipeline.ts",
-      "files": [
-        "services/gpu/test-pipeline.ts"
-      ]
-    },
-    {
-      "exports": [
-        "getGpuRate"
-      ],
       "file": "services/gpu/types.ts",
       "types": [
         "FailureChargeability",
@@ -1938,13 +1774,6 @@
       "file": "services/tcp-protocols.ts",
       "types": [
         "ParsedEmail"
-      ]
-    },
-    {
-      "file": "services/test-attestation.ts",
-      "types": [
-        "TestAttestationVerification",
-        "TestAttestationVerificationReason"
       ]
     },
     {

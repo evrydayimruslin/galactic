@@ -3,6 +3,7 @@
 // Spec: https://modelcontextprotocol.io/specification/draft/server/tools
 
 import { error, json } from "./response.ts";
+import { mcpAuthenticationErrorResponse } from "./mcp-auth-error-response.ts";
 import { createAppsService } from "../services/apps.ts";
 import {
   createAppDataService,
@@ -907,6 +908,20 @@ export async function handleMcp(
     ]);
   } catch (authErr) {
     // If findById fails it throws, but authenticate errors are the common case
+    const typedAuthResponse = appMcpAuthenticationErrorResponse(
+      request,
+      rpcRequest.id,
+      authErr,
+    );
+    if (typedAuthResponse) {
+      console.error("App MCP API-token authentication failed", {
+        appId,
+        method: rpcRequest.method,
+        hasAuthHeader: !!request.headers.get("Authorization"),
+        status: typedAuthResponse.status,
+      });
+      return typedAuthResponse;
+    }
     let message = authErr instanceof Error
       ? authErr.message
       : "Authentication required";
@@ -1364,6 +1379,20 @@ export async function handleMcp(
       `Internal error: ${err instanceof Error ? err.message : "Unknown error"}`,
     );
   }
+}
+
+export function appMcpAuthenticationErrorResponse(
+  request: Request,
+  id: JsonRpcId,
+  authError: unknown,
+): Response | null {
+  return mcpAuthenticationErrorResponse({
+    request,
+    id,
+    error: authError,
+    authRequiredCode: AUTH_REQUIRED,
+    internalErrorCode: INTERNAL_ERROR,
+  });
 }
 
 // ============================================

@@ -25,6 +25,10 @@ on:
       - 'scripts/release/verify-api-compute-deploy-state.test.mjs'
       - 'scripts/release/write-api-compute-disabled-config.mjs'
       - 'scripts/release/write-api-compute-disabled-config.test.mjs'
+      - 'scripts/ops/reconcile-staging-supabase-secrets.mjs'
+      - 'scripts/ops/reconcile-staging-supabase-secrets.test.mjs'
+      - 'scripts/ops/recover-staging-supabase-data-plane.mjs'
+      - 'scripts/ops/recover-staging-supabase-data-plane.test.mjs'
       - 'scripts/smoke/gx-test-containment-smoke.mjs'
       - 'scripts/smoke/gx-test-containment-smoke.test.mjs'
       - '.github/workflows/api-deploy.yml'
@@ -81,6 +85,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Verify RPC persistence and reviewed surfaces
+        run: npm run test:rpc-surface
+
       - name: Test
         run: npm run test:full
 
@@ -89,6 +96,14 @@ jobs:
 
       - name: Wrangler Dry Run (staging)
         run: npx wrangler deploy --config wrangler.toml --env staging --dry-run
+
+      - name: Wrangler Dry Run (gx.test session Worker)
+        run: |
+          set -euo pipefail
+          npx wrangler deploy \
+            --config wrangler.gx-test-session.toml --env="" --dry-run
+          npx wrangler deploy \
+            --config wrangler.gx-test-session.toml --env staging --dry-run
 
       - name: Verify pre-Compute deployment helpers
         working-directory: .
@@ -99,6 +114,8 @@ jobs:
             scripts/release/verify-api-compute-bootstrap-history.test.mjs \
             scripts/release/verify-api-compute-deploy-state.test.mjs \
             scripts/release/write-api-compute-disabled-config.test.mjs \
+            scripts/ops/recover-staging-supabase-data-plane.test.mjs \
+            scripts/ops/reconcile-staging-supabase-secrets.test.mjs \
             scripts/smoke/gx-test-containment-smoke.test.mjs
 
       - name: Wrangler Dry Run (Compute disabled)
@@ -154,6 +171,28 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Recover staging Supabase data plane when degraded
+        if: github.event_name == 'workflow_dispatch'
+        working-directory: .
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_STAGING_PROJECT_ID: ${{ secrets.SUPABASE_STAGING_PROJECT_ID }}
+        run: >-
+          node scripts/ops/recover-staging-supabase-data-plane.mjs
+          --restart-if-degraded
+
+      - name: Prepare canonical staging Supabase secrets for candidate deploy
+        if: github.event_name == 'workflow_dispatch'
+        working-directory: .
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_STAGING_PROJECT_ID: ${{ secrets.SUPABASE_STAGING_PROJECT_ID }}
+          RUNNER_TEMP: ${{ runner.temp }}
+          STAGING_SUPABASE_SECRETS_FILE: ${{ runner.temp }}/galactic-staging-supabase-secrets.json
+        run: >-
+          node scripts/ops/reconcile-staging-supabase-secrets.mjs
+          --prepare-deploy
 
       - name: Classify staging Compute binding target
         id: compute_target
@@ -229,6 +268,7 @@ jobs:
             node ../scripts/release/verify-api-compute-bootstrap-history.mjs \
               staging "$GITHUB_REPOSITORY" "$version_id" \
               compute-bootstrap-policy.json "$inventory" "$inventory_details"
+            echo "PREVIOUS_API_VERSION_ID=$version_id" >> "$GITHUB_ENV"
             echo "Verified staging as a pre-Compute installation." \
               >> "$GITHUB_STEP_SUMMARY"
           else
@@ -348,6 +388,123 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npm run deploy:staging
 
+      - name: Capture prior stable staging gx.test session Worker
+        id: capture_gx_test_session
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          worker=galactic-gx-test-session-staging
+          lookup_body="$RUNNER_TEMP/staging-gx-test-session-lookup.json"
+          if ! http_status="$(
+            curl --silent --show-error \
+              --connect-timeout 10 \
+              --max-time 30 \
+              --retry 3 \
+              --retry-connrefused \
+              --output "$lookup_body" \
+              --write-out '%{http_code}' \
+              --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$worker/deployments"
+          )"; then
+            echo "Cloudflare staging gx.test session Worker lookup failed at the transport layer." >&2
+            exit 1
+          fi
+          mode="$(
+            node ../scripts/release/classify-cloudflare-worker-lookup.mjs \
+              "$http_status" "$lookup_body"
+          )"
+          if [ "$mode" = "bootstrap" ]; then
+            echo "had_prior=false" >> "$GITHUB_OUTPUT"
+            echo "No prior staging gx.test session Worker exists; first provisioning will remain private if a downstream deploy fails." \
+              >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          status="$RUNNER_TEMP/staging-gx-test-session-prior-status.json"
+          version="$RUNNER_TEMP/staging-gx-test-session-prior-version.json"
+          npx wrangler deployments status --name "$worker" --json > "$status"
+          version_id="$(
+            jq -er '
+              if (.versions | length) == 1 and
+                 ((.versions[0].percentage | tonumber) == 100)
+              then .versions[0].version_id
+              else error("prior staging gx.test session Worker is not one stable 100% version")
+              end
+            ' "$status"
+          )"
+          version_id_pattern='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          [[ "$version_id" =~ $version_id_pattern ]] || {
+            echo "Cloudflare returned a malformed prior staging gx.test session Worker version ID." >&2
+            exit 1
+          }
+          npx wrangler versions view "$version_id" \
+            --name "$worker" --json > "$version"
+          jq -e --arg version_id "$version_id" '.id == $version_id' \
+            "$version" >/dev/null
+          {
+            echo "had_prior=true"
+            echo "version_id=$version_id"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Deploy staging gx.test session Worker
+        id: deploy_gx_test_session
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          echo "attempted=true" >> "$GITHUB_OUTPUT"
+          npx wrangler deploy \
+            --config wrangler.gx-test-session.toml --env staging \
+            --tag "gx-test-session-$GITHUB_SHA"
+
+      - name: Verify staging gx.test session Worker
+        id: verify_gx_test_session
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          status="$RUNNER_TEMP/staging-gx-test-session-status.json"
+          version="$RUNNER_TEMP/staging-gx-test-session-version.json"
+          npx wrangler deployments status \
+            --name galactic-gx-test-session-staging --json > "$status"
+          version_id="$(
+            jq -er '
+              if (.versions | length) == 1 and
+                 ((.versions[0].percentage | tonumber) == 100)
+              then .versions[0].version_id
+              else error("staging gx.test session Worker is not one stable 100% version")
+              end
+            ' "$status"
+          )"
+          npx wrangler versions view "$version_id" \
+            --name galactic-gx-test-session-staging --json > "$version"
+          jq -e \
+            --arg version_id "$version_id" \
+            --arg expected_tag "gx-test-session-$GITHUB_SHA" \
+            '.id == $version_id and
+             .annotations["workers/tag"] == $expected_tag and
+             .resources.script_runtime.exports.GxTestSession.type == "durable-object" and
+             .resources.script_runtime.exports.GxTestSession.storage == "sqlite" and
+             ((.resources.script_runtime.exports.GxTestSession.state // "created") == "created")' \
+            "$version" >/dev/null
+
+      - name: Verify still-live staging API with candidate gx.test session Worker
+        id: verify_gx_test_session_compatibility
+        if: >-
+          steps.capture_gx_test_session.outputs.had_prior == 'true' &&
+          github.event_name != 'workflow_dispatch'
+        env:
+          ULTRALIGHT_TOKEN: ${{ secrets.ULTRALIGHT_TOKEN_STAGING }}
+        run: |
+          set -euo pipefail
+          node ../scripts/smoke/gx-test-containment-smoke.mjs \
+            --url https://ultralight-api-staging.rgn4jz429m.workers.dev \
+            --output "$RUNNER_TEMP/gx-test-session-compatibility.json"
+
       - name: Deploy staging worker
         id: deploy_worker
         env:
@@ -357,6 +514,13 @@ jobs:
           set -euo pipefail
           config=wrangler.toml
           compute_args=()
+          secret_args=()
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            secret_file="$RUNNER_TEMP/galactic-staging-supabase-secrets.json"
+            test -f "$secret_file"
+            [ "$(stat -c '%a' "$secret_file")" = "600" ]
+            secret_args=(--secrets-file "$secret_file")
+          fi
           if [ "${{ steps.compute_target.outputs.mode }}" = "bootstrap" ]; then
             config=.wrangler.compute-disabled.toml
             compute_args=(
@@ -376,7 +540,8 @@ jobs:
           echo "attempted=true" >> "$GITHUB_OUTPUT"
           npx wrangler deploy \
             --config "$config" --env staging --keep-vars \
-            --tag "api-$GITHUB_SHA" "${compute_args[@]}"
+            --tag "api-$GITHUB_SHA" \
+            "${secret_args[@]}" "${compute_args[@]}"
 
       - name: Verify staging API deployment state
         id: verify_deploy
@@ -420,9 +585,9 @@ jobs:
             --output "$RUNNER_TEMP/gx-test-containment.json"
 
       - name: Restore prior staging API after an ambiguous deployment
+        id: restore_api
         if: >-
-          ${{ always() && steps.compute_target.outputs.mode == 'bound' &&
-              steps.deploy_worker.outputs.attempted == 'true' &&
+          ${{ always() && steps.deploy_worker.outputs.attempted == 'true' &&
               (steps.deploy_worker.outcome != 'success' ||
                steps.verify_deploy.outcome != 'success' ||
                steps.verify_gx_test_containment.outcome != 'success') }}
@@ -443,9 +608,71 @@ jobs:
             --name ultralight-api-staging --json > "$status"
           npx wrangler versions view "$PREVIOUS_API_VERSION_ID" \
             --name ultralight-api-staging --json > "$version"
-          node ../scripts/release/verify-api-compute-deploy-state.mjs \
-            bound staging "$status" "$version" - \
-            "$RUNNER_TEMP/staging-api-live-compute-state.json"
+          if [ "${{ steps.compute_target.outputs.mode }}" = "bound" ]; then
+            node ../scripts/release/verify-api-compute-deploy-state.mjs \
+              bound staging "$status" "$version" - \
+              "$RUNNER_TEMP/staging-api-live-compute-state.json"
+          else
+            node ../scripts/release/verify-api-compute-deploy-state.mjs \
+              pre-bootstrap staging "$status" "$version"
+          fi
+
+      - name: Restore prior staging gx.test session Worker after a failed rollout
+        if: >-
+          ${{
+            always() &&
+            steps.capture_gx_test_session.outputs.had_prior == 'true' &&
+            steps.deploy_gx_test_session.outputs.attempted == 'true' &&
+            (
+              steps.deploy_worker.outputs.attempted != 'true' ||
+              steps.restore_api.outcome == 'success'
+            ) &&
+            (
+              steps.deploy_gx_test_session.outcome != 'success' ||
+              steps.verify_gx_test_session.outcome != 'success' ||
+              steps.verify_gx_test_session_compatibility.outcome != 'success' ||
+              steps.deploy_worker.outcome != 'success' ||
+              steps.verify_deploy.outcome != 'success' ||
+              steps.verify_gx_test_containment.outcome != 'success'
+            )
+          }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PREVIOUS_GX_TEST_SESSION_VERSION_ID: ${{ steps.capture_gx_test_session.outputs.version_id }}
+        run: |
+          set -euo pipefail
+          worker=galactic-gx-test-session-staging
+          npx wrangler versions deploy \
+            "$PREVIOUS_GX_TEST_SESSION_VERSION_ID@100%" \
+            --config wrangler.gx-test-session.toml --env staging \
+            --name "$worker" --yes \
+            --message "Compensating gx.test session rollback run $GITHUB_RUN_ID"
+          status="$RUNNER_TEMP/staging-gx-test-session-compensating-status.json"
+          version="$RUNNER_TEMP/staging-gx-test-session-compensating-version.json"
+          npx wrangler deployments status --name "$worker" --json > "$status"
+          jq -e --arg id "$PREVIOUS_GX_TEST_SESSION_VERSION_ID" '
+            (.versions | length) == 1 and
+            ((.versions[0].percentage | tonumber) == 100) and
+            .versions[0].version_id == $id
+          ' "$status" >/dev/null
+          npx wrangler versions view "$PREVIOUS_GX_TEST_SESSION_VERSION_ID" \
+            --name "$worker" --json > "$version"
+          jq -e --arg id "$PREVIOUS_GX_TEST_SESSION_VERSION_ID" \
+            '.id == $id' "$version" >/dev/null || {
+              echo "CRITICAL: prior staging gx.test session Worker restoration failed." >&2
+              exit 1
+            }
+
+      - name: Remove prepared staging Supabase secret file
+        if: always() && github.event_name == 'workflow_dispatch'
+        working-directory: .
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+          STAGING_SUPABASE_SECRETS_FILE: ${{ runner.temp }}/galactic-staging-supabase-secrets.json
+        run: >-
+          node scripts/ops/reconcile-staging-supabase-secrets.mjs
+          --cleanup-deploy
 
   deploy_production:
     name: Deploy API to production
@@ -548,6 +775,7 @@ jobs:
             node ../scripts/release/verify-api-compute-bootstrap-history.mjs \
               production "$GITHUB_REPOSITORY" "$version_id" \
               compute-bootstrap-policy.json "$inventory" "$inventory_details"
+            echo "PREVIOUS_API_VERSION_ID=$version_id" >> "$GITHUB_ENV"
             echo "Verified production as a pre-Compute installation." \
               >> "$GITHUB_STEP_SUMMARY"
           else
@@ -653,6 +881,122 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npm run deploy
 
+      - name: Capture prior stable production gx.test session Worker
+        id: capture_gx_test_session
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          worker=galactic-gx-test-session
+          lookup_body="$RUNNER_TEMP/production-gx-test-session-lookup.json"
+          if ! http_status="$(
+            curl --silent --show-error \
+              --connect-timeout 10 \
+              --max-time 30 \
+              --retry 3 \
+              --retry-connrefused \
+              --output "$lookup_body" \
+              --write-out '%{http_code}' \
+              --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$worker/deployments"
+          )"; then
+            echo "Cloudflare production gx.test session Worker lookup failed at the transport layer." >&2
+            exit 1
+          fi
+          mode="$(
+            node ../scripts/release/classify-cloudflare-worker-lookup.mjs \
+              "$http_status" "$lookup_body"
+          )"
+          if [ "$mode" = "bootstrap" ]; then
+            echo "had_prior=false" >> "$GITHUB_OUTPUT"
+            echo "No prior production gx.test session Worker exists; first provisioning will remain private if a downstream deploy fails." \
+              >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          status="$RUNNER_TEMP/production-gx-test-session-prior-status.json"
+          version="$RUNNER_TEMP/production-gx-test-session-prior-version.json"
+          npx wrangler deployments status --name "$worker" --json > "$status"
+          version_id="$(
+            jq -er '
+              if (.versions | length) == 1 and
+                 ((.versions[0].percentage | tonumber) == 100)
+              then .versions[0].version_id
+              else error("prior production gx.test session Worker is not one stable 100% version")
+              end
+            ' "$status"
+          )"
+          version_id_pattern='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          [[ "$version_id" =~ $version_id_pattern ]] || {
+            echo "Cloudflare returned a malformed prior production gx.test session Worker version ID." >&2
+            exit 1
+          }
+          npx wrangler versions view "$version_id" \
+            --name "$worker" --json > "$version"
+          jq -e --arg version_id "$version_id" '.id == $version_id' \
+            "$version" >/dev/null
+          {
+            echo "had_prior=true"
+            echo "version_id=$version_id"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Deploy production gx.test session Worker
+        id: deploy_gx_test_session
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          echo "attempted=true" >> "$GITHUB_OUTPUT"
+          npx wrangler deploy \
+            --config wrangler.gx-test-session.toml --env="" \
+            --tag "gx-test-session-$GITHUB_SHA"
+
+      - name: Verify production gx.test session Worker
+        id: verify_gx_test_session
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          status="$RUNNER_TEMP/production-gx-test-session-status.json"
+          version="$RUNNER_TEMP/production-gx-test-session-version.json"
+          npx wrangler deployments status \
+            --name galactic-gx-test-session --json > "$status"
+          version_id="$(
+            jq -er '
+              if (.versions | length) == 1 and
+                 ((.versions[0].percentage | tonumber) == 100)
+              then .versions[0].version_id
+              else error("production gx.test session Worker is not one stable 100% version")
+              end
+            ' "$status"
+          )"
+          npx wrangler versions view "$version_id" \
+            --name galactic-gx-test-session --json > "$version"
+          jq -e \
+            --arg version_id "$version_id" \
+            --arg expected_tag "gx-test-session-$GITHUB_SHA" \
+            '.id == $version_id and
+             .annotations["workers/tag"] == $expected_tag and
+             .resources.script_runtime.exports.GxTestSession.type == "durable-object" and
+             .resources.script_runtime.exports.GxTestSession.storage == "sqlite" and
+             ((.resources.script_runtime.exports.GxTestSession.state // "created") == "created")' \
+            "$version" >/dev/null
+
+      - name: Verify still-live production API with candidate gx.test session Worker
+        id: verify_gx_test_session_compatibility
+        if: steps.capture_gx_test_session.outputs.had_prior == 'true'
+        env:
+          ULTRALIGHT_TOKEN: ${{ secrets.ULTRALIGHT_TOKEN }}
+        run: |
+          set -euo pipefail
+          node ../scripts/smoke/gx-test-containment-smoke.mjs \
+            --target production \
+            --url https://api.connectgalactic.com \
+            --output "$RUNNER_TEMP/gx-test-session-compatibility.json"
+
       - name: Deploy production worker
         id: deploy_worker
         env:
@@ -714,12 +1058,24 @@ jobs:
               bootstrap production "$status" "$version" "api-$GITHUB_SHA"
           fi
 
+      - name: Verify production gx.test containment
+        id: verify_gx_test_containment
+        env:
+          ULTRALIGHT_TOKEN: ${{ secrets.ULTRALIGHT_TOKEN }}
+        run: |
+          set -euo pipefail
+          node ../scripts/smoke/gx-test-containment-smoke.mjs \
+            --target production \
+            --url https://api.connectgalactic.com \
+            --output "$RUNNER_TEMP/gx-test-containment.json"
+
       - name: Restore prior production API after an ambiguous deployment
+        id: restore_api
         if: >-
-          ${{ always() && steps.compute_target.outputs.mode == 'bound' &&
-              steps.deploy_worker.outputs.attempted == 'true' &&
+          ${{ always() && steps.deploy_worker.outputs.attempted == 'true' &&
               (steps.deploy_worker.outcome != 'success' ||
-               steps.verify_deploy.outcome != 'success') }}
+               steps.verify_deploy.outcome != 'success' ||
+               steps.verify_gx_test_containment.outcome != 'success') }}
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -737,6 +1093,58 @@ jobs:
             --name ultralight-api --json > "$status"
           npx wrangler versions view "$PREVIOUS_API_VERSION_ID" \
             --name ultralight-api --json > "$version"
-          node ../scripts/release/verify-api-compute-deploy-state.mjs \
-            bound production "$status" "$version" - \
-            "$RUNNER_TEMP/production-api-live-compute-state.json"
+          if [ "${{ steps.compute_target.outputs.mode }}" = "bound" ]; then
+            node ../scripts/release/verify-api-compute-deploy-state.mjs \
+              bound production "$status" "$version" - \
+              "$RUNNER_TEMP/production-api-live-compute-state.json"
+          else
+            node ../scripts/release/verify-api-compute-deploy-state.mjs \
+              pre-bootstrap production "$status" "$version"
+          fi
+
+      - name: Restore prior production gx.test session Worker after a failed rollout
+        if: >-
+          ${{
+            always() &&
+            steps.capture_gx_test_session.outputs.had_prior == 'true' &&
+            steps.deploy_gx_test_session.outputs.attempted == 'true' &&
+            (
+              steps.deploy_worker.outputs.attempted != 'true' ||
+              steps.restore_api.outcome == 'success'
+            ) &&
+            (
+              steps.deploy_gx_test_session.outcome != 'success' ||
+              steps.verify_gx_test_session.outcome != 'success' ||
+              steps.verify_gx_test_session_compatibility.outcome != 'success' ||
+              steps.deploy_worker.outcome != 'success' ||
+              steps.verify_deploy.outcome != 'success' ||
+              steps.verify_gx_test_containment.outcome != 'success'
+            )
+          }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PREVIOUS_GX_TEST_SESSION_VERSION_ID: ${{ steps.capture_gx_test_session.outputs.version_id }}
+        run: |
+          set -euo pipefail
+          worker=galactic-gx-test-session
+          npx wrangler versions deploy \
+            "$PREVIOUS_GX_TEST_SESSION_VERSION_ID@100%" \
+            --config wrangler.gx-test-session.toml --env="" \
+            --name "$worker" --yes \
+            --message "Compensating gx.test session rollback run $GITHUB_RUN_ID"
+          status="$RUNNER_TEMP/production-gx-test-session-compensating-status.json"
+          version="$RUNNER_TEMP/production-gx-test-session-compensating-version.json"
+          npx wrangler deployments status --name "$worker" --json > "$status"
+          jq -e --arg id "$PREVIOUS_GX_TEST_SESSION_VERSION_ID" '
+            (.versions | length) == 1 and
+            ((.versions[0].percentage | tonumber) == 100) and
+            .versions[0].version_id == $id
+          ' "$status" >/dev/null
+          npx wrangler versions view "$PREVIOUS_GX_TEST_SESSION_VERSION_ID" \
+            --name "$worker" --json > "$version"
+          jq -e --arg id "$PREVIOUS_GX_TEST_SESSION_VERSION_ID" \
+            '.id == $id' "$version" >/dev/null || {
+              echo "CRITICAL: prior production gx.test session Worker restoration failed." >&2
+              exit 1
+            }
