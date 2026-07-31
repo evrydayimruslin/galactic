@@ -35,6 +35,73 @@ function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+export function verifyWranglerVersionUploadOutput({
+  content,
+  expectedWorker,
+  expectedEnvironment,
+}) {
+  if (
+    typeof content !== "string" ||
+    typeof expectedWorker !== "string" ||
+    expectedWorker.length === 0 ||
+    typeof expectedEnvironment !== "string" ||
+    expectedEnvironment.length === 0
+  ) {
+    fail("Wrangler version-upload output arguments are malformed");
+  }
+
+  const lines = content.split(/\r?\n/u).filter((line) =>
+    line.trim().length > 0
+  );
+  let records;
+  try {
+    records = lines.map((line) => JSON.parse(line));
+  } catch (error) {
+    fail(`Wrangler version-upload output is not valid NDJSON: ${
+      error instanceof Error ? error.message : String(error)
+    }`);
+  }
+
+  if (
+    records.length !== 2 ||
+    !isRecord(records[0]) ||
+    !isRecord(records[1])
+  ) {
+    fail(
+      "Wrangler must emit exactly one session record and one version-upload record",
+    );
+  }
+  const [session, upload] = records;
+  if (
+    session.type !== "wrangler-session" ||
+    session.version !== 1 ||
+    typeof session.wrangler_version !== "string" ||
+    session.wrangler_version.length === 0 ||
+    !Array.isArray(session.command_line_args) ||
+    !session.command_line_args.every((value) => typeof value === "string") ||
+    session.command_line_args[0] !== "versions" ||
+    session.command_line_args[1] !== "upload" ||
+    typeof session.timestamp !== "string" ||
+    !Number.isFinite(Date.parse(session.timestamp))
+  ) {
+    fail("Wrangler session record does not describe versions upload");
+  }
+  if (
+    upload.type !== "version-upload" ||
+    upload.version !== 1 ||
+    upload.worker_name !== expectedWorker ||
+    upload.wrangler_environment !== expectedEnvironment ||
+    upload.worker_name_overridden !== false ||
+    typeof upload.version_id !== "string" ||
+    !UUID.test(upload.version_id) ||
+    typeof upload.timestamp !== "string" ||
+    !Number.isFinite(Date.parse(upload.timestamp))
+  ) {
+    fail("Wrangler version-upload record does not match the reviewed command");
+  }
+  return upload.version_id;
+}
+
 function targetState(target) {
   const state = TARGETS[target];
   if (!state) fail(`unsupported target ${String(target)}`);
@@ -671,10 +738,28 @@ function readJson(path, label) {
   }
 }
 
+function readText(path, label) {
+  try {
+    return readFileSync(resolve(path), "utf8");
+  } catch (error) {
+    fail(`${label} is unreadable: ${
+      error instanceof Error ? error.message : String(error)
+    }`);
+  }
+}
+
 export function main(argv) {
   const [mode] = argv;
   let result;
-  if (mode === "current" && argv.length === 7) {
+  if (mode === "upload-output" && argv.length === 4) {
+    result = verifyWranglerVersionUploadOutput({
+      content: readText(argv[1], "Wrangler version-upload output"),
+      expectedWorker: argv[2],
+      expectedEnvironment: argv[3],
+    });
+    console.log(result);
+    return result;
+  } else if (mode === "current" && argv.length === 7) {
     result = verifyCurrentPair({
       target: argv[1],
       expectedApiTag: argv[2],
@@ -703,6 +788,8 @@ export function main(argv) {
   } else {
     fail(
       "usage: verify-api-compute-off-bridge.mjs " +
+        "upload-output <wrangler-output> <expected-worker> " +
+        "<expected-environment> | " +
         "current <production|staging> <expected-api-tag> " +
         "<api-status> <api-version> <compute-status> <compute-version> | " +
         "uploaded <production|staging> <current-state> <uploaded-version> " +

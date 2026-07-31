@@ -5,6 +5,7 @@ import {
   verifyCurrentPair,
   verifyPromotedBridge,
   verifyUploadedBridge,
+  verifyWranglerVersionUploadOutput,
 } from "./verify-api-compute-off-bridge.mjs";
 
 const SHA = "a".repeat(40);
@@ -15,6 +16,7 @@ const COMPUTE_ID = "22222222-2222-4222-8222-222222222222";
 const BRIDGE_ID = "33333333-3333-4333-8333-333333333333";
 const OTHER_ID = "44444444-4444-4444-8444-444444444444";
 const DIGEST = `sha256:${"b".repeat(64)}`;
+const UPLOAD_ID = "55555555-5555-4555-8555-555555555555";
 
 const TARGETS = {
   production: {
@@ -120,6 +122,121 @@ function fixture(policy = "global", target = "production") {
 
 function binding(version, name) {
   return version.resources.bindings.find((value) => value.name === name);
+}
+
+function wranglerUploadRecords() {
+  return [
+    {
+      type: "wrangler-session",
+      version: 1,
+      wrangler_version: "4.112.0",
+      command_line_args: [
+        "versions",
+        "upload",
+        "--config",
+        "wrangler.toml",
+        "--env",
+        "staging",
+      ],
+      log_file_path: "/tmp/wrangler.log",
+      timestamp: "2026-07-31T15:02:28.000Z",
+    },
+    {
+      type: "version-upload",
+      version: 1,
+      worker_name: "ultralight-api-staging",
+      worker_tag: "worker-tag",
+      version_id: UPLOAD_ID,
+      wrangler_environment: "staging",
+      worker_name_overridden: false,
+      timestamp: "2026-07-31T15:02:40.000Z",
+    },
+  ];
+}
+
+function wranglerUploadContent(records = wranglerUploadRecords()) {
+  return `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+}
+
+test("extracts one version ID from Wrangler's session and upload records", () => {
+  expectWranglerUpload(UPLOAD_ID);
+});
+
+function expectWranglerUpload(expected) {
+  assert.equal(verifyWranglerVersionUploadOutput({
+    content: wranglerUploadContent(),
+    expectedWorker: "ultralight-api-staging",
+    expectedEnvironment: "staging",
+  }), expected);
+}
+
+for (
+  const [name, mutate, error] of [
+    [
+      "a missing session record",
+      (records) => records.splice(0, 1),
+      /exactly one session record and one version-upload record/u,
+    ],
+    [
+      "an extra output record",
+      (records) => records.push({ type: "unexpected" }),
+      /exactly one session record and one version-upload record/u,
+    ],
+    [
+      "reversed record order",
+      (records) => records.reverse(),
+      /session record does not describe versions upload/u,
+    ],
+    [
+      "the wrong command",
+      (records) => {
+        records[0].command_line_args = ["deploy"];
+      },
+      /session record does not describe versions upload/u,
+    ],
+    [
+      "the wrong Worker",
+      (records) => {
+        records[1].worker_name = "different-worker";
+      },
+      /version-upload record does not match/u,
+    ],
+    [
+      "the wrong environment",
+      (records) => {
+        records[1].wrangler_environment = "production";
+      },
+      /version-upload record does not match/u,
+    ],
+    [
+      "an overridden Worker name",
+      (records) => {
+        records[1].worker_name_overridden = true;
+      },
+      /version-upload record does not match/u,
+    ],
+    [
+      "a malformed version ID",
+      (records) => {
+        records[1].version_id = "not-a-version-id";
+      },
+      /version-upload record does not match/u,
+    ],
+  ]
+) {
+  test(`rejects Wrangler output with ${name}`, () => {
+    const records = wranglerUploadRecords();
+    mutate(records);
+    assert.throws(
+      () =>
+        verifyWranglerVersionUploadOutput({
+          content: wranglerUploadContent(records),
+          expectedWorker: "ultralight-api-staging",
+          expectedEnvironment: "staging",
+        }),
+      error,
+    );
+  });
 }
 
 function uploadedFixture(target = "production") {
