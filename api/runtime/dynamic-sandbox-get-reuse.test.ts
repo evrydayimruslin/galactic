@@ -249,6 +249,9 @@ function installHarness(): { captured: Captured; restore: () => void } {
 
   globalThis.__env = {
     LOADER: loader,
+    GX_TEST_SESSION: {
+      getByName: (name: string) => getTestSession(name),
+    },
     CODE_CACHE: {
       get: (key: string) => {
         captured.codeCacheKeys.push(key);
@@ -276,9 +279,6 @@ function installHarness(): { captured: Captured; restore: () => void } {
 
   globalThis.__ctx = {
     exports: {
-      GxTestSession: {
-        getByName: (name: string) => getTestSession(name),
-      },
       FixtureDatabaseBinding: () => ({}),
       // deno-lint-ignore no-explicit-any
       TestAppDataBinding: (input: any) => {

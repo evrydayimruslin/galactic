@@ -31,12 +31,6 @@
     },
     {
       "exports": [
-        "getComputeQueue"
-      ],
-      "file": "lib/env.ts"
-    },
-    {
-      "exports": [
         "SITE_BASE"
       ],
       "file": "lib/urls.ts"

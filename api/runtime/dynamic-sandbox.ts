@@ -357,7 +357,6 @@ interface DynamicWorkerEntrypointExports {
       };
     },
   ): unknown;
-  GxTestSession: DynamicTestRuntimeSessionNamespace;
   TestAIBinding(
     input: { props: { sessionName: string } },
   ): unknown;
@@ -1405,7 +1404,7 @@ export default {
         );
       }
 
-      const sessionNamespace = availableExports.GxTestSession as
+      const sessionNamespace = globalThis.__env?.GX_TEST_SESSION as unknown as
         | DynamicTestRuntimeSessionNamespace
         | undefined;
       if (
@@ -1413,7 +1412,7 @@ export default {
         typeof sessionNamespace.getByName !== "function"
       ) {
         throw new Error(
-          "gx.test runtime is unavailable: missing host export GxTestSession",
+          "gx.test runtime is unavailable: missing GX_TEST_SESSION binding",
         );
       }
       testRuntimeSessionName = `gx-test-${crypto.randomUUID()}`;
@@ -1434,8 +1433,9 @@ export default {
         throw new Error("gx.test state session name is unavailable");
       }
       // Props cross the Worker Loader boundary as plain data only. Each trusted
-      // test binding resolves this same name through its own host export, while
-      // the caller retains the authoritative stub for snapshot and cleanup.
+      // test binding resolves this same name through its external Durable
+      // Object binding, while the caller retains the authoritative stub for
+      // snapshot and cleanup.
       return testRuntimeSessionName;
     };
     // Resolved D1 database id baked into the DB binding props — captured here so

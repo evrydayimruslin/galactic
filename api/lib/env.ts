@@ -41,6 +41,10 @@ export interface Env {
     get(id: string, callback: () => Promise<WorkerCode>): WorkerStub;
   };
 
+  // Invocation-scoped gx.test transcript storage. This namespace is owned by
+  // the private galactic-gx-test-session Worker, never by tenant code.
+  GX_TEST_SESSION: DurableObjectNamespace;
+
   // String secrets and vars — all former Deno.env.get() keys
   SUPABASE_URL: string;
   SUPABASE_SERVICE_ROLE_KEY: string;

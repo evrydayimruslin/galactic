@@ -7,27 +7,45 @@ import { createTestHarness } from "wrangler";
 function createHarness() {
   return createTestHarness({
     root: fileURLToPath(new URL("../", import.meta.url)),
-    workers: [{
-      config: {
-        name: "gx-test-rpc-persistence",
-        main: "test-fixtures/gx-test-rpc-persistence-worker.mjs",
-        compatibility_date: "2026-03-01",
-        compatibility_flags: ["nodejs_compat"],
-        worker_loaders: [{
-          binding: "LOADER",
-        }],
-        exports: {
-          GxTestSession: {
-            type: "durable-object",
-            storage: "sqlite",
+    workers: [
+      {
+        config: {
+          name: "gx-test-rpc-persistence-api",
+          main: "test-fixtures/gx-test-rpc-persistence-worker.mjs",
+          compatibility_date: "2026-03-01",
+          compatibility_flags: ["nodejs_compat"],
+          worker_loaders: [{
+            binding: "LOADER",
+          }],
+          durable_objects: {
+            bindings: [{
+              name: "GX_TEST_SESSION",
+              class_name: "GxTestSession",
+              script_name: "gx-test-rpc-persistence-session",
+            }],
           },
         },
       },
-    }],
+      {
+        config: {
+          name: "gx-test-rpc-persistence-session",
+          main:
+            "test-fixtures/gx-test-rpc-persistence-session-worker.mjs",
+          compatibility_date: "2026-03-01",
+          compatibility_flags: ["nodejs_compat"],
+          exports: {
+            GxTestSession: {
+              type: "durable-object",
+              storage: "sqlite",
+            },
+          },
+        },
+      },
+    ],
   });
 }
 
-test("Worker Loader preserves one Durable Object transcript across test binding props", async () => {
+test("API -> external Durable Object -> test binding -> Worker Loader shares state", async () => {
   const server = createHarness();
   try {
     await server.listen();
@@ -41,8 +59,8 @@ test("Worker Loader preserves one Durable Object transcript across test binding 
       postSealRejected: true,
     });
 
-    const worker = server.getWorker();
-    await worker.evictDurableObject("GxTestSession", {
+    const worker = server.getWorker("gx-test-rpc-persistence-api");
+    await worker.evictDurableObject("GX_TEST_SESSION", {
       name: "gx-test-rpc-probe",
     });
     const reopenedResponse = await server.fetch("/reopened");

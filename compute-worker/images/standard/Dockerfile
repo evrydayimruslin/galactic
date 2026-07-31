@@ -177,6 +177,7 @@ ARG SANDBOX_BASE_IMAGE
 ARG TARGETARCH
 ARG DUCKDB_VERSION=1.5.1
 ARG PLAYWRIGHT_VERSION=1.62.0-alpha-2026-07-20
+ARG CHROME_FOR_TESTING_VERSION=152.0.7977.8
 ARG CLAUDE_CODE_VERSION=2.1.215
 ARG CODEX_VERSION=0.144.6
 ARG DENO_VERSION=2.9.3
@@ -194,6 +195,7 @@ ARG BRACE_EXPANSION_VERSION=5.0.8
 # let release evidence assert that the lock and intended direct versions agree.
 LABEL org.opencontainers.image.base.name="${SANDBOX_BASE_IMAGE}" \
       ai.galactic.tool.playwright="playwright@${PLAYWRIGHT_VERSION}" \
+      ai.galactic.tool.chrome="chrome-for-testing-beta@${CHROME_FOR_TESTING_VERSION}" \
       ai.galactic.tool.claude-code="@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
       ai.galactic.tool.codex="@openai/codex@${CODEX_VERSION}" \
       ai.galactic.tool.deno="deno@${DENO_VERSION}" \
@@ -315,22 +317,61 @@ RUN set -eux; \
     rm "/tmp/${deno_archive}"; \
     test "$(deno --version | awk 'NR == 1 { print $2 }')" = "${DENO_VERSION}"
 
-# Browser automation and coding-agent CLIs are lockfile-pinned. They receive no
-# ambient credentials; a developer must explicitly bind the provider secret a
-# chosen CLI needs to the Agent's compute policy.
+# Browser automation and coding-agent CLIs are lockfile-pinned. Playwright's
+# currently bundled Chrome predates the vendor's 151.0.7922.72 security fix, so
+# keep the JavaScript API pinned while replacing only its browser payload with
+# Google's newer, version-addressed and checksum-pinned Chrome-for-Testing beta.
+# This is the vendor's automation-specific artifact and has no package-manager
+# or updater hooks. The image is amd64-only today; fail closed rather than
+# silently installing the wrong architecture. Link both of Playwright's normal
+# zero-config launch paths (headed Chromium and its default headless-shell
+# registry) to the audited binary. These tools receive no ambient credentials;
+# a developer must explicitly bind the provider secret a chosen CLI needs to
+# the Agent's compute policy.
 COPY compute-worker/images/standard/toolchain/package.json compute-worker/images/standard/toolchain/package-lock.json /opt/galactic/toolchain/
 RUN --mount=type=cache,target=/root/.npm \
-    npm ci --omit=dev --prefix /opt/galactic/toolchain && \
-    test "$(node -p 'require("/opt/galactic/toolchain/node_modules/playwright/package.json").version')" = "${PLAYWRIGHT_VERSION}" && \
-    test "$(node -p 'require("/opt/galactic/toolchain/node_modules/@anthropic-ai/claude-code/package.json").version')" = "${CLAUDE_CODE_VERSION}" && \
-    test "$(node -p 'require("/opt/galactic/toolchain/node_modules/@openai/codex/package.json").version')" = "${CODEX_VERSION}" && \
-    /opt/galactic/toolchain/node_modules/.bin/playwright install --with-deps chromium && \
+    set -eux; \
+    test "${TARGETARCH}" = amd64; \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+      npm ci --omit=dev --prefix /opt/galactic/toolchain; \
+    test "$(node -p 'require("/opt/galactic/toolchain/node_modules/playwright/package.json").version')" = "${PLAYWRIGHT_VERSION}"; \
+    test "$(node -p 'require("/opt/galactic/toolchain/node_modules/@anthropic-ai/claude-code/package.json").version')" = "${CLAUDE_CODE_VERSION}"; \
+    test "$(node -p 'require("/opt/galactic/toolchain/node_modules/@openai/codex/package.json").version')" = "${CODEX_VERSION}"; \
+    /opt/galactic/toolchain/node_modules/.bin/playwright install-deps chromium; \
+    /opt/galactic/toolchain/node_modules/.bin/playwright install ffmpeg; \
+    chrome_archive="chrome-for-testing-${CHROME_FOR_TESTING_VERSION}-linux64.zip"; \
+    headless_archive="chrome-headless-shell-for-testing-${CHROME_FOR_TESTING_VERSION}-linux64.zip"; \
+    curl -fsSL -o "/tmp/${chrome_archive}" \
+      "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_FOR_TESTING_VERSION}/linux64/chrome-linux64.zip"; \
+    curl -fsSL -o "/tmp/${headless_archive}" \
+      "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_FOR_TESTING_VERSION}/linux64/chrome-headless-shell-linux64.zip"; \
+    printf '%s  %s\n' \
+      '931865951a28fccf0491a7f5e0a2fe1a0605765210a4ce4a4758d9d3d97d0b77' \
+      "/tmp/${chrome_archive}" | sha256sum -c -; \
+    printf '%s  %s\n' \
+      '9615c0c2557b614a87605e7149372ef50cff8fe8c52e7ebb855efd0cea6b1501' \
+      "/tmp/${headless_archive}" | sha256sum -c -; \
+    rm -rf /ms-playwright/chromium-1234 \
+      /ms-playwright/chromium_headless_shell-1234; \
+    install -d /ms-playwright/chromium-1234 \
+      /ms-playwright/chromium_headless_shell-1234; \
+    unzip -q "/tmp/${chrome_archive}" -d /ms-playwright/chromium-1234; \
+    unzip -q "/tmp/${headless_archive}" -d /ms-playwright/chromium_headless_shell-1234; \
+    rm "/tmp/${chrome_archive}" "/tmp/${headless_archive}"; \
+    test "$(/ms-playwright/chromium-1234/chrome-linux64/chrome --version | awk '{ print $NF }')" = "${CHROME_FOR_TESTING_VERSION}"; \
+    test "$(/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell --version | awk '{ print $NF }')" = "${CHROME_FOR_TESTING_VERSION}"; \
+    touch /ms-playwright/chromium-1234/INSTALLATION_COMPLETE; \
+    touch /ms-playwright/chromium_headless_shell-1234/INSTALLATION_COMPLETE; \
+    test "$(node -e 'const { chromium } = require("/opt/galactic/toolchain/node_modules/playwright"); process.stdout.write(chromium.executablePath())')" = "/ms-playwright/chromium-1234/chrome-linux64/chrome"; \
+    test -x /ms-playwright/chromium-1234/chrome-linux64/chrome; \
+    test -x /ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell; \
     for command in playwright claude codex; do \
       ln -sf "/opt/galactic/toolchain/node_modules/.bin/${command}" "/usr/local/bin/${command}"; \
-    done && \
-    mkdir -p /node_modules && \
-    ln -s /opt/galactic/toolchain/node_modules/playwright /node_modules/playwright && \
-    ln -s /opt/galactic/toolchain/node_modules/playwright-core /node_modules/playwright-core && \
+    done; \
+    mkdir -p /node_modules; \
+    ln -s /opt/galactic/toolchain/node_modules/playwright /node_modules/playwright; \
+    ln -s /opt/galactic/toolchain/node_modules/playwright-core /node_modules/playwright-core; \
+    rm -rf /var/lib/apt/lists/*; \
     npm cache clean --force
 
 # Bake the exact CLI source from this release. It is intentionally not fetched

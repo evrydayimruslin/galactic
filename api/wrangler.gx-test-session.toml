@@ -1,0 +1,15 @@
+name = "galactic-gx-test-session"
+main = "src/gx-test-session-worker-entry.ts"
+compatibility_date = "2026-03-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+preview_urls = false
+
+[exports.GxTestSession]
+type = "durable-object"
+storage = "sqlite"
+
+[env.staging]
+name = "galactic-gx-test-session-staging"
+workers_dev = false
+preview_urls = false

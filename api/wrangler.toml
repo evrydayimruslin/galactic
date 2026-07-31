@@ -3,13 +3,12 @@ main = "src/worker-entry.ts"
 compatibility_date = "2026-03-01"
 compatibility_flags = ["nodejs_compat"]
 
-# gx.test bindings share one invocation-scoped, SQLite-backed containment
-# transcript through this automatically provisioned ctx.exports namespace.
-# Declarative exports are inherited by the isolated staging Worker, while each
-# environment receives its own Durable Object namespace.
-[exports.GxTestSession]
-type = "durable-object"
-storage = "sqlite"
+# Production gx.test state is owned by a dedicated private Worker so API
+# rollback never attempts to orphan its Durable Object namespace.
+[[durable_objects.bindings]]
+name = "GX_TEST_SESSION"
+class_name = "GxTestSession"
+script_name = "galactic-gx-test-session"
 
 # Capacity telemetry is a billing-control path. Persist every API invocation
 # during launch so reconciliation alarms and queue failures are queryable in
@@ -237,6 +236,13 @@ COMPUTE_CANARY_ALLOWLIST = ""
 #
 # If we later want full Cloudflare-side isolation, replace these binding IDs
 # and bucket names with staging-specific resources.
+#
+# Retain the original API-owned staging export as a dormant rollback anchor.
+# Runtime gx.test traffic uses the external GX_TEST_SESSION binding below.
+[env.staging.exports.GxTestSession]
+type = "durable-object"
+storage = "sqlite"
+
 [env.staging.observability]
 enabled = true
 head_sampling_rate = 1
@@ -262,6 +268,11 @@ id = "75ce02786ac2466fbca833c95bf3cb56"
 
 [[env.staging.worker_loaders]]
 binding = "LOADER"
+
+[[env.staging.durable_objects.bindings]]
+name = "GX_TEST_SESSION"
+class_name = "GxTestSession"
+script_name = "galactic-gx-test-session-staging"
 
 [[env.staging.services]]
 binding = "SELF"

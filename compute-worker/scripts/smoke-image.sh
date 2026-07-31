@@ -38,7 +38,7 @@ docker run --rm --entrypoint /bin/bash "$image" -lc '
     import { accessSync, constants } from "node:fs";
     accessSync(chromium.executablePath(), constants.X_OK);
     const browser = await chromium.launch({ headless: true });
-    if (browser.version() !== "151.0.7922.34") throw new Error(`Unexpected Chromium ${browser.version()}`);
+    if (browser.version() !== "152.0.7977.8") throw new Error(`Unexpected Chromium ${browser.version()}`);
     const page = await browser.newPage();
     await page.goto("data:text/html,<title>compute-smoke</title>");
     if (await page.title() !== "compute-smoke") throw new Error("Chromium smoke failed");

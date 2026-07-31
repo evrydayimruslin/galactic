@@ -119,8 +119,12 @@ Deno.test("gx.test state crosses Worker boundaries only through a persistent Dur
     sessionClientSource,
     sessionSource,
     workerEntrySource,
+    sessionWorkerEntrySource,
     dynamicSandboxSource,
     wranglerSource,
+    sessionWranglerSource,
+    envSource,
+    packageSource,
   ] = await Promise.all([
     Deno.readTextFile(
       new URL("./test-runtime-bindings.ts", import.meta.url),
@@ -134,9 +138,17 @@ Deno.test("gx.test state crosses Worker boundaries only through a persistent Dur
     Deno.readTextFile(new URL("../gx-test-session.ts", import.meta.url)),
     Deno.readTextFile(new URL("../worker-entry.ts", import.meta.url)),
     Deno.readTextFile(
+      new URL("../gx-test-session-worker-entry.ts", import.meta.url),
+    ),
+    Deno.readTextFile(
       new URL("../../runtime/dynamic-sandbox.ts", import.meta.url),
     ),
     Deno.readTextFile(new URL("../../wrangler.toml", import.meta.url)),
+    Deno.readTextFile(
+      new URL("../../wrangler.gx-test-session.toml", import.meta.url),
+    ),
+    Deno.readTextFile(new URL("../../lib/env.ts", import.meta.url)),
+    Deno.readTextFile(new URL("../../package.json", import.meta.url)),
   ]);
 
   assert(
@@ -154,9 +166,22 @@ Deno.test("gx.test state crosses Worker boundaries only through a persistent Dur
   );
   assert(
     sessionClientSource.includes("sessionName: string") &&
-      sessionClientSource.includes("exports?.GxTestSession") &&
+      sessionClientSource.includes("env.GX_TEST_SESSION") &&
       sessionClientSource.includes("return namespace.getByName(sessionName)"),
-    "gx.test binding props must carry only a durable session name",
+    "gx.test binding props must carry only a durable session name and resolve the external namespace",
+  );
+  assert(
+    testBindingsSource.includes(
+      "resolveTestRuntimeSession(this.env, this.ctx)",
+    ) &&
+      fixtureDatabaseSource.includes(
+        "resolveTestRuntimeSession(this.env, this.ctx)",
+      ) &&
+      !testBindingsSource.includes("resolveTestRuntimeSession(this.ctx)") &&
+      !fixtureDatabaseSource.includes(
+        "resolveTestRuntimeSession(this.ctx)",
+      ),
+    "every trusted gx.test WorkerEntrypoint must use its environment binding",
   );
   assert(
     !testBindingsSource.includes("session: TestRuntimeSessionRpc") &&
@@ -181,13 +206,60 @@ Deno.test("gx.test state crosses Worker boundaries only through a persistent Dur
     workerEntrySource.includes(
       'export { GxTestSession } from "./gx-test-session.ts";',
     ),
-    "the host worker must export the gx.test Durable Object class",
+    "the API must retain its dormant rollback-compatible staging export",
+  );
+  assert(
+    sessionWorkerEntrySource.includes(
+      'export { GxTestSession } from "./gx-test-session.ts";',
+    ),
+    "the dedicated session Worker must export the gx.test Durable Object class",
   );
   assert(
     dynamicSandboxSource.includes(
-      "sessionNamespace.getByName(",
-    ),
-    "the sandbox host must create gx.test sessions through the durable namespace",
+      "globalThis.__env?.GX_TEST_SESSION",
+    ) &&
+      dynamicSandboxSource.includes("sessionNamespace.getByName(") &&
+      !dynamicSandboxSource.includes("availableExports.GxTestSession"),
+    "the sandbox host must create gx.test sessions through the external durable namespace",
+  );
+  assert(
+    envSource.includes("GX_TEST_SESSION: DurableObjectNamespace"),
+    "the API environment must type the external gx.test Durable Object namespace",
+  );
+  assert(
+    wranglerSource.includes("[[durable_objects.bindings]]") &&
+      wranglerSource.includes('name = "GX_TEST_SESSION"') &&
+      wranglerSource.includes('script_name = "galactic-gx-test-session"') &&
+      wranglerSource.includes(
+        'script_name = "galactic-gx-test-session-staging"',
+      ),
+    "API production and staging must bind their matching dedicated session Workers",
+  );
+  assert(
+    !wranglerSource.includes("\n[exports.GxTestSession]\n") &&
+      wranglerSource.includes(
+        "[env.staging.exports.GxTestSession]",
+      ),
+    "only staging may retain the dormant API-owned gx.test namespace",
+  );
+  assert(
+    sessionWranglerSource.includes('name = "galactic-gx-test-session"') &&
+      sessionWranglerSource.includes(
+        'name = "galactic-gx-test-session-staging"',
+      ) &&
+      sessionWranglerSource.includes("[exports.GxTestSession]") &&
+      sessionWranglerSource.includes('type = "durable-object"') &&
+      sessionWranglerSource.includes('storage = "sqlite"') &&
+      sessionWranglerSource.includes("workers_dev = false") &&
+      sessionWranglerSource.includes("preview_urls = false"),
+    "the dedicated gx.test Worker must privately own both SQLite namespaces",
+  );
+  assert(
+    packageSource.includes('"deploy:gx-test-session"') &&
+      packageSource.includes('"deploy:gx-test-session:dry-run"') &&
+      packageSource.includes('"deploy:gx-test-session:staging"') &&
+      packageSource.includes('"deploy:gx-test-session:staging:dry-run"'),
+    "dedicated gx.test Worker deploy and dry-run scripts must remain available",
   );
   assert(
     !dynamicSandboxSource.includes(".dup()"),
@@ -197,11 +269,5 @@ Deno.test("gx.test state crosses Worker boundaries only through a persistent Dur
     dynamicSandboxSource.includes("sessionName") &&
       !dynamicSandboxSource.includes("session: persistentTestSession()"),
     "the sandbox host must pass a plain session name to every test binding",
-  );
-  assert(
-    wranglerSource.includes("[exports.GxTestSession]") &&
-      wranglerSource.includes('type = "durable-object"') &&
-      wranglerSource.includes('storage = "sqlite"'),
-    "Wrangler must provision the gx.test Durable Object namespace",
   );
 });

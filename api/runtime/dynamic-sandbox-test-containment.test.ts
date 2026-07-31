@@ -410,9 +410,6 @@ function installContainmentHarness(options: {
   const testExports = options.includeTestExports
     ? {
       FixtureDatabaseBinding: testBinding("FixtureDatabaseBinding"),
-      GxTestSession: {
-        getByName: (name: string) => getTestSession(name),
-      },
       TestAppDataBinding: testBinding("TestAppDataBinding"),
       TestMemoryBinding: testBinding("TestMemoryBinding"),
       TestRunsBinding: testBinding("TestRunsBinding"),
@@ -430,6 +427,9 @@ function installContainmentHarness(options: {
 
   globalThis.__env = {
     LOADER: loader,
+    GX_TEST_SESSION: {
+      getByName: (name: string) => getTestSession(name),
+    },
     SELF: REAL_SELF,
     CODE_CACHE: {
       get: () => Promise.resolve("export const noop = 1;"),

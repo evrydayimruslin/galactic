@@ -2,13 +2,14 @@ import {
   UL_TEST_BLOCKED_EFFECTS,
   type UlTestObservedEffect,
 } from "../../services/ul-test-runtime.ts";
+import type { Env } from "../../lib/env.ts";
 
 /**
  * Narrow RPC surface of the invocation-owned gx.test Durable Object.
  *
  * Test WorkerEntrypoint props carry only `sessionName`, never a nested RPC
- * capability. Each binding resolves the same Durable Object namespace from its
- * own trusted host context after crossing Worker Loader.
+ * capability. Each binding resolves the same external Durable Object namespace
+ * from its own trusted Worker environment after crossing Worker Loader.
  */
 export interface TestRuntimeSessionRpc {
   storeAppData(key: string, value: unknown): Promise<void>;
@@ -50,6 +51,7 @@ interface TestRuntimeSessionNamespace {
 export function resolveTestRuntimeSession<
   Props extends TestRuntimeSessionBindingProps,
 >(
+  env: Env,
   ctx: ExecutionContext<Props>,
 ): TestRuntimeSessionRpc {
   const sessionName = ctx.props.sessionName;
@@ -61,16 +63,12 @@ export function resolveTestRuntimeSession<
     throw new Error("gx.test state session name is invalid");
   }
 
-  const namespace = (
-    ctx as unknown as {
-      exports?: {
-        GxTestSession?: TestRuntimeSessionNamespace;
-      };
-    }
-  ).exports?.GxTestSession;
+  const namespace = env.GX_TEST_SESSION as unknown as
+    | TestRuntimeSessionNamespace
+    | undefined;
   if (!namespace || typeof namespace.getByName !== "function") {
     throw new Error(
-      "gx.test runtime is unavailable: missing host export GxTestSession",
+      "gx.test runtime is unavailable: missing GX_TEST_SESSION binding",
     );
   }
   return namespace.getByName(sessionName);

@@ -3,6 +3,7 @@
 // realistic code without provider requests, Light billing, or inbox writes.
 
 import { WorkerEntrypoint } from "cloudflare:workers";
+import type { Env } from "../../lib/env.ts";
 import type {
   ComputeRequest,
   ComputeResult,
@@ -40,7 +41,7 @@ interface TestCredentialBindingProps extends TestHttpBindingProps {
  * Invocation-local replacement for R2-backed Agent data.
  */
 export class TestAppDataBinding extends WorkerEntrypoint<
-  unknown,
+  Env,
   TestRuntimeSessionBindingProps
 > {
   async store(
@@ -48,7 +49,7 @@ export class TestAppDataBinding extends WorkerEntrypoint<
     value: unknown,
     _execCtxHandle?: string,
   ): Promise<void> {
-    const session = resolveTestRuntimeSession(this.ctx);
+    const session = resolveTestRuntimeSession(this.env, this.ctx);
     await session.recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.storageWrite,
     );
@@ -56,7 +57,7 @@ export class TestAppDataBinding extends WorkerEntrypoint<
   }
 
   async load(key: string, _execCtxHandle?: string): Promise<unknown> {
-    const session = resolveTestRuntimeSession(this.ctx);
+    const session = resolveTestRuntimeSession(this.env, this.ctx);
     await session.recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.storageRead,
     );
@@ -64,7 +65,7 @@ export class TestAppDataBinding extends WorkerEntrypoint<
   }
 
   async remove(key: string, _execCtxHandle?: string): Promise<void> {
-    const session = resolveTestRuntimeSession(this.ctx);
+    const session = resolveTestRuntimeSession(this.env, this.ctx);
     await session.recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.storageDelete,
     );
@@ -75,7 +76,7 @@ export class TestAppDataBinding extends WorkerEntrypoint<
     prefix?: string,
     _execCtxHandle?: string,
   ): Promise<string[]> {
-    const session = resolveTestRuntimeSession(this.ctx);
+    const session = resolveTestRuntimeSession(this.env, this.ctx);
     await session.recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.storageRead,
     );
@@ -85,7 +86,7 @@ export class TestAppDataBinding extends WorkerEntrypoint<
 
 /** Invocation-local replacement for both Agent- and user-scoped Memory.md. */
 export class TestMemoryBinding extends WorkerEntrypoint<
-  unknown,
+  Env,
   TestRuntimeSessionBindingProps
 > {
   async remember(
@@ -94,7 +95,7 @@ export class TestMemoryBinding extends WorkerEntrypoint<
     scope?: MemoryScope,
     _execCtxHandle?: string,
   ): Promise<void> {
-    const session = resolveTestRuntimeSession(this.ctx);
+    const session = resolveTestRuntimeSession(this.env, this.ctx);
     await session.recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.memoryWrite,
     );
@@ -110,7 +111,7 @@ export class TestMemoryBinding extends WorkerEntrypoint<
     scope?: MemoryScope,
     _execCtxHandle?: string,
   ): Promise<unknown> {
-    const session = resolveTestRuntimeSession(this.ctx);
+    const session = resolveTestRuntimeSession(this.env, this.ctx);
     await session.recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.memoryRead,
     );
@@ -123,14 +124,14 @@ export class TestMemoryBinding extends WorkerEntrypoint<
 
 /** Routine history is persistent production state; gx.test starts empty. */
 export class TestRunsBinding extends WorkerEntrypoint<
-  unknown,
+  Env,
   TestRuntimeSessionBindingProps
 > {
   async recent(
     _limit?: number,
     _execCtxHandle?: string,
   ): Promise<{ runs: unknown[] }> {
-    await resolveTestRuntimeSession(this.ctx).recordObservedEffect(
+    await resolveTestRuntimeSession(this.env, this.ctx).recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.routineRead,
     );
     return createUlTestRunsResponse();
@@ -143,11 +144,11 @@ export class TestRunsBinding extends WorkerEntrypoint<
  * There is deliberately no live fetch implementation in this binding.
  */
 export class TestOutboundBinding extends WorkerEntrypoint<
-  unknown,
+  Env,
   TestHttpBindingProps
 > {
   override async fetch(request: Request): Promise<Response> {
-    const session = resolveTestRuntimeSession(this.ctx);
+    const session = resolveTestRuntimeSession(this.env, this.ctx);
     return await resolveHttpTestRuntimeResponse({
       kind: "raw",
       request,
@@ -159,7 +160,7 @@ export class TestOutboundBinding extends WorkerEntrypoint<
 
   override async connect(_socket: Socket): Promise<void> {
     return await blockUlTestEffect(
-      resolveTestRuntimeSession(this.ctx),
+      resolveTestRuntimeSession(this.env, this.ctx),
       UL_TEST_BLOCKED_EFFECTS.outboundTcp,
     );
   }
@@ -171,7 +172,7 @@ export class TestOutboundBinding extends WorkerEntrypoint<
  * injected, logged, or returned.
  */
 export class TestCredentialBinding extends WorkerEntrypoint<
-  unknown,
+  Env,
   TestCredentialBindingProps
 > {
   async authenticatedFetch(
@@ -179,7 +180,7 @@ export class TestCredentialBinding extends WorkerEntrypoint<
     url: string,
     init?: CredentialRequestInit,
   ): Promise<Response> {
-    const session = resolveTestRuntimeSession(this.ctx);
+    const session = resolveTestRuntimeSession(this.env, this.ctx);
     let request: Request;
     try {
       const method = (init?.method ?? "GET").toUpperCase();
@@ -212,19 +213,19 @@ export class TestCredentialBinding extends WorkerEntrypoint<
 
 /** IMAP/SMTP sockets are unavailable until a protocol fixture is declared. */
 export class TestNetworkBinding extends WorkerEntrypoint<
-  unknown,
+  Env,
   TestRuntimeSessionBindingProps
 > {
   async imapFetchUnseen(..._args: unknown[]): Promise<never> {
     return await blockUlTestEffect(
-      resolveTestRuntimeSession(this.ctx),
+      resolveTestRuntimeSession(this.env, this.ctx),
       UL_TEST_BLOCKED_EFFECTS.imap,
     );
   }
 
   async smtpSend(..._args: unknown[]): Promise<never> {
     return await blockUlTestEffect(
-      resolveTestRuntimeSession(this.ctx),
+      resolveTestRuntimeSession(this.env, this.ctx),
       UL_TEST_BLOCKED_EFFECTS.smtp,
     );
   }
@@ -232,7 +233,7 @@ export class TestNetworkBinding extends WorkerEntrypoint<
 
 /** Publishing an event would mutate the live event bus, so tests reject it. */
 export class TestEventsBinding extends WorkerEntrypoint<
-  unknown,
+  Env,
   TestRuntimeSessionBindingProps
 > {
   async emit(
@@ -241,7 +242,7 @@ export class TestEventsBinding extends WorkerEntrypoint<
     _execCtxHandle?: string,
   ): Promise<never> {
     return await blockUlTestEffect(
-      resolveTestRuntimeSession(this.ctx),
+      resolveTestRuntimeSession(this.env, this.ctx),
       UL_TEST_BLOCKED_EFFECTS.eventPublish,
     );
   }
@@ -249,23 +250,23 @@ export class TestEventsBinding extends WorkerEntrypoint<
 
 /** Cross-Agent calls must never reach the live internal SELF service. */
 export class TestAppCallBinding extends WorkerEntrypoint<
-  unknown,
+  Env,
   TestRuntimeSessionBindingProps
 > {
   override async fetch(_request: Request): Promise<Response> {
     return await blockUlTestEffect(
-      resolveTestRuntimeSession(this.ctx),
+      resolveTestRuntimeSession(this.env, this.ctx),
       UL_TEST_BLOCKED_EFFECTS.agentCall,
     );
   }
 }
 
 export class TestAIBinding extends WorkerEntrypoint<
-  unknown,
+  Env,
   TestRuntimeSessionBindingProps
 > {
   async call(_request: unknown, _execCtxHandle?: string) {
-    await resolveTestRuntimeSession(this.ctx).recordObservedEffect(
+    await resolveTestRuntimeSession(this.env, this.ctx).recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.inferenceGenerate,
     );
     return createUlTestAiResponse();
@@ -273,11 +274,11 @@ export class TestAIBinding extends WorkerEntrypoint<
 }
 
 export class TestEmbedBinding extends WorkerEntrypoint<
-  unknown,
+  Env,
   TestRuntimeSessionBindingProps
 > {
   async embed(_request: unknown, _execCtxHandle?: string) {
-    await resolveTestRuntimeSession(this.ctx).recordObservedEffect(
+    await resolveTestRuntimeSession(this.env, this.ctx).recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.inferenceEmbed,
     );
     return createUlTestEmbedResponse();
@@ -285,11 +286,11 @@ export class TestEmbedBinding extends WorkerEntrypoint<
 }
 
 export class TestNotifyBinding extends WorkerEntrypoint<
-  unknown,
+  Env,
   TestRuntimeSessionBindingProps
 > {
   async notifyOwner(_request: unknown, _execCtxHandle?: string) {
-    await resolveTestRuntimeSession(this.ctx).recordObservedEffect(
+    await resolveTestRuntimeSession(this.env, this.ctx).recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.notificationOwnerWrite,
     );
     return createUlTestNotifyResponse();
@@ -325,13 +326,13 @@ function testComputeRun(
 
 /** Host-only, no-side-effect gx.test replacement for Galactic Compute. */
 export class TestComputeBinding extends WorkerEntrypoint<
-  unknown,
+  Env,
   TestRuntimeSessionBindingProps
 > {
   async call(
     request: ComputeRequest,
   ): Promise<ComputeBindingRpcResult<ComputeResult>> {
-    await resolveTestRuntimeSession(this.ctx).recordObservedEffect(
+    await resolveTestRuntimeSession(this.env, this.ctx).recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.computeExecute,
     );
     const isAsync = request?.mode === "async";
@@ -351,7 +352,7 @@ export class TestComputeBinding extends WorkerEntrypoint<
   async get(
     runId: string,
   ): Promise<ComputeBindingRpcResult<ComputeRun>> {
-    await resolveTestRuntimeSession(this.ctx).recordObservedEffect(
+    await resolveTestRuntimeSession(this.env, this.ctx).recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.computeExecute,
     );
     return {
@@ -363,7 +364,7 @@ export class TestComputeBinding extends WorkerEntrypoint<
   async cancel(
     runId: string,
   ): Promise<ComputeBindingRpcResult<ComputeRun>> {
-    await resolveTestRuntimeSession(this.ctx).recordObservedEffect(
+    await resolveTestRuntimeSession(this.env, this.ctx).recordObservedEffect(
       UL_TEST_OBSERVED_EFFECTS.computeExecute,
     );
     return {

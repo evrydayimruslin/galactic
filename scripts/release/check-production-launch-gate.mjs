@@ -29,6 +29,11 @@ const REQUIRED_RUNS = [
     category: "production",
     allowedEvents: ["push"],
   },
+  {
+    name: "Interfaces Worker Deploy",
+    category: "production",
+    allowedEvents: ["push"],
+  },
 ];
 
 function printHelp() {

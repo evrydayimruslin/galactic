@@ -3,9 +3,11 @@ name: Compute Deploy
 # Compute remains manual because a safe release crosses Supabase, the API
 # control plane, Cloudflare Queues/R2, a Container image, and two private
 # service bindings. This workflow verifies prerequisites, certifies an
-# admission-OFF rollback version, deploys the exact Compute digest, then enables
-# global admission and proves one bounded job end to end. It never creates or
-# replaces secrets, migrations, queues, buckets, or approval policy.
+# admission-OFF rollback version, deploys the exact Compute digest, and then
+# applies the immutable release policy. A preserve_off release proves the live
+# binding while leaving admission disabled; an enable_global release additionally
+# proves one bounded admitted job end to end. It never creates or replaces
+# secrets, migrations, queues, buckets, or approval policy.
 on:
   workflow_dispatch:
     inputs:
@@ -36,10 +38,18 @@ on:
         default: false
         type: boolean
       bootstrap_api_control_plane:
-        description: "First install only: deploy the API entrypoint without its outbound Compute binding. Requires zero active Compute runs."
+        description: "Deprecated safety fence; releases require an existing rollback-compatible API/Compute pair and this must remain false."
         required: true
         default: false
         type: boolean
+      admission_mode:
+        description: Must match the immutable release policy for the selected tag.
+        required: true
+        default: preserve_off
+        type: choice
+        options:
+          - preserve_off
+          - enable_global
 
 permissions:
   contents: read
@@ -53,8 +63,8 @@ jobs:
     environment: ${{ inputs.target }}
     concurrency:
       # Serialize with the API deploy and emergency-disable workflows. Every
-      # successful release ends on one globally enabled API version; any
-      # ambiguous enable or smoke result promotes the certified OFF version.
+      # successful release ends on the exact policy-selected API version; any
+      # ambiguous global enable or smoke result promotes the certified OFF version.
       group: api-${{ inputs.target }}-deploy
       cancel-in-progress: false
     env:
@@ -64,6 +74,7 @@ jobs:
       DEPLOY_CONFIRMATION: ${{ inputs.confirmation }}
       SCHEMA_RUN_ID_INPUT: ${{ inputs.schema_workflow_run_id }}
       REQUESTED_TARGET: ${{ inputs.target }}
+      REQUESTED_ADMISSION_MODE: ${{ inputs.admission_mode }}
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -100,8 +111,36 @@ jobs:
           fi
           api_ready="${{ inputs.api_control_plane_ready }}"
           bootstrap_api="${{ inputs.bootstrap_api_control_plane }}"
-          if [ "$api_ready" = "$bootstrap_api" ]; then
-            echo "Select exactly one API state: existing ComputeControlPlane ready, or first-install bootstrap." >&2
+          if [ "$api_ready" != "true" ] || [ "$bootstrap_api" != "false" ]; then
+            echo "Compute releases require an existing rollback-compatible API/Compute pair; the in-band first-install bootstrap is disabled." >&2
+            exit 1
+          fi
+          case "$REQUESTED_ADMISSION_MODE" in
+            preserve_off|enable_global) ;;
+            *)
+              echo "admission_mode must be preserve_off or enable_global." >&2
+              exit 1
+              ;;
+          esac
+
+          release_policy="$GITHUB_WORKSPACE/release-policy.json"
+          jq -e '
+            type == "object" and
+            keys == ["compute", "release_tag", "schema_version"] and
+            .schema_version == 1 and
+            (.release_tag | type == "string" and test("^v[0-9A-Za-z][0-9A-Za-z._-]*$")) and
+            (.compute | type == "object") and
+            (.compute | keys == ["admission", "artifact"]) and
+            .compute.artifact == "deploy_exact_candidate" and
+            (.compute.admission == "preserve_off" or .compute.admission == "enable_global")
+          ' "$release_policy" >/dev/null || {
+            echo "release-policy.json is missing, malformed, or requests an unsupported Compute policy." >&2
+            exit 1
+          }
+          policy_release_tag="$(jq -er '.release_tag' "$release_policy")"
+          policy_admission_mode="$(jq -er '.compute.admission' "$release_policy")"
+          if [ "$REQUESTED_ADMISSION_MODE" != "$policy_admission_mode" ]; then
+            echo "Requested admission_mode does not match release-policy.json." >&2
             exit 1
           fi
           if [ "${{ inputs.target }}" = "production" ]; then
@@ -109,10 +148,18 @@ jobs:
               refs/tags/v*) ;;
               *) echo "Production Compute releases must run from an immutable v* tag." >&2; exit 1 ;;
             esac
+            if [ "$GITHUB_REF" != "refs/tags/$policy_release_tag" ] || \
+               [ "$GITHUB_REF_NAME" != "$policy_release_tag" ]; then
+              echo "Production Compute release ref must exactly match release-policy.json." >&2
+              exit 1
+            fi
           elif [ "$GITHUB_REF" != "refs/heads/main" ]; then
             echo "Staging Compute releases must run from main." >&2
             exit 1
           fi
+          cp "$release_policy" "$EVIDENCE_DIR/release-policy.json"
+          sha256sum "$EVIDENCE_DIR/release-policy.json" \
+            > "$EVIDENCE_DIR/release-policy.sha256"
 
           expected_base='^docker\.io/cloudflare/sandbox:0\.12\.3-python@sha256:[0-9a-f]{64}$'
           if [[ ! "$SANDBOX_BASE_IMAGE" =~ $expected_base ]]; then
@@ -176,6 +223,29 @@ jobs:
             --arg migration "20260720124000_compute_artifact_retention.sql" \
             '{schema_version: 1, migration: $migration, ready_output_days: 30, owner_retained_output_bytes: 10737418240, owner_retained_output_objects: 10000, download_lease_seconds: 3600, deletion_authority: "database_reconciler", r2_age_deletion_allowed: false}' \
             > "$EVIDENCE_DIR/compute-artifact-retention-policy.json"
+
+      - name: Wait for every exact-tag production deploy before Compute mutation
+        if: inputs.target == 'production'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          wait_for_deploy() {
+            node scripts/release/wait-for-workflow-run.mjs \
+              --repository "$GITHUB_REPOSITORY" \
+              --workflow "$1" \
+              --workflow-name "$2" \
+              --sha "$GITHUB_SHA" \
+              --ref-name "$GITHUB_REF_NAME" \
+              --event push \
+              --timeout-seconds 3600 \
+              --poll-interval-seconds 20
+          }
+          wait_for_deploy supabase-production-db.yml "Supabase Production DB"
+          wait_for_deploy api-deploy.yml "API Deploy"
+          wait_for_deploy launch-web-deploy.yml "Launch Web Deploy"
+          wait_for_deploy interfaces-worker-deploy.yml "Interfaces Worker Deploy"
 
       - name: Bind release to the exact successful schema deployment
         shell: bash
@@ -307,8 +377,8 @@ jobs:
             > "$EVIDENCE_DIR/api-secret-attestation.json"
           rm -f "$secret_list"
 
-      - name: Prove the existing API is stably admission OFF before Compute rollout
-        if: inputs.api_control_plane_ready
+      - name: Capture the stable API and Compute rollback pair before mutation
+        id: capture_stable
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -316,18 +386,28 @@ jobs:
         run: |
           set -euo pipefail
           api_status="$RUNNER_TEMP/pre-rollout-api-status.json"
+          compute_status="$RUNNER_TEMP/pre-rollout-compute-status.json"
           api_version="$RUNNER_TEMP/pre-rollout-api-version.json"
+          compute_version="$RUNNER_TEMP/pre-rollout-compute-version.json"
           pushd api >/dev/null
           npx wrangler deployments status --name "$API_WORKER" --json > "$api_status"
+          npx wrangler deployments status --name "$COMPUTE_WORKER" --json > "$compute_status"
           api_version_id="$(jq -er '
             if (.versions | length) == 1 and ((.versions[0].percentage | tonumber) == 100)
             then .versions[0].version_id else error("API is not one stable 100% version") end
           ' "$api_status")"
-          [[ "$api_version_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || {
-            echo "Cloudflare returned a malformed API version ID." >&2
+          compute_version_id="$(jq -er '
+            if (.versions | length) == 1 and ((.versions[0].percentage | tonumber) == 100)
+            then .versions[0].version_id else error("Compute is not one stable 100% version") end
+          ' "$compute_status")"
+          version_id_pattern='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          if ! [[ "$api_version_id" =~ $version_id_pattern ]] || \
+             ! [[ "$compute_version_id" =~ $version_id_pattern ]]; then
+            echo "Cloudflare returned a malformed stable Worker version ID." >&2
             exit 1
-          }
+          fi
           npx wrangler versions view "$api_version_id" --name "$API_WORKER" --json > "$api_version"
+          npx wrangler versions view "$compute_version_id" --name "$COMPUTE_WORKER" --json > "$compute_version"
           popd >/dev/null
           jq -e \
             --arg id "$api_version_id" \
@@ -338,6 +418,8 @@ jobs:
                 [.resources.bindings[]? | select(.type == "plain_text" and .name == $name) | .text] as $values
                 | if ($values | length) == 1 then $values[0] else null end;
               .id == $id and
+              (.annotations["workers/tag"] as $tag |
+                ($tag | type) == "string" and ($tag | length) > 0) and
               value("COMPUTE_ENABLED") == "0" and
               value("COMPUTE_ROLLOUT_MODE") == "canary" and
               value("COMPUTE_CANARY_ALLOWLIST") == "" and
@@ -349,6 +431,64 @@ jobs:
               echo "Refusing Compute rollout: the active API is not a certified admission-OFF control plane." >&2
               exit 1
             }
+          pre_rollout_digest="$(jq -er '
+            [.resources.bindings[]? |
+              select(.type == "plain_text" and
+                .name == "COMPUTE_ENVIRONMENT_DIGEST") | .text] as $values
+            | if ($values | length) == 1 and
+                 ($values[0] | test("^sha256:[0-9a-f]{64}$"))
+              then $values[0]
+              else error("stable API has no exact Compute environment digest")
+              end
+          ' "$api_version")"
+          jq -e \
+            --arg id "$compute_version_id" \
+            --arg digest "$pre_rollout_digest" \
+            --arg api "$API_WORKER" \
+            --arg bucket "$ARTIFACT_BUCKET" '
+              .id == $id and
+              (.annotations["workers/tag"] as $tag |
+                ($tag | type) == "string" and ($tag | length) > 0) and
+              any(.resources.bindings[]?;
+                .type == "plain_text" and
+                .name == "COMPUTE_ENVIRONMENT_DIGEST" and
+                .text == $digest) and
+              any(.resources.bindings[]?;
+                .type == "service" and .name == "CONTROL_PLANE" and
+                .service == $api and .entrypoint == "ComputeControlPlane") and
+              any(.resources.bindings[]?;
+                .type == "r2_bucket" and .name == "COMPUTE_ARTIFACTS" and
+                .bucket_name == $bucket)
+            ' "$compute_version" >/dev/null || {
+              echo "Refusing Compute rollout: the stable Compute Worker does not match the admission-OFF API pair." >&2
+              exit 1
+            }
+          pre_rollout_image="registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/$IMAGE_REPOSITORY@$pre_rollout_digest"
+          pre_rollout_container_list="$RUNNER_TEMP/pre-rollout-container-list.json"
+          pushd compute-worker >/dev/null
+          npx wrangler containers list --json > "$pre_rollout_container_list"
+          popd >/dev/null
+          node compute-worker/scripts/verify-container-readiness.mjs \
+            "$pre_rollout_container_list" \
+            "$CONTAINER_APPLICATION" \
+            "$pre_rollout_image" \
+            > "$EVIDENCE_DIR/pre-rollout-container-readiness.json"
+
+          rollback_config="$GITHUB_WORKSPACE/compute-worker/.wrangler.compute-rollback.$GITHUB_RUN_ID.toml"
+          node - "compute-worker/$COMPUTE_CONFIG" "$rollback_config" \
+            "$pre_rollout_image" <<'NODE'
+          const fs = require('node:fs');
+          const [source, destination, image] = process.argv.slice(2);
+          if (!/^registry\.cloudflare\.com\/[0-9a-f]{32}\/[a-z0-9-]+@sha256:[0-9a-f]{64}$/.test(image)) {
+            throw new Error('refusing non-digest rollback image');
+          }
+          const marker = 'image = "./images/standard/Dockerfile"';
+          const input = fs.readFileSync(source, 'utf8');
+          if (input.split(marker).length !== 2) {
+            throw new Error('expected exactly one local Compute image declaration');
+          }
+          fs.writeFileSync(destination, input.replace(marker, `image = "${image}"`));
+          NODE
           jq --arg worker "$API_WORKER" '
             {schema_version: 1, worker: $worker, id, tag: .annotations["workers/tag"],
              admission_enabled: false,
@@ -358,6 +498,22 @@ jobs:
                .name == "COMPUTE_PLANE" or .name == "COMPUTE_QUEUE" or .name == "COMPUTE_ARTIFACTS"
              )]}
           ' "$api_version" > "$EVIDENCE_DIR/pre-rollout-api-version.json"
+          jq --arg worker "$COMPUTE_WORKER" --arg digest "$pre_rollout_digest" '
+            {schema_version: 1, worker: $worker, id,
+             tag: .annotations["workers/tag"], environment_digest: $digest,
+             selected_bindings: [.resources.bindings[]? | select(
+               .name == "COMPUTE_ENVIRONMENT_DIGEST" or
+               .name == "CONTROL_PLANE" or .name == "COMPUTE_ARTIFACTS"
+             )]}
+          ' "$compute_version" > "$EVIDENCE_DIR/pre-rollout-compute-version.json"
+          {
+            echo "PRE_ROLLOUT_API_VERSION_ID=$api_version_id"
+            echo "PRE_ROLLOUT_COMPUTE_VERSION_ID=$compute_version_id"
+            echo "PRE_ROLLOUT_COMPUTE_DIGEST=$pre_rollout_digest"
+            echo "PRE_ROLLOUT_CONTAINER_IMAGE=$pre_rollout_image"
+            echo "ROLLBACK_CONFIG=$rollback_config"
+          } >> "$GITHUB_ENV"
+          echo "captured=true" >> "$GITHUB_OUTPUT"
 
       - name: Bootstrap API named entrypoint for the first mutual binding
         if: inputs.bootstrap_api_control_plane
@@ -673,6 +829,7 @@ jobs:
           echo "RELEASE_CONFIG=$release_config" >> "$GITHUB_ENV"
 
       - name: Dry-run and deploy Compute Worker
+        id: deploy_compute
         shell: bash
         working-directory: compute-worker
         env:
@@ -686,6 +843,7 @@ jobs:
             --containers-rollout=none \
             --var "COMPUTE_ENVIRONMENT_DIGEST:$REMOTE_DIGEST" \
             --outdir "$EVIDENCE_DIR/compute-dry-run"
+          echo "attempted=true" >> "$GITHUB_OUTPUT"
           : > "$EVIDENCE_DIR/compute-deploy.txt"
           compute_deployed=false
           for attempt in $(seq 1 12); do
@@ -749,6 +907,7 @@ jobs:
             --var COMPUTE_ROLLOUT_MODE:canary \
             --var COMPUTE_CANARY_ALLOWLIST: \
             --outdir "$EVIDENCE_DIR/api-dry-run"
+          echo "attempted=true" >> "$GITHUB_OUTPUT"
           npx wrangler deploy \
             --config wrangler.toml "${api_env[@]}" \
             --tag "api-$GITHUB_SHA-admission-off" \
@@ -941,7 +1100,236 @@ jobs:
               .probe.observed_public_compute_code == "COMPUTE_RUN_NOT_FOUND"
             ' "$preflight_evidence" >/dev/null
 
+      - name: Finalize policy-preserving admission-OFF release evidence
+        if: inputs.admission_mode == 'preserve_off'
+        shell: bash
+        working-directory: api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          off_api_version_id="${{ steps.certify_off.outputs.off_api_version_id }}"
+          off_api_version_tag="${{ steps.certify_off.outputs.off_api_version_tag }}"
+          compute_version_id="${{ steps.certify_off.outputs.compute_version_id }}"
+          compute_version_tag="${{ steps.certify_off.outputs.compute_version_tag }}"
+          api_status="$RUNNER_TEMP/preserve-off-api-status.json"
+          compute_status="$RUNNER_TEMP/preserve-off-compute-status.json"
+          api_version="$RUNNER_TEMP/preserve-off-api-version.json"
+          compute_version="$RUNNER_TEMP/preserve-off-compute-version.json"
+
+          npx wrangler deployments status --name "$API_WORKER" --json > "$api_status"
+          npx wrangler deployments status --name "$COMPUTE_WORKER" --json > "$compute_status"
+          jq -e --arg id "$off_api_version_id" '
+            (.versions | length) == 1 and
+            ((.versions[0].percentage | tonumber) == 100) and
+            .versions[0].version_id == $id
+          ' "$api_status" >/dev/null || {
+            echo "The API drifted from the exact certified admission-OFF version." >&2
+            exit 1
+          }
+          jq -e --arg id "$compute_version_id" '
+            (.versions | length) == 1 and
+            ((.versions[0].percentage | tonumber) == 100) and
+            .versions[0].version_id == $id
+          ' "$compute_status" >/dev/null || {
+            echo "The Compute Worker drifted from the exact certified version." >&2
+            exit 1
+          }
+          npx wrangler versions view "$off_api_version_id" --name "$API_WORKER" --json > "$api_version"
+          npx wrangler versions view "$compute_version_id" --name "$COMPUTE_WORKER" --json > "$compute_version"
+
+          jq -e \
+            --arg id "$off_api_version_id" \
+            --arg tag "$off_api_version_tag" \
+            --arg digest "$REMOTE_DIGEST" \
+            --arg compute "$COMPUTE_WORKER" \
+            --arg queue "$QUEUE_NAME" \
+            --arg bucket "$ARTIFACT_BUCKET" '
+              def value($name):
+                [.resources.bindings[]?
+                  | select(.type == "plain_text" and .name == $name)
+                  | .text] as $values
+                | if ($values | length) == 1 then $values[0] else null end;
+              .id == $id and
+              .annotations["workers/tag"] == $tag and
+              value("COMPUTE_ENABLED") == "0" and
+              value("COMPUTE_ENVIRONMENT_DIGEST") == $digest and
+              value("COMPUTE_ROLLOUT_MODE") == "canary" and
+              value("COMPUTE_CANARY_ALLOWLIST") == "" and
+              any(.resources.bindings[]?; .type == "service" and .name == "COMPUTE_PLANE" and .service == $compute and .entrypoint == "ComputePlane") and
+              any(.resources.bindings[]?; .type == "queue" and .name == "COMPUTE_QUEUE" and .queue_name == $queue) and
+              any(.resources.bindings[]?; .type == "r2_bucket" and .name == "COMPUTE_ARTIFACTS" and .bucket_name == $bucket)
+            ' "$api_version" >/dev/null || {
+              echo "The live API does not preserve the exact admission-OFF candidate." >&2
+              exit 1
+            }
+          jq -e \
+            --arg id "$compute_version_id" \
+            --arg tag "$compute_version_tag" \
+            --arg digest "$REMOTE_DIGEST" \
+            --arg api "$API_WORKER" \
+            --arg bucket "$ARTIFACT_BUCKET" '
+              .id == $id and
+              .annotations["workers/tag"] == $tag and
+              any(.resources.bindings[]?;
+                .type == "plain_text" and
+                .name == "COMPUTE_ENVIRONMENT_DIGEST" and
+                .text == $digest) and
+              any(.resources.bindings[]?; .type == "service" and .name == "CONTROL_PLANE" and .service == $api and .entrypoint == "ComputeControlPlane") and
+              any(.resources.bindings[]?; .type == "r2_bucket" and .name == "COMPUTE_ARTIFACTS" and .bucket_name == $bucket)
+            ' "$compute_version" >/dev/null || {
+              echo "The live Compute Worker does not preserve the exact released digest and bindings." >&2
+              exit 1
+            }
+
+          policy_before_file="pre-rollout-api-version.json"
+          policy_after_file="active-preserve-off-api-version.json"
+          active_compute_file="active-preserve-off-compute-version.json"
+          preflight_file="compute-preflight-$REQUESTED_TARGET.json"
+          policy_file="release-policy.json"
+          jq -e '
+            def value($name):
+              [.selected_bindings[]?
+                | select(.type == "plain_text" and .name == $name)
+                | .text] as $values
+              | if ($values | length) == 1 then $values[0] else null end;
+            .schema_version == 1 and
+            .admission_enabled == false and
+            value("COMPUTE_ENABLED") == "0" and
+            value("COMPUTE_ROLLOUT_MODE") == "canary" and
+            value("COMPUTE_CANARY_ALLOWLIST") == "" and
+            (value("COMPUTE_ENVIRONMENT_DIGEST") | test("^sha256:[0-9a-f]{64}$"))
+          ' "$EVIDENCE_DIR/$policy_before_file" >/dev/null || {
+            echo "The pre-rollout evidence does not prove admission-OFF canary policy." >&2
+            exit 1
+          }
+          jq --arg worker "$API_WORKER" '
+            {schema_version: 1, worker: $worker, id,
+             tag: .annotations["workers/tag"], admission_enabled: false,
+             rollout_mode: "canary", canary_allowlist: [],
+             selected_bindings: [.resources.bindings[]? | select(
+               .name == "COMPUTE_ENABLED" or .name == "COMPUTE_ENVIRONMENT_DIGEST" or
+               .name == "COMPUTE_ROLLOUT_MODE" or .name == "COMPUTE_CANARY_ALLOWLIST" or
+               .name == "COMPUTE_PLANE" or .name == "COMPUTE_QUEUE" or
+               .name == "COMPUTE_ARTIFACTS"
+             )]}
+          ' "$api_version" > "$EVIDENCE_DIR/$policy_after_file"
+          jq --arg worker "$COMPUTE_WORKER" --arg digest "$REMOTE_DIGEST" '
+            {schema_version: 1, worker: $worker, id,
+             tag: .annotations["workers/tag"], environment_digest: $digest,
+             selected_bindings: [.resources.bindings[]? | select(
+               .name == "COMPUTE_ENVIRONMENT_DIGEST" or
+               .name == "CONTROL_PLANE" or .name == "COMPUTE_ARTIFACTS"
+             )]}
+          ' "$compute_version" > "$EVIDENCE_DIR/$active_compute_file"
+
+          policy_before_sha256="$(sha256sum "$EVIDENCE_DIR/$policy_before_file" | cut -d ' ' -f 1)"
+          policy_after_sha256="$(sha256sum "$EVIDENCE_DIR/$policy_after_file" | cut -d ' ' -f 1)"
+          active_compute_sha256="$(sha256sum "$EVIDENCE_DIR/$active_compute_file" | cut -d ' ' -f 1)"
+          preflight_sha256="$(sha256sum "$EVIDENCE_DIR/$preflight_file" | cut -d ' ' -f 1)"
+          policy_sha256="$(sha256sum "$EVIDENCE_DIR/$policy_file" | cut -d ' ' -f 1)"
+          policy_artifact="$(jq -er '.compute.artifact' "$EVIDENCE_DIR/$policy_file")"
+          policy_admission="$(jq -er '.compute.admission' "$EVIDENCE_DIR/$policy_file")"
+          if [ "$policy_admission" != "preserve_off" ]; then
+            echo "Release policy changed after validation." >&2
+            exit 1
+          fi
+          for unexpected in \
+            active-global-api-version.json \
+            compute-admitted-"$REQUESTED_TARGET".json \
+            post-smoke-live-fence.json; do
+            if [ -e "$EVIDENCE_DIR/$unexpected" ]; then
+              echo "Admission-OFF evidence unexpectedly contains a global/admitted claim: $unexpected" >&2
+              exit 1
+            fi
+          done
+
+          jq \
+            --arg workflow_run_id "$GITHUB_RUN_ID" \
+            --arg active_api_version_id "$off_api_version_id" \
+            --arg active_api_version_tag "$off_api_version_tag" \
+            --arg compute_version_id "$compute_version_id" \
+            --arg compute_version_tag "$compute_version_tag" \
+            --arg policy_before_file "$policy_before_file" \
+            --arg policy_before_sha256 "$policy_before_sha256" \
+            --arg policy_after_file "$policy_after_file" \
+            --arg policy_after_sha256 "$policy_after_sha256" \
+            --arg active_compute_file "$active_compute_file" \
+            --arg active_compute_sha256 "$active_compute_sha256" \
+            --arg preflight_file "$preflight_file" \
+            --arg preflight_sha256 "$preflight_sha256" \
+            --arg policy_file "$policy_file" \
+            --arg policy_sha256 "$policy_sha256" \
+            --arg policy_artifact "$policy_artifact" \
+            --arg policy_admission "$policy_admission" \
+            --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+              .schema_version = 6 |
+              .release_mode = "policy_preserved" |
+              .admission_mode = "preserve_off" |
+              .workflow_run_id = $workflow_run_id |
+              .admission_enabled = false |
+              .rollout_mode = "canary" |
+              .canary_allowlist = [] |
+              .active_api = {
+                worker: .certified_admission_off_api.worker,
+                version_id: $active_api_version_id,
+                version_tag: $active_api_version_tag,
+                enabled: false,
+                rollout_mode: "canary",
+                canary_allowlist: []
+              } |
+              .active_compute_worker = {
+                worker: .active_compute_worker.worker,
+                version_id: $compute_version_id,
+                version_tag: $compute_version_tag,
+                environment_digest: .environment_digest,
+                evidence_file: $active_compute_file,
+                sha256: $active_compute_sha256
+              } |
+              .policy_before = {
+                evidence_file: $policy_before_file,
+                sha256: $policy_before_sha256,
+                admission_enabled: false,
+                rollout_mode: "canary",
+                canary_allowlist: []
+              } |
+              .policy_after = {
+                evidence_file: $policy_after_file,
+                sha256: $policy_after_sha256,
+                admission_enabled: false,
+                rollout_mode: "canary",
+                canary_allowlist: []
+              } |
+              .binding_preflight = {
+                evidence_file: $preflight_file,
+                sha256: $preflight_sha256,
+                verified: true
+              } |
+              .release_policy = {
+                evidence_file: $policy_file,
+                sha256: $policy_sha256,
+                artifact: $policy_artifact,
+                admission: $policy_admission
+              } |
+              .generated_at = $generated_at
+            ' "$EVIDENCE_DIR/certified-off-release.json" \
+            > "$EVIDENCE_DIR/release.json"
+
+          {
+            echo "## Galactic Compute ${{ inputs.target }} release"
+            echo
+            echo "- Image: \`$REMOTE_IMAGE\`"
+            echo "- API environment digest: \`$REMOTE_DIGEST\`"
+            echo "- Active admission-OFF API: \`$off_api_version_id\` (\`$off_api_version_tag\`)"
+            echo "- Active Compute Worker: \`$compute_version_id\` (\`$compute_version_tag\`)"
+            echo "- Admission policy is preserved as **OFF**, canary mode, with an empty allowlist."
+            echo "- Admission-off binding/DB preflight passed; evidence SHA-256: \`$preflight_sha256\`."
+            echo "- No globally admitted Compute job was requested or claimed."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Typecheck and dry-run global admission
+        if: inputs.admission_mode == 'enable_global'
         shell: bash
         working-directory: api
         run: |
@@ -961,6 +1349,7 @@ jobs:
             --outdir "$EVIDENCE_DIR/api-global-dry-run"
 
       - name: Enable global admission from the exact certified pair
+        if: inputs.admission_mode == 'enable_global'
         id: enable_global
         shell: bash
         working-directory: api
@@ -1008,6 +1397,7 @@ jobs:
             | tee "$EVIDENCE_DIR/api-global-deploy.txt"
 
       - name: Verify exact global admission postcondition
+        if: inputs.admission_mode == 'enable_global'
         id: verify_global
         shell: bash
         working-directory: api
@@ -1105,6 +1495,7 @@ jobs:
           echo "api_version_tag=api-$GITHUB_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Run one bounded admitted Compute job
+        if: inputs.admission_mode == 'enable_global'
         id: admitted_smoke
         shell: bash
         env:
@@ -1128,6 +1519,7 @@ jobs:
           }
 
       - name: Fence exact live versions after admitted smoke
+        if: inputs.admission_mode == 'enable_global'
         id: post_smoke_fence
         shell: bash
         working-directory: api
@@ -1207,104 +1599,8 @@ jobs:
               compute: {version_id: $compute_version_id, version_tag: $compute_version_tag}}' \
             > "$EVIDENCE_DIR/post-smoke-live-fence.json"
 
-      - name: Promote certified OFF version after any ambiguous global enable
-        if: >-
-          ${{
-            always() &&
-            steps.enable_global.outputs.attempted == 'true' &&
-            (
-              steps.enable_global.outcome != 'success' ||
-              steps.verify_global.outcome != 'success' ||
-              steps.admitted_smoke.outcome != 'success' ||
-              steps.post_smoke_fence.outcome != 'success'
-            )
-          }}
-        shell: bash
-        working-directory: api
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          set -euo pipefail
-          off_api_version_id="${{ steps.certify_off.outputs.off_api_version_id }}"
-          off_api_version_tag="${{ steps.certify_off.outputs.off_api_version_tag }}"
-          compute_version_id="${{ steps.certify_off.outputs.compute_version_id }}"
-          api_env=()
-          if [ "$REQUESTED_TARGET" = "staging" ]; then api_env=(--env staging); fi
-          npx wrangler versions deploy "$off_api_version_id@100%" \
-            --config wrangler.toml "${api_env[@]}" \
-            --name "$API_WORKER" \
-            --yes \
-            --message "Compensating Compute release rollback run $GITHUB_RUN_ID" \
-            | tee "$EVIDENCE_DIR/api-compensating-off-promotion.txt"
-
-          api_status="$RUNNER_TEMP/compensating-api-status.json"
-          compute_status="$RUNNER_TEMP/compensating-compute-status.json"
-          api_version="$RUNNER_TEMP/compensating-api-version.json"
-          compute_version="$RUNNER_TEMP/compensating-compute-version.json"
-          npx wrangler deployments status --name "$API_WORKER" --json > "$api_status"
-          npx wrangler deployments status --name "$COMPUTE_WORKER" --json > "$compute_status"
-          jq -e --arg id "$off_api_version_id" '
-            (.versions | length) == 1 and
-            ((.versions[0].percentage | tonumber) == 100) and
-            .versions[0].version_id == $id
-          ' "$api_status" >/dev/null
-          jq -e --arg id "$compute_version_id" '
-            (.versions | length) == 1 and
-            ((.versions[0].percentage | tonumber) == 100) and
-            .versions[0].version_id == $id
-          ' "$compute_status" >/dev/null
-          npx wrangler versions view "$off_api_version_id" --name "$API_WORKER" --json > "$api_version"
-          npx wrangler versions view "$compute_version_id" --name "$COMPUTE_WORKER" --json > "$compute_version"
-          jq -e \
-            --arg id "$off_api_version_id" \
-            --arg tag "$off_api_version_tag" \
-            --arg digest "$REMOTE_DIGEST" \
-            --arg compute "$COMPUTE_WORKER" \
-            --arg queue "$QUEUE_NAME" \
-            --arg bucket "$ARTIFACT_BUCKET" '
-              def value($name):
-                [.resources.bindings[]?
-                  | select(.type == "plain_text" and .name == $name)
-                  | .text] as $values
-                | if ($values | length) == 1 then $values[0] else null end;
-              .id == $id and
-              .annotations["workers/tag"] == $tag and
-              value("COMPUTE_ENABLED") == "0" and
-              value("COMPUTE_ENVIRONMENT_DIGEST") == $digest and
-              value("COMPUTE_ROLLOUT_MODE") == "canary" and
-              value("COMPUTE_CANARY_ALLOWLIST") == "" and
-              any(.resources.bindings[]?; .type == "service" and .name == "COMPUTE_PLANE" and .service == $compute and .entrypoint == "ComputePlane") and
-              any(.resources.bindings[]?; .type == "queue" and .name == "COMPUTE_QUEUE" and .queue_name == $queue) and
-              any(.resources.bindings[]?; .type == "r2_bucket" and .name == "COMPUTE_ARTIFACTS" and .bucket_name == $bucket)
-            ' "$api_version" >/dev/null || {
-              echo "CRITICAL: certified admission-OFF promotion readback failed." >&2
-              exit 1
-            }
-          jq -e \
-            --arg id "$compute_version_id" \
-            --arg tag "compute-$GITHUB_SHA" \
-            --arg digest "$REMOTE_DIGEST" '
-              .id == $id and .annotations["workers/tag"] == $tag and
-              any(.resources.bindings[]?;
-                .type == "plain_text" and
-                .name == "COMPUTE_ENVIRONMENT_DIGEST" and
-                .text == $digest)
-            ' "$compute_version" >/dev/null
-          jq -n \
-            --arg api_version_id "$off_api_version_id" \
-            --arg api_version_tag "$off_api_version_tag" \
-            --arg compute_version_id "$compute_version_id" \
-            --arg compute_version_tag "compute-$GITHUB_SHA" \
-            --arg digest "$REMOTE_DIGEST" \
-            '{schema_version: 1, compensated: true, admission_enabled: false,
-              rollout_mode: "canary", canary_allowlist: [],
-              environment_digest: $digest,
-              api: {version_id: $api_version_id, version_tag: $api_version_tag},
-              compute: {version_id: $compute_version_id, version_tag: $compute_version_tag}}' \
-            > "$EVIDENCE_DIR/compensating-off-promotion.json"
-
       - name: Finalize globally enabled release evidence
+        if: inputs.admission_mode == 'enable_global'
         shell: bash
         run: |
           set -euo pipefail
@@ -1380,8 +1676,183 @@ jobs:
             echo "- Admission is **globally enabled** with an empty canary allowlist."
             echo "- Admission-off binding/DB preflight passed; evidence SHA-256: \`$preflight_sha256\`."
             echo "- One bounded admitted job reached a verified terminal result; evidence SHA-256: \`$smoke_sha256\`."
-            echo "- Any ambiguous enable, readback, or smoke result promotes the certified OFF API version."
+            echo "- Any post-mutation failure restores and verifies the pre-rollout stable API/Compute pair."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore the stable API and Compute pair after any release failure
+        id: compensate_stable_pair
+        if: >-
+          ${{
+            always() &&
+            failure() &&
+            steps.capture_stable.outputs.captured == 'true' &&
+            (
+              steps.deploy_compute.outputs.attempted == 'true' ||
+              steps.certify_off.outputs.attempted == 'true' ||
+              steps.enable_global.outputs.attempted == 'true'
+            )
+          }}
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          echo "attempted=true" >> "$GITHUB_OUTPUT"
+          api_env=()
+          if [ "$REQUESTED_TARGET" = "staging" ]; then api_env=(--env staging); fi
+
+          pushd api >/dev/null
+          npx wrangler versions deploy "$PRE_ROLLOUT_API_VERSION_ID@100%" \
+            --config wrangler.toml "${api_env[@]}" \
+            --name "$API_WORKER" \
+            --yes \
+            --message "Compensating stable-pair API restore run $GITHUB_RUN_ID" \
+            | tee "$EVIDENCE_DIR/compensating-stable-api-promotion.txt"
+          popd >/dev/null
+
+          pushd compute-worker >/dev/null
+          : > "$EVIDENCE_DIR/compensating-container-rollout.txt"
+          container_rollback_deployed=false
+          for attempt in $(seq 1 12); do
+            if npx wrangler deploy \
+              --config "$ROLLBACK_CONFIG" \
+              --containers-rollout=gradual \
+              --tag "compute-compensation-$GITHUB_RUN_ID" \
+              --var "COMPUTE_ENVIRONMENT_DIGEST:$PRE_ROLLOUT_COMPUTE_DIGEST" \
+              2>&1 | tee -a "$EVIDENCE_DIR/compensating-container-rollout.txt"; then
+              container_rollback_deployed=true
+              break
+            fi
+            if [ "$attempt" -lt 12 ]; then sleep 15; fi
+          done
+          if [ "$container_rollback_deployed" != "true" ]; then
+            echo "Compensating Container rollout did not complete." >&2
+            exit 1
+          fi
+
+          compensating_container_list="$RUNNER_TEMP/compensating-container-list.json"
+          compensating_container_error="$RUNNER_TEMP/compensating-container-readiness.err"
+          compensating_container_ready=false
+          for attempt in $(seq 1 90); do
+            if npx wrangler containers list --json \
+                > "$compensating_container_list" && \
+              node scripts/verify-container-readiness.mjs \
+                "$compensating_container_list" \
+                "$CONTAINER_APPLICATION" \
+                "$PRE_ROLLOUT_CONTAINER_IMAGE" \
+                > "$EVIDENCE_DIR/compensating-container-readiness.json" \
+                2> "$compensating_container_error"; then
+              compensating_container_ready=true
+              break
+            fi
+            if [ "$attempt" -lt 90 ]; then sleep 10; fi
+          done
+          if [ "$compensating_container_ready" != "true" ]; then
+            cat "$compensating_container_error" >&2 || true
+            echo "Compensating Container did not return to the exact stable image." >&2
+            exit 1
+          fi
+
+          npx wrangler versions deploy "$PRE_ROLLOUT_COMPUTE_VERSION_ID@100%" \
+            --config "$COMPUTE_CONFIG" \
+            --name "$COMPUTE_WORKER" \
+            --yes \
+            --message "Compensating stable-pair Compute restore run $GITHUB_RUN_ID" \
+            | tee "$EVIDENCE_DIR/compensating-stable-compute-promotion.txt"
+          popd >/dev/null
+
+          api_status="$RUNNER_TEMP/compensating-api-status.json"
+          compute_status="$RUNNER_TEMP/compensating-compute-status.json"
+          api_version="$RUNNER_TEMP/compensating-api-version.json"
+          compute_version="$RUNNER_TEMP/compensating-compute-version.json"
+          pushd api >/dev/null
+          npx wrangler deployments status --name "$API_WORKER" --json > "$api_status"
+          npx wrangler deployments status --name "$COMPUTE_WORKER" --json > "$compute_status"
+          npx wrangler versions view "$PRE_ROLLOUT_API_VERSION_ID" \
+            --name "$API_WORKER" --json > "$api_version"
+          npx wrangler versions view "$PRE_ROLLOUT_COMPUTE_VERSION_ID" \
+            --name "$COMPUTE_WORKER" --json > "$compute_version"
+          popd >/dev/null
+
+          pushd compute-worker >/dev/null
+          npx wrangler containers list --json \
+            > "$compensating_container_list"
+          node scripts/verify-container-readiness.mjs \
+            "$compensating_container_list" \
+            "$CONTAINER_APPLICATION" \
+            "$PRE_ROLLOUT_CONTAINER_IMAGE" \
+            > "$EVIDENCE_DIR/compensating-container-readiness.json"
+          popd >/dev/null
+
+          jq -e --arg id "$PRE_ROLLOUT_API_VERSION_ID" '
+            (.versions | length) == 1 and
+            ((.versions[0].percentage | tonumber) == 100) and
+            .versions[0].version_id == $id
+          ' "$api_status" >/dev/null
+          jq -e --arg id "$PRE_ROLLOUT_COMPUTE_VERSION_ID" '
+            (.versions | length) == 1 and
+            ((.versions[0].percentage | tonumber) == 100) and
+            .versions[0].version_id == $id
+          ' "$compute_status" >/dev/null
+
+          pre_api_tag="$(jq -er '.tag' "$EVIDENCE_DIR/pre-rollout-api-version.json")"
+          pre_compute_tag="$(jq -er '.tag' "$EVIDENCE_DIR/pre-rollout-compute-version.json")"
+          jq -e \
+            --arg id "$PRE_ROLLOUT_API_VERSION_ID" \
+            --arg tag "$pre_api_tag" \
+            --arg digest "$PRE_ROLLOUT_COMPUTE_DIGEST" \
+            --arg compute "$COMPUTE_WORKER" \
+            --arg queue "$QUEUE_NAME" \
+            --arg bucket "$ARTIFACT_BUCKET" '
+              def value($name):
+                [.resources.bindings[]? |
+                  select(.type == "plain_text" and .name == $name) | .text] as $values
+                | if ($values | length) == 1 then $values[0] else null end;
+              .id == $id and .annotations["workers/tag"] == $tag and
+              value("COMPUTE_ENABLED") == "0" and
+              value("COMPUTE_ENVIRONMENT_DIGEST") == $digest and
+              value("COMPUTE_ROLLOUT_MODE") == "canary" and
+              value("COMPUTE_CANARY_ALLOWLIST") == "" and
+              any(.resources.bindings[]?; .type == "service" and
+                .name == "COMPUTE_PLANE" and .service == $compute and
+                .entrypoint == "ComputePlane") and
+              any(.resources.bindings[]?; .type == "queue" and
+                .name == "COMPUTE_QUEUE" and .queue_name == $queue) and
+              any(.resources.bindings[]?; .type == "r2_bucket" and
+                .name == "COMPUTE_ARTIFACTS" and .bucket_name == $bucket)
+            ' "$api_version" >/dev/null
+          jq -e \
+            --arg id "$PRE_ROLLOUT_COMPUTE_VERSION_ID" \
+            --arg tag "$pre_compute_tag" \
+            --arg digest "$PRE_ROLLOUT_COMPUTE_DIGEST" \
+            --arg api "$API_WORKER" \
+            --arg bucket "$ARTIFACT_BUCKET" '
+              .id == $id and .annotations["workers/tag"] == $tag and
+              any(.resources.bindings[]?; .type == "plain_text" and
+                .name == "COMPUTE_ENVIRONMENT_DIGEST" and .text == $digest) and
+              any(.resources.bindings[]?; .type == "service" and
+                .name == "CONTROL_PLANE" and .service == $api and
+                .entrypoint == "ComputeControlPlane") and
+              any(.resources.bindings[]?; .type == "r2_bucket" and
+                .name == "COMPUTE_ARTIFACTS" and .bucket_name == $bucket)
+            ' "$compute_version" >/dev/null
+          jq -n \
+            --arg api_version_id "$PRE_ROLLOUT_API_VERSION_ID" \
+            --arg api_version_tag "$pre_api_tag" \
+            --arg compute_version_id "$PRE_ROLLOUT_COMPUTE_VERSION_ID" \
+            --arg compute_version_tag "$pre_compute_tag" \
+            --arg digest "$PRE_ROLLOUT_COMPUTE_DIGEST" \
+            --slurpfile container \
+              "$EVIDENCE_DIR/compensating-container-readiness.json" \
+            '{schema_version: 1, compensated: true, verified: true,
+              admission_enabled: false, rollout_mode: "canary",
+              canary_allowlist: [], environment_digest: $digest,
+              api: {version_id: $api_version_id, version_tag: $api_version_tag},
+              compute: {version_id: $compute_version_id,
+                version_tag: $compute_version_tag},
+              container: $container[0]}' \
+            > "$EVIDENCE_DIR/compensating-stable-pair.json"
 
       - name: Remove temporary release config
         if: always()
@@ -1389,6 +1860,9 @@ jobs:
         run: |
           if [ -n "${RELEASE_CONFIG:-}" ] && [ -f "compute-worker/$RELEASE_CONFIG" ]; then
             rm "compute-worker/$RELEASE_CONFIG"
+          fi
+          if [ -n "${ROLLBACK_CONFIG:-}" ] && [ -f "$ROLLBACK_CONFIG" ]; then
+            rm "$ROLLBACK_CONFIG"
           fi
           if [ -f "api/.wrangler.compute-bootstrap.toml" ]; then
             rm "api/.wrangler.compute-bootstrap.toml"
@@ -1399,12 +1873,19 @@ jobs:
             "$RUNNER_TEMP/compute-schema-jobs.json" \
             "$RUNNER_TEMP/pre-rollout-api-status.json" \
             "$RUNNER_TEMP/pre-rollout-api-version.json" \
+            "$RUNNER_TEMP/pre-rollout-compute-status.json" \
+            "$RUNNER_TEMP/pre-rollout-compute-version.json" \
+            "$RUNNER_TEMP/pre-rollout-container-list.json" \
             "$RUNNER_TEMP/compute-containers-list.json" \
             "$RUNNER_TEMP/compute-container-readiness.err" \
             "$RUNNER_TEMP/compute-release-api-status.json" \
             "$RUNNER_TEMP/compute-release-compute-status.json" \
             "$RUNNER_TEMP/compute-release-api-version.json" \
             "$RUNNER_TEMP/compute-release-compute-version.json" \
+            "$RUNNER_TEMP/preserve-off-api-status.json" \
+            "$RUNNER_TEMP/preserve-off-compute-status.json" \
+            "$RUNNER_TEMP/preserve-off-api-version.json" \
+            "$RUNNER_TEMP/preserve-off-compute-version.json" \
             "$RUNNER_TEMP/pre-global-api-status.json" \
             "$RUNNER_TEMP/pre-global-compute-status.json" \
             "$RUNNER_TEMP/post-global-api-status.json" \
@@ -1419,7 +1900,9 @@ jobs:
             "$RUNNER_TEMP/compensating-api-status.json" \
             "$RUNNER_TEMP/compensating-compute-status.json" \
             "$RUNNER_TEMP/compensating-api-version.json" \
-            "$RUNNER_TEMP/compensating-compute-version.json"
+            "$RUNNER_TEMP/compensating-compute-version.json" \
+            "$RUNNER_TEMP/compensating-container-list.json" \
+            "$RUNNER_TEMP/compensating-container-readiness.err"
           rm -rf -- "$RUNNER_TEMP/compute-sbom-docker"
 
       - name: Upload immutable release evidence

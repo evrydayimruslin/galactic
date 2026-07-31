@@ -81,6 +81,9 @@ function installHarness(): {
 
   globalThis.__env = {
     LOADER: loader,
+    GX_TEST_SESSION: {
+      getByName: (name: string) => getTestSession(name),
+    },
     CODE_CACHE: {
       get: () => Promise.resolve("export const noop = 1;"),
     },
@@ -90,9 +93,6 @@ function installHarness(): {
   } as any;
   globalThis.__ctx = {
     exports: {
-      GxTestSession: {
-        getByName: (name: string) => getTestSession(name),
-      },
       FixtureDatabaseBinding: () => ({}),
       TestOutboundBinding: () => ({
         fetch: () => Promise.reject(new Error("gx.test outbound blocked")),

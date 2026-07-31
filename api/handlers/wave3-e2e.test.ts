@@ -396,6 +396,9 @@ class Wave3Harness {
       R2_BUCKET: this.r2 as unknown as R2Bucket,
       CODE_CACHE: this.codeCache as unknown as KVNamespace,
       LOADER: this.createLoader(),
+      GX_TEST_SESSION: {
+        getByName: (name: string) => getTestSession(name),
+      },
       SELF: { fetch: this.originalFetch },
     } as typeof globalThis.__env;
     globalThis.__ctx = {
@@ -471,9 +474,6 @@ class Wave3Harness {
           batch: async () => [],
           exec: async () => ({ success: true, count: 0 }),
         }),
-        GxTestSession: {
-          getByName: (name: string) => getTestSession(name),
-        },
         TestAIBinding: (
           { props }: { props: { sessionName: string } },
         ) => ({
