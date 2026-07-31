@@ -10,6 +10,7 @@ import type {
   VersionTestQualificationMetadata,
 } from "../../shared/types/index.ts";
 import {
+  BuilderHandoffCandidateArchiveError,
   type BuilderHandoffCandidateArchiveExpectedBinding,
   builderHandoffCandidateArchiveKey,
   type BuilderHandoffCandidateArchiveStore,
@@ -504,6 +505,42 @@ Deno.test({
       Error,
       "descriptor paths are not unique",
     );
+  },
+});
+
+Deno.test({
+  name:
+    "candidate archive loader: malformed compiled permissions fail as an archive error",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const store = new MemoryCandidateArchiveStore();
+    const fixture = await qualifiedFixture();
+    const receipt = await persistBuilderHandoffCandidateArchive(
+      store,
+      fixture.input,
+    );
+    const rebound = await rebindMutatedManifest(
+      store,
+      expectedBinding(fixture, receipt),
+      (manifest) => {
+        const compiled = manifest.compiled_manifest as Record<string, unknown>;
+        compiled.permissions = {
+          unexpected: "database-password=must-not-be-projected",
+        };
+      },
+      false,
+    );
+
+    const error = await assertRejects(
+      () => loadVerifiedBuilderHandoffCandidateArchiveManifest(store, rebound),
+      BuilderHandoffCandidateArchiveError,
+    );
+    assertEquals(
+      error.message,
+      "Candidate archive compiled manifest permissions are invalid",
+    );
+    assert(!error.message.includes("database-password"));
   },
 });
 

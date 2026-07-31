@@ -21,6 +21,7 @@ import {
   BUILDER_HANDOFF_RECENT_PROMOTED_LIMIT,
   BUILDER_HANDOFF_RECENT_PROMOTED_WINDOW_MS,
   BUILDER_HANDOFF_UPLOADED_CANDIDATE_LIMIT,
+  BuilderHandoffSessionError,
   type BuilderHandoffSessionRecord,
   getBuilderHandoffSessionForOwner,
   listBuilderHandoffCandidateSessions,
@@ -89,7 +90,9 @@ interface CandidateTargetAppRow {
   visibility: string | null;
   current_version: string | null;
   manifest: unknown;
-  version_metadata: VersionMetadata[] | null;
+  // PostgREST is an untrusted boundary. Legacy rows can contain a JSON object
+  // here even though current writers persist an array.
+  version_metadata: unknown;
   deleted_at: string | null;
   release_generation?: number | string | null;
 }
@@ -849,7 +852,12 @@ async function currentBaseStateDigest(
   row: CandidateTargetAppRow,
 ): Promise<string | null> {
   if (!row.current_version) return null;
-  const authoritative = [...(row.version_metadata || [])].reverse().find(
+  const versionMetadata = Array.isArray(row.version_metadata)
+    ? row.version_metadata.filter((entry): entry is VersionMetadata =>
+      Boolean(entry && typeof entry === "object")
+    )
+    : [];
+  const authoritative = [...versionMetadata].reverse().find(
     (entry) => entry?.version === row.current_version,
   );
   const proof = authoritative
@@ -1036,8 +1044,9 @@ async function invitationForSession(
     status = "blocked";
     blocker = {
       code: deployment.errorCode || "candidate_deployment_blocked",
-      message: deployment.errorMessage ||
-        "This deployment needs reconciliation before it can continue.",
+      // The durable message is an operator diagnostic and can originate from
+      // infrastructure failures. Never project it into an owner response.
+      message: "This deployment needs reconciliation before it can continue.",
     };
   }
   const reviewRevision = await candidateReviewRevision({
@@ -1095,12 +1104,24 @@ export async function listBuilderHandoffCandidateInvitations(
 ): Promise<LaunchCandidateInvitation[]> {
   const normalizedOwnerId = requireUuid(ownerId, "ownerId");
   const deps = dependencies(options);
-  const sessions = await deps.listSessions(normalizedOwnerId, {
-    fetchFn: deps.fetchFn,
-    supabaseUrl: options.supabaseUrl,
-    serviceRoleKey: options.serviceRoleKey,
-    now: options.now,
-  });
+  let sessions: BuilderHandoffSessionRecord[];
+  try {
+    sessions = await deps.listSessions(normalizedOwnerId, {
+      fetchFn: deps.fetchFn,
+      supabaseUrl: options.supabaseUrl,
+      serviceRoleKey: options.serviceRoleKey,
+      now: options.now,
+    });
+  } catch (error) {
+    if (error instanceof BuilderHandoffSessionError) {
+      throw new BuilderHandoffDeploymentError(
+        "service_unavailable",
+        "Candidate invitations are temporarily unavailable.",
+        503,
+      );
+    }
+    throw error;
+  }
   if (
     sessions.some((session) =>
       session.status !== "uploaded" && session.status !== "promoted"
@@ -1133,7 +1154,21 @@ export async function listBuilderHandoffCandidateInvitations(
     if (result.status === "fulfilled") return result.value.invitation;
     const session = candidateSessions[index];
     const error = result.reason;
-    if (!(error instanceof BuilderHandoffDeploymentError)) throw error;
+    const blocker = error instanceof BuilderHandoffDeploymentError
+      ? { code: error.code, message: error.message }
+      : {
+        code: "candidate_details_unavailable",
+        message: "Candidate details are temporarily unavailable.",
+      };
+    if (!(error instanceof BuilderHandoffDeploymentError)) {
+      // Never log the thrown value: archive/storage failures may contain
+      // credential-bearing infrastructure details. The immutable handoff ID is
+      // sufficient to correlate the failed projection in Workers Logs.
+      console.error(
+        "[LAUNCH] Candidate invitation projection failed:",
+        session.id,
+      );
+    }
     return {
       id: session.id,
       handoffId: session.id,
@@ -1202,7 +1237,7 @@ export async function listBuilderHandoffCandidateInvitations(
         },
       },
       deploymentReady: false,
-      blocker: { code: error.code, message: error.message },
+      blocker,
       deployment: null,
       reviewRevision: `${REVIEW_REVISION_PREFIX}${"0".repeat(64)}`,
       createdAt: session.createdAt,
@@ -1497,9 +1532,8 @@ async function bestEffortFail(
           : "failed",
         phase,
         error_code: errorCode,
-        error_message: error instanceof Error
-          ? error.message.slice(0, 500)
-          : "Candidate deployment failed",
+        error_message: known?.message.slice(0, 500) ??
+          "Candidate deployment failed unexpectedly",
       },
       options,
       deps,
@@ -1976,7 +2010,7 @@ export async function deployBuilderHandoffCandidate(
       if (d1.status !== "ready" || d1.error) {
         throw new BuilderHandoffDeploymentError(
           "repair_required",
-          `Database setup failed: ${d1.error || "unknown migration error"}`,
+          "Database setup failed.",
           409,
         );
       }
@@ -2117,7 +2151,7 @@ export async function deployBuilderHandoffCandidate(
       phase === "claimed" || phase === "archive_verified"
         ? "materialization_failed"
         : "repair_required",
-      error instanceof Error ? error.message : "Candidate deployment failed",
+      "Candidate deployment failed unexpectedly",
       phase === "claimed" || phase === "archive_verified" ? 503 : 409,
     );
   }

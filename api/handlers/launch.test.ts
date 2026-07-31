@@ -272,6 +272,38 @@ Deno.test("launch candidates: account-session list and owner-private misses are 
   );
 });
 
+Deno.test("launch candidates: persistence failures return a private sanitized 503", async () => {
+  const response = await withLaunchEnv(
+    () =>
+      handleLaunch(
+        new Request("https://ultralight.test/api/launch/candidates", {
+          headers: { Authorization: "Bearer browser-session-token" },
+        }),
+        {
+          candidates: {
+            list: () =>
+              Promise.reject(
+                new BuilderHandoffDeploymentError(
+                  "service_unavailable",
+                  "Candidate invitations are temporarily unavailable.",
+                  503,
+                ),
+              ),
+            subscription: () => Promise.resolve(candidateRouteSubscription()),
+          },
+        },
+      ),
+    agentHomeFetchMock(),
+  );
+
+  assertEquals(response.status, 503);
+  assertEquals(response.headers.get("cache-control"), "private, no-store");
+  assertEquals(await response.json(), {
+    error: "Candidate invitations are temporarily unavailable.",
+    code: "service_unavailable",
+  });
+});
+
 Deno.test("launch candidates: Deploy strictly parses reviewed identity and checkout polling stays owner-scoped", async () => {
   let deployInput: Record<string, unknown> | null = null;
   let checkoutInput: Record<string, unknown> | null = null;
