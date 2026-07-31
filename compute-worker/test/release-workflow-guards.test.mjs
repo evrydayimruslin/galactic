@@ -309,6 +309,9 @@ describe("Compute release workflow static guards", () => {
     expect(uploadBlock).toContain("npx wrangler versions upload");
     expect(uploadBlock).toContain("WRANGLER_OUTPUT_FILE_PATH");
     expect(uploadBlock).toContain(
+      'node "$GITHUB_WORKSPACE/scripts/release/verify-api-compute-off-bridge.mjs"',
+    );
+    expect(uploadBlock).toContain(
       'upload-output "$upload_output" "$API_WORKER" staging',
     );
     expect(uploadBlock).toContain('--tag "$bridge_tag"');
