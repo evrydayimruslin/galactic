@@ -5,10 +5,10 @@
 // Safety properties:
 // - staging only: the project ref and Management API origin are constants;
 // - no speculative restart: the exact canonical PostgREST probe must time out
-//   twice, and Management API health must remain readable;
+//   twice, and Management API project status must remain readable;
 // - one restart at most: this process never retries the mutating request;
 // - fail closed: reconciliation and deployment remain blocked until both
-//   Management health and the real authenticated PostgREST probes recover;
+//   Management project status and real authenticated PostgREST recover;
 // - secret safe: no upstream body, key, token, platform diagnostic, or raw
 //   exception is logged.
 //
@@ -19,7 +19,7 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  probeCanonicalStagingManagementHealth,
+  probeCanonicalStagingManagementProject,
   probeCanonicalStagingPostgrest,
   StagingSecretReconcileError,
 } from "./reconcile-staging-supabase-secrets.mjs";
@@ -39,9 +39,9 @@ export const DEFAULT_RECOVERY_TIMEOUT_MS = 10_000;
 const RESTARTABLE_INITIAL_ERROR =
   "canonical_token_store_probe_transport";
 const TRANSIENT_RECOVERY_CODES = new Set([
-  "canonical_management_health_unhealthy",
-  "canonical_management_health_probe_transport",
-  "canonical_management_health_probe_http",
+  "canonical_management_project_unhealthy",
+  "canonical_management_project_probe_transport",
+  "canonical_management_project_probe_http",
   "canonical_token_store_probe_transport",
   "canonical_token_store_probe_http",
   "canonical_discovery_count_probe_transport",
@@ -143,7 +143,7 @@ export async function recoverStagingSupabaseDataPlane({
   fetchImpl = fetch,
   fetchKeysImpl = fetchStagingProjectAuthKeys,
   probeDataPlaneImpl = probeCanonicalStagingPostgrest,
-  probeHealthImpl = probeCanonicalStagingManagementHealth,
+  probeHealthImpl = probeCanonicalStagingManagementProject,
   restartProjectImpl = restartPinnedStagingProject,
   waitImpl = defaultWait,
   timeoutMs = DEFAULT_RECOVERY_TIMEOUT_MS,
@@ -220,17 +220,17 @@ export async function recoverStagingSupabaseDataPlane({
       timeoutMs,
     });
     log(
-      `Canonical staging Supabase service health before recovery: ${health.summary}.`,
+      `Canonical staging Supabase project status before recovery: ${health.summary}.`,
     );
   } catch (error) {
     if (
-      !isErrorCode(error, "canonical_management_health_unhealthy") ||
+      !isErrorCode(error, "canonical_management_project_unhealthy") ||
       !(error instanceof StagingSecretReconcileError)
     ) {
       throw error;
     }
-    // This error is constructed from allowlisted service names and statuses by
-    // the strict health parser. No upstream `info` or `error` field is included.
+    // This error is constructed from the pinned ref and an allowlisted project
+    // lifecycle status. No upstream project metadata is included.
     log(error.message);
   }
 
@@ -254,7 +254,7 @@ export async function recoverStagingSupabaseDataPlane({
         timeoutMs,
       });
       log(
-        `Pinned staging Supabase health and authenticated PostgREST recovered after restart (attempt ${attempt}/${recoveryPollAttempts}).`,
+        `Pinned staging Supabase project and authenticated PostgREST recovered after restart (attempt ${attempt}/${recoveryPollAttempts}).`,
       );
       return { restarted: true };
     } catch (error) {

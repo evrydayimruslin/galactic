@@ -6,7 +6,7 @@ import {
   parseReconcileMode,
   PINNED_CLOUDFLARE_ACCOUNT_ID,
   probeCanonicalStagingAuth,
-  probeCanonicalStagingManagementHealth,
+  probeCanonicalStagingManagementProject,
   probeCanonicalStagingPostgrest,
   probeStagingWorkerSupabase,
   reconcileStagingSupabaseSecrets,
@@ -68,14 +68,14 @@ function successfulProbeFetch({ workerFailures = 0 } = {}) {
   const fetchImpl = async (input, init = {}) => {
     const url = String(input);
     calls.push({ url, init, headers: new Headers(init.headers) });
-    if (url.startsWith(
-      `${SUPABASE_MANAGEMENT_API_BASE}/v1/projects/${STAGING_SUPABASE_PROJECT_REF}/health?`,
-    )) {
-      return response([
-        { name: "rest", healthy: true, status: "ACTIVE_HEALTHY" },
-        { name: "auth", healthy: true, status: "ACTIVE_HEALTHY" },
-        { name: "db", healthy: true, status: "ACTIVE_HEALTHY" },
-      ]);
+    if (
+      url ===
+        `${SUPABASE_MANAGEMENT_API_BASE}/v1/projects/${STAGING_SUPABASE_PROJECT_REF}`
+    ) {
+      return response({
+        ref: STAGING_SUPABASE_PROJECT_REF,
+        status: "ACTIVE_HEALTHY",
+      });
     }
     if (url.startsWith(`${STAGING_SUPABASE_URL}/rest/v1/`)) {
       return response();
@@ -146,9 +146,9 @@ test("canonical probes are rowless and mirror the exact discovery count request"
   }
 });
 
-test("management health is pinned, bounded, and returns only allowlisted service state", async () => {
+test("management project status is pinned, bounded, and strictly projected", async () => {
   const calls = [];
-  const result = await probeCanonicalStagingManagementHealth({
+  const result = await probeCanonicalStagingManagementProject({
     managementAccessToken: MANAGEMENT_TOKEN,
     fetchImpl: async (input, init = {}) => {
       calls.push({
@@ -156,17 +156,13 @@ test("management health is pinned, bounded, and returns only allowlisted service
         init,
         headers: new Headers(init.headers),
       });
-      return response([
-        {
-          name: "rest",
-          healthy: true,
-          status: "ACTIVE_HEALTHY",
-          info: { description: "must-not-escape" },
-          error: "must-not-escape",
-        },
-        { name: "db", healthy: true, status: "ACTIVE_HEALTHY" },
-        { name: "auth", healthy: true, status: "ACTIVE_HEALTHY" },
-      ]);
+      return response({
+        ref: STAGING_SUPABASE_PROJECT_REF,
+        status: "ACTIVE_HEALTHY",
+        name: "must-not-escape",
+        organization_slug: "must-not-escape",
+        database: { host: "must-not-escape" },
+      });
     },
     timeoutMs: 50,
   });
@@ -179,13 +175,9 @@ test("management health is pinned, bounded, and returns only allowlisted service
   );
   assert.equal(
     url.pathname,
-    `/v1/projects/${STAGING_SUPABASE_PROJECT_REF}/health`,
+    `/v1/projects/${STAGING_SUPABASE_PROJECT_REF}`,
   );
-  assert.deepEqual(
-    url.searchParams.getAll("services"),
-    ["auth", "db", "rest"],
-  );
-  assert.equal(url.searchParams.get("timeout_ms"), "8000");
+  assert.equal(url.search, "");
   assert.equal(calls[0].init.method, "GET");
   assert.equal(
     calls[0].headers.get("authorization"),
@@ -193,71 +185,50 @@ test("management health is pinned, bounded, and returns only allowlisted service
   );
   assert.ok(calls[0].init.signal instanceof AbortSignal);
   assert.deepEqual(result, {
-    services: [
-      { name: "auth", status: "ACTIVE_HEALTHY" },
-      { name: "db", status: "ACTIVE_HEALTHY" },
-      { name: "rest", status: "ACTIVE_HEALTHY" },
-    ],
-    summary: "auth=ACTIVE_HEALTHY, db=ACTIVE_HEALTHY, rest=ACTIVE_HEALTHY",
+    project: {
+      ref: STAGING_SUPABASE_PROJECT_REF,
+      status: "ACTIVE_HEALTHY",
+    },
+    summary: "project=ACTIVE_HEALTHY",
   });
   assert.equal(JSON.stringify(result).includes("must-not-escape"), false);
 });
 
-test("management health reports an explicit sanitized unhealthy service state", async () => {
+test("management project status reports a sanitized unhealthy lifecycle state", async () => {
   await assert.rejects(
-    probeCanonicalStagingManagementHealth({
+    probeCanonicalStagingManagementProject({
       managementAccessToken: MANAGEMENT_TOKEN,
       fetchImpl: async () =>
-        response([
-          { name: "auth", healthy: true, status: "ACTIVE_HEALTHY" },
-          { name: "db", healthy: true, status: "ACTIVE_HEALTHY" },
-          {
-            name: "rest",
-            healthy: false,
-            status: "UNHEALTHY",
-            info: { description: "sensitive-upstream-info" },
-            error: "sensitive-upstream-error",
-          },
-        ]),
+        response({
+          ref: STAGING_SUPABASE_PROJECT_REF,
+          status: "ACTIVE_UNHEALTHY",
+          name: "sensitive-upstream-name",
+          database: { host: "sensitive-upstream-host" },
+        }),
       timeoutMs: 50,
     }),
     (error) =>
-      error?.code === "canonical_management_health_unhealthy" &&
-      /rest=UNHEALTHY/.test(error.message) &&
+      error?.code === "canonical_management_project_unhealthy" &&
+      /project=ACTIVE_UNHEALTHY/.test(error.message) &&
       !/sensitive-upstream/.test(error.message),
   );
 });
 
-test("management health rejects missing, duplicate, or unknown service state", async () => {
+test("management project status rejects wrong identity and unknown state", async () => {
   for (const payload of [
-    [
-      { name: "auth", status: "ACTIVE_HEALTHY" },
-      { name: "db", status: "ACTIVE_HEALTHY" },
-    ],
-    [
-      { name: "auth", status: "ACTIVE_HEALTHY" },
-      { name: "auth", status: "ACTIVE_HEALTHY" },
-      { name: "rest", status: "ACTIVE_HEALTHY" },
-    ],
-    [
-      { name: "auth", status: "ACTIVE_HEALTHY" },
-      { name: "db", status: "ACTIVE_HEALTHY" },
-      { name: "storage", status: "ACTIVE_HEALTHY" },
-    ],
-    [
-      { name: "auth", status: "ACTIVE_HEALTHY" },
-      { name: "db", status: "ACTIVE_HEALTHY" },
-      { name: "rest", status: "UNKNOWN" },
-    ],
+    null,
+    [],
+    { ref: "aaaaaaaaaaaaaaaaaaaa", status: "ACTIVE_HEALTHY" },
+    { ref: STAGING_SUPABASE_PROJECT_REF, status: "NOT_A_STATUS" },
   ]) {
     await assert.rejects(
-      probeCanonicalStagingManagementHealth({
+      probeCanonicalStagingManagementProject({
         managementAccessToken: MANAGEMENT_TOKEN,
         fetchImpl: async () => response(payload),
         timeoutMs: 50,
       }),
       (error) =>
-        error?.code === "canonical_management_health_probe_payload",
+        error?.code === "canonical_management_project_probe_payload",
     );
   }
 });
@@ -274,17 +245,12 @@ test("unhealthy management preflight blocks data-plane probes and secret mutatio
       fetchKeysImpl: async () => canonicalKeys(),
       fetchImpl: async (input) => {
         calls.push(String(input));
-        return response([
-          { name: "auth", healthy: true, status: "ACTIVE_HEALTHY" },
-          { name: "db", healthy: true, status: "ACTIVE_HEALTHY" },
-          {
-            name: "rest",
-            healthy: false,
-            status: "UNHEALTHY",
-            info: { description: "sensitive-upstream-info" },
-            error: "sensitive-upstream-error",
-          },
-        ]);
+        return response({
+          ref: STAGING_SUPABASE_PROJECT_REF,
+          status: "ACTIVE_UNHEALTHY",
+          name: "sensitive-upstream-name",
+          database: { host: "sensitive-upstream-host" },
+        });
       },
       secureFileImpl: async () => {
         secureFileCalls += 1;
@@ -296,12 +262,15 @@ test("unhealthy management preflight blocks data-plane probes and secret mutatio
       log: (value) => logs.push(value),
     }),
     (error) =>
-      error?.code === "canonical_management_health_unhealthy" &&
-      /rest=UNHEALTHY/.test(error.message) &&
+      error?.code === "canonical_management_project_unhealthy" &&
+      /project=ACTIVE_UNHEALTHY/.test(error.message) &&
       !/sensitive-upstream/.test(error.message),
   );
   assert.equal(calls.length, 1);
-  assert.match(calls[0], /\/health\?/);
+  assert.equal(
+    calls[0],
+    `${SUPABASE_MANAGEMENT_API_BASE}/v1/projects/${STAGING_SUPABASE_PROJECT_REF}`,
+  );
   assert.equal(secureFileCalls, 0);
   assert.equal(wranglerCalls, 0);
   assert.equal(logs.join("\n").includes("sensitive-upstream"), false);
@@ -547,12 +516,14 @@ test("canonical probe failure prevents any secret file or Wrangler mutation", as
       mode: "apply",
       env: baseEnv(),
       fetchImpl: async (input) => {
-        if (String(input).includes("/health?")) {
-          return response([
-            { name: "auth", healthy: true, status: "ACTIVE_HEALTHY" },
-            { name: "db", healthy: true, status: "ACTIVE_HEALTHY" },
-            { name: "rest", healthy: true, status: "ACTIVE_HEALTHY" },
-          ]);
+        if (
+          String(input) ===
+            `${SUPABASE_MANAGEMENT_API_BASE}/v1/projects/${STAGING_SUPABASE_PROJECT_REF}`
+        ) {
+          return response({
+            ref: STAGING_SUPABASE_PROJECT_REF,
+            status: "ACTIVE_HEALTHY",
+          });
         }
         if (String(input).includes("user_api_tokens")) {
           return response(null, 401);

@@ -109,12 +109,12 @@ test("two exact data-plane timeouts permit one pinned restart and require full r
       healthCalls += 1;
       if (healthCalls === 2) {
         throw reconcileError(
-          "canonical_management_health_unhealthy",
-          "Canonical staging Supabase services are not ready (auth=COMING_UP, db=COMING_UP, rest=COMING_UP).",
+          "canonical_management_project_unhealthy",
+          "Canonical staging Supabase project is not ready (project=RESTARTING).",
         );
       }
       return {
-        summary: "auth=ACTIVE_HEALTHY, db=ACTIVE_HEALTHY, rest=ACTIVE_HEALTHY",
+        summary: "project=ACTIVE_HEALTHY",
       };
     },
     restartProjectImpl: async ({ managementAccessToken }) => {
@@ -152,12 +152,12 @@ test("sanitized unhealthy Management state still permits the confirmed recovery"
     probeHealthImpl: async () => {
       if (restartCalls === 0) {
         throw reconcileError(
-          "canonical_management_health_unhealthy",
-          "Canonical staging Supabase services are not ready (auth=ACTIVE_HEALTHY, db=ACTIVE_HEALTHY, rest=UNHEALTHY).",
+          "canonical_management_project_unhealthy",
+          "Canonical staging Supabase project is not ready (project=ACTIVE_UNHEALTHY).",
         );
       }
       return {
-        summary: "auth=ACTIVE_HEALTHY, db=ACTIVE_HEALTHY, rest=ACTIVE_HEALTHY",
+        summary: "project=ACTIVE_HEALTHY",
       };
     },
     restartProjectImpl: async () => {
@@ -169,18 +169,18 @@ test("sanitized unhealthy Management state still permits the confirmed recovery"
   });
   assert.deepEqual(result, { restarted: true });
   assert.equal(restartCalls, 1);
-  assert.match(logs.join("\n"), /rest=UNHEALTHY/u);
+  assert.match(logs.join("\n"), /project=ACTIVE_UNHEALTHY/u);
 });
 
-test("credential rejection or ambiguous Management health never restarts", async () => {
+test("credential rejection or ambiguous Management status never restarts", async () => {
   for (const error of [
     reconcileError(
       "canonical_token_store_probe_http",
       "Canonical staging API-token PostgREST probe failed (HTTP 401).",
     ),
     reconcileError(
-      "canonical_management_health_probe_transport",
-      "Canonical staging Supabase Management health probe failed.",
+      "canonical_management_project_probe_transport",
+      "Canonical staging Supabase Management project probe failed.",
     ),
   ]) {
     let dataPlaneCalls = 0;
@@ -192,7 +192,7 @@ test("credential rejection or ambiguous Management health never restarts", async
         probeDataPlaneImpl: async () => {
           dataPlaneCalls += 1;
           if (
-            error.code === "canonical_management_health_probe_transport"
+            error.code === "canonical_management_project_probe_transport"
           ) {
             throw reconcileError("canonical_token_store_probe_transport");
           }
@@ -212,7 +212,7 @@ test("credential rejection or ambiguous Management health never restarts", async
     assert.equal(restartCalls, 0);
     assert.equal(
       dataPlaneCalls,
-      error.code === "canonical_management_health_probe_transport" ? 2 : 1,
+      error.code === "canonical_management_project_probe_transport" ? 2 : 1,
     );
   }
 });
@@ -229,7 +229,7 @@ test("recovery is bounded and does not issue a second restart", async () => {
         throw reconcileError("canonical_token_store_probe_transport");
       },
       probeHealthImpl: async () => ({
-        summary: "auth=ACTIVE_HEALTHY, db=ACTIVE_HEALTHY, rest=ACTIVE_HEALTHY",
+        summary: "project=ACTIVE_HEALTHY",
       }),
       restartProjectImpl: async () => {
         restartCalls += 1;

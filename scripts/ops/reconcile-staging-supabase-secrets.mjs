@@ -5,8 +5,8 @@
 // Safety properties:
 // - staging only: the project ref, Worker name, config, and Wrangler env are
 //   pinned here and cannot be supplied on the command line;
-// - service health: the pinned project's Auth, database, and REST status must
-//   all be healthy before any data-plane probe or Cloudflare mutation;
+// - project health: the pinned project must report an ACTIVE_HEALTHY lifecycle
+//   state before any data-plane probe or Cloudflare mutation;
 // - fail closed: the canonical anonymous key is exercised against Supabase
 //   Auth and both affected PostgREST surfaces are exercised with the canonical
 //   service-role key before Cloudflare is changed;
@@ -56,18 +56,23 @@ export const SECRET_NAMES = Object.freeze([
 export const DEFAULT_PROBE_TIMEOUT_MS = 10_000;
 export const POST_APPLY_PROBE_ATTEMPTS = 3;
 export const POST_APPLY_PROBE_DELAY_MS = 1_000;
-const MANAGEMENT_HEALTH_TIMEOUT_MS = 8_000;
-const REQUIRED_MANAGEMENT_HEALTH_SERVICES = Object.freeze([
-  "auth",
-  "db",
-  "rest",
-]);
-
-const ACTIVE_HEALTH_STATUS = "ACTIVE_HEALTHY";
-const MANAGEMENT_HEALTH_STATUSES = new Set([
+const ACTIVE_PROJECT_STATUS = "ACTIVE_HEALTHY";
+const MANAGEMENT_PROJECT_STATUSES = new Set([
+  "INACTIVE",
+  ACTIVE_PROJECT_STATUS,
+  "ACTIVE_UNHEALTHY",
   "COMING_UP",
-  ACTIVE_HEALTH_STATUS,
-  "UNHEALTHY",
+  "UNKNOWN",
+  "GOING_DOWN",
+  "INIT_FAILED",
+  "REMOVED",
+  "RESTORING",
+  "UPGRADING",
+  "PAUSING",
+  "RESTORE_FAILED",
+  "RESTARTING",
+  "PAUSE_FAILED",
+  "RESIZING",
 ]);
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -158,24 +163,7 @@ function canonicalServiceHeaders(serviceRoleKey, prefer) {
   };
 }
 
-function managementHealthUrl() {
-  const url = new URL(
-    `${SUPABASE_MANAGEMENT_API_BASE}/v1/projects/${STAGING_SUPABASE_PROJECT_REF}/health`,
-  );
-  for (const service of REQUIRED_MANAGEMENT_HEALTH_SERVICES) {
-    url.searchParams.append("services", service);
-  }
-  url.searchParams.set("timeout_ms", String(MANAGEMENT_HEALTH_TIMEOUT_MS));
-  return url.toString();
-}
-
-function managementHealthSummary(services) {
-  return services
-    .map(({ name, status }) => `${name}=${status}`)
-    .join(", ");
-}
-
-export async function probeCanonicalStagingManagementHealth({
+export async function probeCanonicalStagingManagementProject({
   managementAccessToken,
   fetchImpl = fetch,
   timeoutMs = DEFAULT_PROBE_TIMEOUT_MS,
@@ -186,7 +174,7 @@ export async function probeCanonicalStagingManagementHealth({
   );
   const response = await fetchWithHardTimeout(
     fetchImpl,
-    managementHealthUrl(),
+    `${SUPABASE_MANAGEMENT_API_BASE}/v1/projects/${STAGING_SUPABASE_PROJECT_REF}`,
     {
       method: "GET",
       headers: {
@@ -195,8 +183,8 @@ export async function probeCanonicalStagingManagementHealth({
       },
     },
     {
-      code: "canonical_management_health_probe",
-      label: "Canonical staging Supabase Management health probe",
+      code: "canonical_management_project_probe",
+      label: "Canonical staging Supabase Management project probe",
       timeoutMs,
     },
   );
@@ -206,60 +194,36 @@ export async function probeCanonicalStagingManagementHealth({
     body = await response.json();
   } catch {
     throw new StagingSecretReconcileError(
-      "canonical_management_health_probe_payload",
-      "Canonical staging Supabase Management health probe returned an invalid payload.",
+      "canonical_management_project_probe_payload",
+      "Canonical staging Supabase Management project probe returned an invalid payload.",
     );
   }
 
   if (
-    !Array.isArray(body) ||
-    body.length !== REQUIRED_MANAGEMENT_HEALTH_SERVICES.length
+    !body ||
+    typeof body !== "object" ||
+    Array.isArray(body) ||
+    body.ref !== STAGING_SUPABASE_PROJECT_REF ||
+    !MANAGEMENT_PROJECT_STATUSES.has(body.status)
   ) {
     throw new StagingSecretReconcileError(
-      "canonical_management_health_probe_payload",
-      "Canonical staging Supabase Management health probe returned an invalid payload.",
+      "canonical_management_project_probe_payload",
+      "Canonical staging Supabase Management project probe returned an invalid payload.",
     );
   }
 
-  const byName = new Map();
-  for (const item of body) {
-    if (
-      !item ||
-      typeof item !== "object" ||
-      Array.isArray(item) ||
-      !REQUIRED_MANAGEMENT_HEALTH_SERVICES.includes(item.name) ||
-      !MANAGEMENT_HEALTH_STATUSES.has(item.status) ||
-      byName.has(item.name)
-    ) {
-      throw new StagingSecretReconcileError(
-        "canonical_management_health_probe_payload",
-        "Canonical staging Supabase Management health probe returned an invalid payload.",
-      );
-    }
-    // Deliberately project only allowlisted fields. Management API `info` and
-    // `error` values can contain platform diagnostics and must never reach CI
-    // output or caller-visible errors through this release tool.
-    byName.set(item.name, { name: item.name, status: item.status });
-  }
-
-  const services = REQUIRED_MANAGEMENT_HEALTH_SERVICES.map((name) =>
-    byName.get(name)
-  );
-  if (services.some((service) => !service)) {
+  // Deliberately project only the pinned identity and allowlisted lifecycle
+  // state. Names, organization metadata, database details, and any future
+  // Management API fields never reach CI output or caller-visible errors.
+  const project = { ref: body.ref, status: body.status };
+  const summary = `project=${project.status}`;
+  if (project.status !== ACTIVE_PROJECT_STATUS) {
     throw new StagingSecretReconcileError(
-      "canonical_management_health_probe_payload",
-      "Canonical staging Supabase Management health probe returned an invalid payload.",
+      "canonical_management_project_unhealthy",
+      `Canonical staging Supabase project is not ready (${summary}).`,
     );
   }
-
-  const summary = managementHealthSummary(services);
-  if (services.some(({ status }) => status !== ACTIVE_HEALTH_STATUS)) {
-    throw new StagingSecretReconcileError(
-      "canonical_management_health_unhealthy",
-      `Canonical staging Supabase services are not ready (${summary}).`,
-    );
-  }
-  return { services, summary };
+  return { project, summary };
 }
 
 export async function probeCanonicalStagingPostgrest({
@@ -646,13 +610,13 @@ export async function reconcileStagingSupabaseSecrets({
   }
   log("Canonical staging Supabase keys validated for the pinned project.");
 
-  const managementHealth = await probeCanonicalStagingManagementHealth({
+  const managementProject = await probeCanonicalStagingManagementProject({
     managementAccessToken,
     fetchImpl,
     timeoutMs,
   });
   log(
-    `Canonical staging Supabase service health passed (${managementHealth.summary}).`,
+    `Canonical staging Supabase project status passed (${managementProject.summary}).`,
   );
 
   await probeCanonicalStagingPostgrest({
