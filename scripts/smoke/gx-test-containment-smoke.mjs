@@ -139,7 +139,7 @@ export async function state_and_stub_probe(input = {}) {
   });
 
   return {
-    before,
+    before: before,
     after: {
       data: await galactic.load("containment/state"),
       agent_memory: await galactic.recall("containment-memory"),
@@ -149,8 +149,8 @@ export async function state_and_stub_probe(input = {}) {
       ai_content: ai && ai.content,
       ai_cost_light: ai && ai.usage && ai.usage.cost_light,
       embedding: embedding && embedding.embedding,
-      notification,
-      runs,
+      notification: notification,
+      runs: runs,
       compute: {
         run_id: compute && compute.run_id,
         status: compute && compute.status,
@@ -221,7 +221,7 @@ export async function caught_effects_probe(input = {}) {
       )
     ),
   };
-  return { caughtEffects };
+  return { caughtEffects: caughtEffects };
 }
 
 export async function detached_effect_probe() {
@@ -247,7 +247,7 @@ export async function cache_capability_probe(input = {}) {
     // Delete only a cryptographically unique, never-written key. A successful
     // call still proves the tenant received an ambient stateful capability.
     const deleted = await caches.default.delete(key);
-    return { defined: true, usable: true, deleted };
+    return { defined: true, usable: true, deleted: deleted };
   } catch (error) {
     return {
       defined: true,
@@ -255,6 +255,13 @@ export async function cache_capability_probe(input = {}) {
       error_name: error && error.name ? String(error.name) : "Error",
     };
   }
+}
+
+// Strict gx.test lint requires an Agent UI surface even though this staging
+// probe never invokes it. Keep the probe deployable without adding any new
+// capability or state to the containment exercise.
+export async function ui() {
+  return http.html("<!doctype html><title>gx.test containment probe</title>");
 }
 `;
 
