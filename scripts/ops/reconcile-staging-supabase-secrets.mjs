@@ -162,10 +162,9 @@ function managementHealthUrl() {
   const url = new URL(
     `${SUPABASE_MANAGEMENT_API_BASE}/v1/projects/${STAGING_SUPABASE_PROJECT_REF}/health`,
   );
-  url.searchParams.set(
-    "services",
-    REQUIRED_MANAGEMENT_HEALTH_SERVICES.join(","),
-  );
+  for (const service of REQUIRED_MANAGEMENT_HEALTH_SERVICES) {
+    url.searchParams.append("services", service);
+  }
   url.searchParams.set("timeout_ms", String(MANAGEMENT_HEALTH_TIMEOUT_MS));
   return url.toString();
 }

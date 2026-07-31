@@ -181,7 +181,10 @@ test("management health is pinned, bounded, and returns only allowlisted service
     url.pathname,
     `/v1/projects/${STAGING_SUPABASE_PROJECT_REF}/health`,
   );
-  assert.equal(url.searchParams.get("services"), "auth,db,rest");
+  assert.deepEqual(
+    url.searchParams.getAll("services"),
+    ["auth", "db", "rest"],
+  );
   assert.equal(url.searchParams.get("timeout_ms"), "8000");
   assert.equal(calls[0].init.method, "GET");
   assert.equal(
