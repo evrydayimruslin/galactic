@@ -81,6 +81,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Verify RPC persistence and reviewed surfaces
+        run: npm run test:rpc-surface
+
       - name: Test
         run: npm run test:full
 
