@@ -34,6 +34,7 @@ import type { HttpTestFixtureConfig } from "../services/http-test-fixtures.ts";
 import { resolveHttpTestRuntimeResponse } from "../src/bindings/http-test-runtime.ts";
 import type { VersionMetadata } from "../../shared/types/index.ts";
 import { buildVersionTrustMetadata } from "../services/trust.ts";
+import { runContainmentSmoke } from "../../scripts/smoke/gx-test-containment-smoke.mjs";
 
 const OWNER_ID = "11111111-1111-4111-8111-111111111111";
 const COLLAB_ID = "22222222-2222-4222-8222-222222222222";
@@ -2751,6 +2752,23 @@ export async function caught_effect() {
               tested.error.includes("outbound_http"),
           );
           assertEquals("test_attestation" in tested, false);
+        },
+      );
+
+      await t.step(
+        "staging containment smoke fixture executes through the real gx.test handler",
+        async () => {
+          const report = await runContainmentSmoke({
+            apiBase: "https://wave3.ultralight.test",
+            token: OWNER_TOKEN,
+            fetchImpl: (url: string | URL | Request, init?: RequestInit) =>
+              handlePlatformMcp(new Request(url, init)),
+          });
+          assertEquals(report.passed, true);
+          assertEquals(
+            report.checks.every((item) => item.status === "passed"),
+            true,
+          );
         },
       );
     } finally {

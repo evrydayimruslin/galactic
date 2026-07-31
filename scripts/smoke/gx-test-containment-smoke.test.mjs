@@ -164,4 +164,16 @@ test('assessment fails if a caught effect attests or ambient cache is usable', (
       'ambient Cache API is unavailable',
     ],
   );
+  assert.match(
+    result.checks.find((item) =>
+      item.name === 'caught external effects remain disqualifying'
+    ).detail,
+    /success=false; attestation=present/u,
+  );
+  assert.match(
+    result.checks.find((item) =>
+      item.name === 'ambient Cache API is unavailable'
+    ).detail,
+    /cache_usable=true/u,
+  );
 });

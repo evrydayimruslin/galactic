@@ -426,8 +426,52 @@ function check(name, passed, detail) {
   return {
     name,
     status: passed ? 'passed' : 'failed',
-    ...(detail ? { detail } : {}),
+    ...(!passed && detail ? { detail } : {}),
   };
+}
+
+function resultDiagnostic(value) {
+  if (!value || typeof value !== 'object') return 'result=missing';
+  const parts = [
+    `success=${
+      value.success === true
+        ? 'true'
+        : value.success === false
+          ? 'false'
+          : 'missing'
+    }`,
+    `attestation=${hasAttestation(value) ? 'present' : 'absent'}`,
+  ];
+  if (typeof value.runtime_invoked === 'boolean') {
+    parts.push(`runtime_invoked=${value.runtime_invoked}`);
+  }
+  if (value.lint_passed === false) {
+    const lintRules = Array.isArray(value.lint?.issues)
+      ? value.lint.issues
+          .filter((issue) => issue?.severity === 'error')
+          .map((issue) => String(issue?.rule || 'unknown'))
+          .slice(0, 10)
+      : [];
+    parts.push(`strict_lint=${lintRules.join(',') || 'failed'}`);
+  }
+  if (typeof value.error_code === 'string') {
+    parts.push(`error_code=${safeDiagnostic(value.error_code)}`);
+  }
+  if (typeof value.error_type === 'string') {
+    parts.push(`error_type=${safeDiagnostic(value.error_type)}`);
+  }
+  if (typeof value.error === 'string') {
+    parts.push(`error=${safeDiagnostic(value.error)}`);
+  }
+  return parts.join('; ');
+}
+
+function stateDiagnostic(value, marker) {
+  return [
+    resultDiagnostic(value),
+    `before_empty=${nullState(value?.result?.before)}`,
+    `after_matches=${expectedAfter(value?.result?.after, marker)}`,
+  ].join('; ');
 }
 
 export function assessContainmentResults({
@@ -447,6 +491,7 @@ export function assessContainmentResults({
         hasAttestation(first) &&
         nullState(first.result?.before) &&
         expectedAfter(first.result?.after, firstMarker),
+      stateDiagnostic(first, firstMarker),
     ),
     check(
       'fresh invocation starts with empty DATA and MEMORY',
@@ -454,34 +499,50 @@ export function assessContainmentResults({
         hasAttestation(second) &&
         nullState(second.result?.before) &&
         expectedAfter(second.result?.after, secondMarker),
+      stateDiagnostic(second, secondMarker),
     ),
     check(
       'AI, embeddings, notifications, and run history use test stubs',
       expectedStubs(first?.result?.stubs) &&
         expectedStubs(second?.result?.stubs),
+      [
+        `first_stubs=${expectedStubs(first?.result?.stubs)}`,
+        `second_stubs=${expectedStubs(second?.result?.stubs)}`,
+        `first_${resultDiagnostic(first)}`,
+        `second_${resultDiagnostic(second)}`,
+      ].join('; '),
     ),
     check(
       'caught external effects remain disqualifying',
       effects?.success === false &&
         !hasAttestation(effects) &&
         REQUIRED_BLOCKED_EFFECTS.every((effect) => effectError.includes(effect)),
-      REQUIRED_BLOCKED_EFFECTS.filter((effect) => !effectError.includes(effect)).join(', ') ||
-        undefined,
+      [
+        `missing_effects=${
+          REQUIRED_BLOCKED_EFFECTS
+            .filter((effect) => !effectError.includes(effect))
+            .join(',') || 'none'
+        }`,
+        resultDiagnostic(effects),
+      ].join('; '),
     ),
     check(
       'detached outbound effects remain disqualifying',
       detached?.success === false &&
         !hasAttestation(detached) &&
         String(detached?.error || '').includes('outbound_http'),
+      resultDiagnostic(detached),
     ),
     check(
       'ambient Cache API is unavailable',
       cache?.success === true &&
         hasAttestation(cache) &&
         cache?.result?.usable === false,
-      cache?.result?.usable === true
-        ? 'Dynamic Worker received a usable ambient Cache API.'
-        : undefined,
+      [
+        resultDiagnostic(cache),
+        `cache_defined=${cache?.result?.defined === true}`,
+        `cache_usable=${cache?.result?.usable === true}`,
+      ].join('; '),
     ),
   ];
   return {
