@@ -148,6 +148,12 @@ function serviceOptions(
     randomUUID?: () => string;
     randomBytes?: (length: number) => Uint8Array;
     authenticationTimeoutMs?: number;
+    diagnostic?: (diagnostic: {
+      event:
+        | "promoted_history_row_omitted"
+        | "promoted_history_query_suppressed";
+      code: string;
+    }) => void;
   } = {},
 ) {
   return {
@@ -745,6 +751,96 @@ Deno.test("candidate session projection preserves a pre-M7 extension for fail-cl
   assertEquals(sessions[0].intent, "function");
   assertEquals(sessions[0].status, "uploaded");
   assertEquals(sessions[0].baseReleaseGeneration, null);
+});
+
+Deno.test("candidate session projection keeps uploaded work when promoted history is unavailable", async () => {
+  const urls: URL[] = [];
+  const diagnostics: unknown[] = [];
+  const fetchFn: typeof fetch = (input) => {
+    const url = new URL(String(input));
+    urls.push(url);
+    if (url.searchParams.get("status") === "eq.uploaded") {
+      return Promise.resolve(rpcJson([lifecycleRow("uploaded", 4)]));
+    }
+    return Promise.resolve(
+      rpcJson(
+        { message: "database password=must-not-leak" },
+        503,
+      ),
+    );
+  };
+
+  const sessions = await listBuilderHandoffCandidateSessions(
+    OWNER_ID,
+    serviceOptions(fetchFn, {
+      diagnostic: (diagnostic) => diagnostics.push(diagnostic),
+    }),
+  );
+
+  assertEquals(urls.length, 2);
+  assertEquals(sessions.map((session) => session.status), ["uploaded"]);
+  assertEquals(diagnostics, [{
+    event: "promoted_history_query_suppressed",
+    code: "service_unavailable",
+  }]);
+  assertEquals(JSON.stringify(diagnostics).includes("must-not-leak"), false);
+});
+
+Deno.test("candidate session projection isolates malformed promoted receipts", async () => {
+  const diagnostics: unknown[] = [];
+  const malformed = lifecycleRow("promoted", 5);
+  malformed.expires_at = "database password=must-not-leak";
+  const fetchFn: typeof fetch = (input) => {
+    const url = new URL(String(input));
+    if (url.searchParams.get("status") === "eq.uploaded") {
+      return Promise.resolve(rpcJson([]));
+    }
+    return Promise.resolve(
+      rpcJson([malformed, lifecycleRow("promoted", 5)]),
+    );
+  };
+
+  const sessions = await listBuilderHandoffCandidateSessions(
+    OWNER_ID,
+    serviceOptions(fetchFn, {
+      diagnostic: (diagnostic) => diagnostics.push(diagnostic),
+    }),
+  );
+
+  assertEquals(sessions.length, 1);
+  assertEquals(sessions[0].status, "promoted");
+  assertEquals(diagnostics, [{
+    event: "promoted_history_row_omitted",
+    code: "invalid_response",
+  }]);
+  assertEquals(JSON.stringify(diagnostics).includes("must-not-leak"), false);
+});
+
+Deno.test("candidate session projection keeps actionable uploaded reads strict", async () => {
+  const fetchFn: typeof fetch = (input) => {
+    const url = new URL(String(input));
+    if (url.searchParams.get("status") === "eq.uploaded") {
+      return Promise.resolve(
+        rpcJson(
+          { message: "database password=must-not-leak" },
+          503,
+        ),
+      );
+    }
+    return Promise.resolve(rpcJson([lifecycleRow("promoted", 5)]));
+  };
+
+  const error = await assertRejects(
+    () =>
+      listBuilderHandoffCandidateSessions(
+        OWNER_ID,
+        serviceOptions(fetchFn),
+      ),
+    BuilderHandoffSessionError,
+  ) as BuilderHandoffSessionError;
+
+  assertEquals(error.code, "service_unavailable");
+  assertEquals(error.message.includes("must-not-leak"), false);
 });
 
 Deno.test("builder handoff termination returns durable credential revocation", async () => {

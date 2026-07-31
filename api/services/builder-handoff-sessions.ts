@@ -243,6 +243,14 @@ export interface BuilderHandoffSessionServiceOptions {
   randomBytes?: (length: number) => Uint8Array;
   /** Focused-test override; production callers remain capped at 9 seconds. */
   authenticationTimeoutMs?: number;
+  diagnostic?: (diagnostic: BuilderHandoffSessionDiagnostic) => void;
+}
+
+interface BuilderHandoffSessionDiagnostic {
+  event:
+    | "promoted_history_row_omitted"
+    | "promoted_history_query_suppressed";
+  code: BuilderHandoffSessionErrorCode;
 }
 
 export type BuilderHandoffSessionErrorCode =
@@ -608,6 +616,23 @@ function authenticationTimeoutMs(
     Math.floor(configured),
     BUILDER_HANDOFF_AUTH_TIMEOUT_MAX_MS,
   );
+}
+
+function emitBuilderHandoffSessionDiagnostic(
+  options: BuilderHandoffSessionServiceOptions,
+  diagnostic: BuilderHandoffSessionDiagnostic,
+): void {
+  try {
+    if (options.diagnostic) {
+      options.diagnostic(diagnostic);
+      return;
+    }
+    // The event and code are closed enums. Never include the row, endpoint,
+    // response payload, or thrown message in this operational diagnostic.
+    console.warn("[BUILDER_HANDOFF] Candidate history degraded", diagnostic);
+  } catch {
+    // Observability is best-effort and cannot change invitation availability.
+  }
 }
 
 function rowObject(value: unknown): Record<string, unknown> | null {
@@ -1202,6 +1227,7 @@ export async function authenticateBuilderHandoffSession(
 async function readBuilderHandoffSessionRows(
   query: URLSearchParams,
   options: BuilderHandoffSessionServiceOptions,
+  invalidRowPolicy: "reject" | "omit" = "reject",
 ): Promise<BuilderHandoffSessionRecord[]> {
   const config = serviceConfig(options);
   let response: Response;
@@ -1242,7 +1268,27 @@ async function readBuilderHandoffSessionRows(
       "Builder handoff persistence returned an invalid session list",
     );
   }
-  return payload.map(parseSession);
+  if (invalidRowPolicy === "reject") return payload.map(parseSession);
+
+  const sessions: BuilderHandoffSessionRecord[] = [];
+  for (const row of payload) {
+    try {
+      sessions.push(parseSession(row));
+    } catch (error) {
+      // Promoted rows are recovery receipts, never deployment authority. A
+      // malformed historical receipt must not hide valid receipts or an
+      // actionable uploaded candidate, while every other read remains strict.
+      if (error instanceof BuilderHandoffSessionError) {
+        emitBuilderHandoffSessionDiagnostic(options, {
+          event: "promoted_history_row_omitted",
+          code: error.code,
+        });
+        continue;
+      }
+      throw error;
+    }
+  }
+  return sessions;
 }
 
 /**
@@ -1292,7 +1338,26 @@ export async function listBuilderHandoffCandidateSessions(
   promotedQuery.append("promoted_at", `lte.${promotedBefore}`);
   const [uploaded, promoted] = await Promise.all([
     listUploadedBuilderHandoffSessions(normalizedOwnerId, options),
-    readBuilderHandoffSessionRows(promotedQuery, options),
+    readBuilderHandoffSessionRows(promotedQuery, options, "omit").catch(
+      (error: unknown) => {
+        // Recent promoted history only restores deployment receipts in the
+        // invitation. Keep the authoritative uploaded-candidate read strict,
+        // but do not let a transient/malformed history response take every
+        // actionable candidate offline.
+        if (
+          error instanceof BuilderHandoffSessionError &&
+          (error.code === "service_unavailable" ||
+            error.code === "invalid_response")
+        ) {
+          emitBuilderHandoffSessionDiagnostic(options, {
+            event: "promoted_history_query_suppressed",
+            code: error.code,
+          });
+          return [];
+        }
+        throw error;
+      },
+    ),
   ]);
   return [...uploaded, ...promoted];
 }
