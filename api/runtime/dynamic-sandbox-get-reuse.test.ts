@@ -250,9 +250,9 @@ function installHarness(): { captured: Captured; restore: () => void } {
 
   globalThis.__ctx = {
     exports: {
-      TestRuntimeSessionFactory: () => ({
-        create: () => Promise.resolve(createTestSession()),
-      }),
+      GxTestSession: {
+        getByName: () => createTestSession(),
+      },
       FixtureDatabaseBinding: () => ({}),
       // deno-lint-ignore no-explicit-any
       TestAppDataBinding: (input: any) => ({

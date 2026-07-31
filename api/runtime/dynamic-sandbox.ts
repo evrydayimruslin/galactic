@@ -238,18 +238,16 @@ function structuredOutputErrorCode(value: unknown): string | undefined {
 }
 
 interface DynamicTestRuntimeSession {
-  dup(): DynamicTestRuntimeSession;
   recordObservedEffect?(effect: UlTestObservedEffect): Promise<void>;
   sealAndSnapshot(): Promise<{
     blockedEffects: string[];
     observedEffects?: string[];
   }>;
   close(): Promise<void>;
-  [Symbol.dispose](): void;
 }
 
-interface DynamicTestRuntimeSessionFactory {
-  create(): Promise<DynamicTestRuntimeSession>;
+interface DynamicTestRuntimeSessionNamespace {
+  getByName(name: string): DynamicTestRuntimeSession;
 }
 
 interface DynamicTestRuntimeSnapshot {
@@ -359,9 +357,7 @@ interface DynamicWorkerEntrypointExports {
       };
     },
   ): unknown;
-  TestRuntimeSessionFactory(
-    input: { props: Record<string, never> },
-  ): DynamicTestRuntimeSessionFactory;
+  GxTestSession: DynamicTestRuntimeSessionNamespace;
   TestAIBinding(
     input: { props: { session: DynamicTestRuntimeSession } },
   ): unknown;
@@ -1379,7 +1375,6 @@ export default {
 
     if (testMode) {
       const requiredTestExports = [
-        "TestRuntimeSessionFactory",
         "TestOutboundBinding",
         "TestCredentialBinding",
         "TestEventsBinding",
@@ -1409,11 +1404,22 @@ export default {
         );
       }
 
-      const factory = ctx!.exports!.TestRuntimeSessionFactory({ props: {} });
-      testRuntimeSession = await factory.create();
+      const sessionNamespace = availableExports.GxTestSession as
+        | DynamicTestRuntimeSessionNamespace
+        | undefined;
+      if (
+        !sessionNamespace ||
+        typeof sessionNamespace.getByName !== "function"
+      ) {
+        throw new Error(
+          "gx.test runtime is unavailable: missing host export GxTestSession",
+        );
+      }
+      testRuntimeSession = sessionNamespace.getByName(
+        `gx-test-${crypto.randomUUID()}`,
+      );
       if (
         !testRuntimeSession ||
-        typeof testRuntimeSession.dup !== "function" ||
         typeof testRuntimeSession.sealAndSnapshot !== "function" ||
         typeof testRuntimeSession.close !== "function"
       ) {
@@ -1423,11 +1429,14 @@ export default {
       }
     }
 
-    const duplicateTestSession = (): DynamicTestRuntimeSession => {
+    const persistentTestSession = (): DynamicTestRuntimeSession => {
       if (!testRuntimeSession) {
         throw new Error("gx.test state session is unavailable");
       }
-      return testRuntimeSession.dup();
+      // Durable Object stubs are persistent Service Bindings, which Cloudflare
+      // explicitly permits inside ctx.props. Reuse the same stub so every
+      // padded-room capability records into one strongly ordered transcript.
+      return testRuntimeSession;
     };
     // Resolved D1 database id baked into the DB binding props — captured here so
     // the reuse key can fingerprint it (it is lazily provisioned / re-provisioned
@@ -1443,7 +1452,7 @@ export default {
           // records the attempted DB effect, then fails closed with the normal
           // fixture-miss diagnostic instead of hiding an undeclared attempt.
           fixtures: config.d1Fixtures ?? { responses: [] },
-          session: duplicateTestSession(),
+          session: persistentTestSession(),
         },
       });
     } else if (!testMode && hasDatabase && config.d1DataService) {
@@ -1472,7 +1481,7 @@ export default {
       if (testMode) {
         if (ctx?.exports?.TestAppDataBinding) {
           bindings.DATA = ctx.exports.TestAppDataBinding({
-            props: { session: duplicateTestSession() },
+            props: { session: persistentTestSession() },
           });
         }
       } else if (ctx?.exports?.AppDataBinding) {
@@ -1495,7 +1504,7 @@ export default {
       if (testMode) {
         if (ctx?.exports?.TestMemoryBinding) {
           bindings.MEMORY = ctx.exports.TestMemoryBinding({
-            props: { session: duplicateTestSession() },
+            props: { session: persistentTestSession() },
           });
         }
       } else if (config.memoryService && ctx?.exports?.MemoryBinding) {
@@ -1523,7 +1532,7 @@ export default {
       if (testMode) {
         if (ctx?.exports?.TestRunsBinding) {
           bindings.RUNS = ctx.exports.TestRunsBinding({
-            props: { session: duplicateTestSession() },
+            props: { session: persistentTestSession() },
           });
         }
       } else if (ctx?.exports?.RunsBinding) {
@@ -1546,7 +1555,7 @@ export default {
       if (config.testMode === true) {
         if (ctx?.exports?.TestNotifyBinding) {
           bindings.NOTIFY = ctx.exports.TestNotifyBinding({
-            props: { session: duplicateTestSession() },
+            props: { session: persistentTestSession() },
           });
         }
       } else if (ctx?.exports?.NotifyBinding) {
@@ -1565,7 +1574,7 @@ export default {
       if (config.testMode === true) {
         if (ctx?.exports?.TestAIBinding) {
           bindings.AI = ctx.exports.TestAIBinding({
-            props: { session: duplicateTestSession() },
+            props: { session: persistentTestSession() },
           });
         }
       } else if (ctx?.exports?.AIBinding) {
@@ -1603,7 +1612,7 @@ export default {
       if (config.testMode === true) {
         if (ctx?.exports?.TestEmbedBinding) {
           bindings.EMBED = ctx.exports.TestEmbedBinding({
-            props: { session: duplicateTestSession() },
+            props: { session: persistentTestSession() },
           });
         }
       } else if (ctx?.exports?.EmbedBinding) {
@@ -1636,7 +1645,7 @@ export default {
     if (testMode) {
       if (ctx?.exports?.TestEventsBinding) {
         bindings.EVENTS = ctx.exports.TestEventsBinding({
-          props: { session: duplicateTestSession() },
+          props: { session: persistentTestSession() },
         });
       }
     } else if (
@@ -1661,7 +1670,7 @@ export default {
       if (testMode) {
         if (ctx?.exports?.TestNetworkBinding) {
           bindings.NET = ctx.exports.TestNetworkBinding({
-            props: { session: duplicateTestSession() },
+            props: { session: persistentTestSession() },
           });
         }
       } else if (ctx?.exports?.NetworkBinding) {
@@ -1688,7 +1697,7 @@ export default {
       if (testMode) {
         if (ctx?.exports?.TestAppCallBinding) {
           bindings.SELF = ctx.exports.TestAppCallBinding({
-            props: { session: duplicateTestSession() },
+            props: { session: persistentTestSession() },
           });
         }
       } else if (env?.SELF) {
@@ -1742,7 +1751,7 @@ export default {
       if (ctx?.exports?.TestOutboundBinding) {
         loadConfig.globalOutbound = ctx.exports.TestOutboundBinding({
           props: {
-            session: duplicateTestSession(),
+            session: persistentTestSession(),
             fixtures: config.httpFixtures ?? [],
             allowedDestinations,
           },
@@ -1768,7 +1777,7 @@ export default {
       if (ctx?.exports?.TestCredentialBinding) {
         bindings.CREDENTIALS = ctx.exports.TestCredentialBinding({
           props: {
-            session: duplicateTestSession(),
+            session: persistentTestSession(),
             fixtures: config.httpFixtures ?? [],
             allowedDestinations,
             credentialDestinations: config.testCredentialDestinations ?? {},
@@ -1802,7 +1811,7 @@ export default {
       if (config.testMode === true) {
         if (ctx?.exports?.TestComputeBinding) {
           bindings.COMPUTE = ctx.exports.TestComputeBinding({
-            props: { session: duplicateTestSession() },
+            props: { session: persistentTestSession() },
           });
         }
       } else if (config.user && ctx?.exports?.ComputeBinding) {
@@ -2113,15 +2122,6 @@ export default {
         await testRuntimeSession.close();
       } catch (error) {
         console.error("[GX-TEST] Failed to close runtime state session", error);
-      } finally {
-        try {
-          testRuntimeSession[Symbol.dispose]();
-        } catch (error) {
-          console.error(
-            "[GX-TEST] Failed to dispose runtime state session",
-            error,
-          );
-        }
       }
     }
   }

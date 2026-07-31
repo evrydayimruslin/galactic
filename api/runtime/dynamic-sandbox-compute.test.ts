@@ -79,9 +79,9 @@ function installHarness(): {
   } as any;
   globalThis.__ctx = {
     exports: {
-      TestRuntimeSessionFactory: () => ({
-        create: () => Promise.resolve(new ComputeTestSession()),
-      }),
+      GxTestSession: {
+        getByName: () => new ComputeTestSession(),
+      },
       FixtureDatabaseBinding: () => ({}),
       TestOutboundBinding: () => ({
         fetch: () => Promise.reject(new Error("gx.test outbound blocked")),

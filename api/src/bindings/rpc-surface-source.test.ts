@@ -36,6 +36,20 @@ const EXPECTED_RPC_METHODS: Record<string, readonly string[]> = {
   "notify-binding.ts:NotifyBinding": ["notifyOwner"],
   "outbound-binding.ts:OutboundBinding": ["fetch"],
   "runs-binding.ts:RunsBinding": ["recent"],
+  "../gx-test-session.ts:GxTestSession": [
+    "beginHttpFixtureAttempt",
+    "close",
+    "listAppData",
+    "loadAppData",
+    "recallMemory",
+    "recordBlockedEffect",
+    "recordObservedEffect",
+    "rememberMemory",
+    "removeAppData",
+    "reserveHttpFixtureExchangeBytes",
+    "sealAndSnapshot",
+    "storeAppData",
+  ],
 };
 
 function memberName(member: ts.ClassElement): string | null {
@@ -95,4 +109,63 @@ Deno.test("tenant RPC bindings expose only reviewed methods and use real private
       `${subject} RPC surface changed; review it explicitly`,
     );
   }
+});
+
+Deno.test("gx.test state crosses Worker boundaries only through a persistent Durable Object", async () => {
+  const [
+    testBindingsSource,
+    sessionSource,
+    workerEntrySource,
+    dynamicSandboxSource,
+    wranglerSource,
+  ] = await Promise.all([
+    Deno.readTextFile(
+      new URL("./test-runtime-bindings.ts", import.meta.url),
+    ),
+    Deno.readTextFile(new URL("../gx-test-session.ts", import.meta.url)),
+    Deno.readTextFile(new URL("../worker-entry.ts", import.meta.url)),
+    Deno.readTextFile(
+      new URL("../../runtime/dynamic-sandbox.ts", import.meta.url),
+    ),
+    Deno.readTextFile(new URL("../../wrangler.toml", import.meta.url)),
+  ]);
+
+  assert(
+    !testBindingsSource.includes("RpcTarget"),
+    "gx.test binding props must not carry a non-persistent RpcTarget",
+  );
+  assert(
+    !testBindingsSource.includes("TestRuntimeSessionFactory"),
+    "gx.test must not recreate the transient session factory",
+  );
+  assert(
+    sessionSource.includes("extends DurableObject"),
+    "gx.test state must remain a Durable Object",
+  );
+  assert(
+    sessionSource.includes("this.ctx.storage.deleteAll()"),
+    "gx.test Durable Object storage must be fully deallocated after snapshot",
+  );
+  assert(
+    workerEntrySource.includes(
+      'export { GxTestSession } from "./gx-test-session.ts";',
+    ),
+    "the host worker must export the gx.test Durable Object class",
+  );
+  assert(
+    dynamicSandboxSource.includes(
+      "sessionNamespace.getByName(",
+    ),
+    "the sandbox host must create gx.test sessions through the durable namespace",
+  );
+  assert(
+    !dynamicSandboxSource.includes(".dup()"),
+    "the sandbox host must not duplicate a transient RPC session",
+  );
+  assert(
+    wranglerSource.includes("[exports.GxTestSession]") &&
+      wranglerSource.includes('type = "durable-object"') &&
+      wranglerSource.includes('storage = "sqlite"'),
+    "Wrangler must provision the gx.test Durable Object namespace",
+  );
 });

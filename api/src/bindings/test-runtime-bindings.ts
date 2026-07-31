@@ -2,7 +2,7 @@
 // place of production AI/embed/notification bindings, so validation can execute
 // realistic code without provider requests, Light billing, or inbox writes.
 
-import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+import { WorkerEntrypoint } from "cloudflare:workers";
 import type {
   ComputeRequest,
   ComputeResult,
@@ -19,16 +19,14 @@ import {
   UL_TEST_OBSERVED_EFFECTS,
   type UlTestObservedEffect,
 } from "../../services/ul-test-runtime.ts";
-import { TestRuntimeStateStore } from "../../services/test-state-store.ts";
 import type { HttpTestFixtureConfig } from "../../services/http-test-fixtures.ts";
 import { type MemoryScope, normalizeMemoryScope } from "./memory-scope.ts";
 import type { CredentialRequestInit } from "./credential-inject.ts";
 import { resolveHttpTestRuntimeResponse } from "./http-test-runtime.ts";
 
 /**
- * Shape of the stateful RpcTarget stub received by the stateless Test*
- * WorkerEntrypoints. All methods are asynchronous at the call site even though
- * the target's implementation is synchronous.
+ * Shape of the invocation-owned Durable Object stub received by the stateless
+ * Test* WorkerEntrypoints. Every call is asynchronous at the RPC boundary.
  */
 interface TestRuntimeSessionRpc {
   storeAppData(key: string, value: unknown): Promise<void>;
@@ -57,8 +55,6 @@ interface TestRuntimeSessionRpc {
     observedEffects: string[];
   }>;
   close(): Promise<void>;
-  dup(): TestRuntimeSessionRpc;
-  [Symbol.dispose](): void;
 }
 
 interface TestSessionBindingProps {
@@ -72,113 +68,6 @@ interface TestHttpBindingProps extends TestSessionBindingProps {
 
 interface TestCredentialBindingProps extends TestHttpBindingProps {
   credentialDestinations: Record<string, string>;
-}
-
-/**
- * Stateful, invocation-owned test session.
- *
- * WorkerEntrypoint instances are intentionally stateless and recreated per
- * call. Returning an RpcTarget pins all DATA, MEMORY, and effect evidence to
- * one object whose lifetime is the enclosing gx.test request.
- */
-class TestRuntimeSessionTarget extends RpcTarget {
-  readonly #state = new TestRuntimeStateStore();
-  #sealed = false;
-
-  #assertMutable(): void {
-    if (this.#sealed) {
-      throw new Error("gx.test state session is sealed");
-    }
-  }
-
-  storeAppData(key: string, value: unknown): void {
-    this.#assertMutable();
-    this.#state.storeAppData(key, value);
-  }
-
-  loadAppData(key: string): unknown {
-    return this.#state.loadAppData(key);
-  }
-
-  removeAppData(key: string): void {
-    this.#assertMutable();
-    this.#state.removeAppData(key);
-  }
-
-  listAppData(prefix?: string): string[] {
-    return this.#state.listAppData(prefix);
-  }
-
-  rememberMemory(
-    scope: "agent" | "user",
-    key: string,
-    value: unknown,
-  ): void {
-    this.#assertMutable();
-    this.#state.rememberMemory(scope, key, value);
-  }
-
-  recallMemory(scope: "agent" | "user", key: string): unknown {
-    return this.#state.recallMemory(scope, key);
-  }
-
-  beginHttpFixtureAttempt(): void {
-    this.#assertMutable();
-    this.#state.beginHttpFixtureAttempt();
-  }
-
-  reserveHttpFixtureExchangeBytes(
-    requestBytes: number,
-    responseBytes: number,
-  ): void {
-    this.#assertMutable();
-    this.#state.reserveHttpFixtureExchangeBytes(requestBytes, responseBytes);
-  }
-
-  recordBlockedEffect(
-    effect: typeof UL_TEST_BLOCKED_EFFECTS[
-      keyof typeof UL_TEST_BLOCKED_EFFECTS
-    ],
-  ): void {
-    this.#assertMutable();
-    this.#state.recordBlockedEffect(effect);
-  }
-
-  recordObservedEffect(effect: UlTestObservedEffect): void {
-    this.#assertMutable();
-    this.#state.recordObservedEffect(effect);
-  }
-
-  sealAndSnapshot(): {
-    blockedEffects: string[];
-    observedEffects: string[];
-  } {
-    this.#assertMutable();
-    this.#sealed = true;
-    return {
-      blockedEffects: this.#state.blockedEffects(),
-      observedEffects: this.#state.observedEffects(),
-    };
-  }
-
-  close(): void {
-    this.#sealed = true;
-    this.#state.close();
-  }
-
-  [Symbol.dispose](): void {
-    this.close();
-  }
-}
-
-/** Creates one stateful RpcTarget per gx.test execution. */
-export class TestRuntimeSessionFactory extends WorkerEntrypoint<
-  unknown,
-  Record<string, never>
-> {
-  create(): TestRuntimeSessionTarget {
-    return new TestRuntimeSessionTarget();
-  }
 }
 
 /**

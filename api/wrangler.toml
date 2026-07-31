@@ -3,6 +3,14 @@ main = "src/worker-entry.ts"
 compatibility_date = "2026-03-01"
 compatibility_flags = ["nodejs_compat"]
 
+# gx.test bindings share one invocation-scoped, SQLite-backed containment
+# transcript through this automatically provisioned ctx.exports namespace.
+# Declarative exports are inherited by the isolated staging Worker, while each
+# environment receives its own Durable Object namespace.
+[exports.GxTestSession]
+type = "durable-object"
+storage = "sqlite"
+
 # Capacity telemetry is a billing-control path. Persist every API invocation
 # during launch so reconciliation alarms and queue failures are queryable in
 # Workers Logs instead of existing only in an attached real-time tail.

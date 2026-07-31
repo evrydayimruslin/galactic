@@ -452,9 +452,9 @@ class Wave3Harness {
           batch: async () => [],
           exec: async () => ({ success: true, count: 0 }),
         }),
-        TestRuntimeSessionFactory: () => ({
-          create: () => Promise.resolve(new Wave3TestRuntimeSession()),
-        }),
+        GxTestSession: {
+          getByName: () => new Wave3TestRuntimeSession(),
+        },
         TestAIBinding: (
           { props }: { props: { session: Wave3TestRuntimeSession } },
         ) => ({

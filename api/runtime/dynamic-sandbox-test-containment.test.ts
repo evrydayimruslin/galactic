@@ -382,7 +382,13 @@ function installContainmentHarness(options: {
   const testExports = options.includeTestExports
     ? {
       FixtureDatabaseBinding: testBinding("FixtureDatabaseBinding"),
-      TestRuntimeSessionFactory: testBinding("TestRuntimeSessionFactory"),
+      GxTestSession: {
+        getByName: (_name: string) => {
+          const session = new LocalTestRuntimeSession();
+          captured.sessions.push(session);
+          return session;
+        },
+      },
       TestAppDataBinding: testBinding("TestAppDataBinding"),
       TestMemoryBinding: testBinding("TestMemoryBinding"),
       TestRunsBinding: testBinding("TestRunsBinding"),
@@ -397,19 +403,6 @@ function installContainmentHarness(options: {
       TestOutboundBinding: testOutboundBinding,
     }
     : {};
-
-  if (options.includeTestExports) {
-    testExports.TestRuntimeSessionFactory =
-      // deno-lint-ignore no-explicit-any
-      (input: any) =>
-        count("TestRuntimeSessionFactory", input?.props, {
-          create: () => {
-            const session = new LocalTestRuntimeSession();
-            captured.sessions.push(session);
-            return Promise.resolve(session);
-          },
-        });
-  }
 
   globalThis.__env = {
     LOADER: loader,
@@ -564,7 +557,6 @@ Deno.test("gx.test maximal authority installs only test bindings", async () => {
     }
     for (
       const name of [
-        "TestRuntimeSessionFactory",
         "FixtureDatabaseBinding",
         "TestAppDataBinding",
         "TestMemoryBinding",
@@ -668,7 +660,7 @@ Deno.test("gx.test maximal authority installs only test bindings", async () => {
     assertEquals(result.observedEffects, []);
     assertEquals(harness.captured.sessions[0].sealed, true);
     assertEquals(harness.captured.sessions[0].closeCalls, 1);
-    assertEquals(harness.captured.sessions[0].disposeCalls, 1);
+    assertEquals(harness.captured.sessions[0].disposeCalls, 0);
   } finally {
     harness.restore();
   }
@@ -928,7 +920,7 @@ Deno.test("caught HTTP and TCP effects still fail gx.test and close the session"
       assertEquals(harness.captured.sessions.length, 1);
       assertEquals(harness.captured.sessions[0].sealed, true);
       assertEquals(harness.captured.sessions[0].closeCalls, 1);
-      assertEquals(harness.captured.sessions[0].disposeCalls, 1);
+      assertEquals(harness.captured.sessions[0].disposeCalls, 0);
     } finally {
       harness.restore();
     }
@@ -950,7 +942,7 @@ Deno.test("gx.test state cleans up after developer and loader failures", async (
       assertEquals(result.success, false);
       assertEquals(harness.captured.sessions.length, 1);
       assertEquals(harness.captured.sessions[0].closeCalls, 1);
-      assertEquals(harness.captured.sessions[0].disposeCalls, 1);
+      assertEquals(harness.captured.sessions[0].disposeCalls, 0);
     } finally {
       harness.restore();
     }
@@ -974,7 +966,7 @@ Deno.test("gx.test state cleans up after an aborted timeout", async () => {
     ]);
     assertEquals(harness.captured.sessions.length, 1);
     assertEquals(harness.captured.sessions[0].closeCalls, 1);
-    assertEquals(harness.captured.sessions[0].disposeCalls, 1);
+    assertEquals(harness.captured.sessions[0].disposeCalls, 0);
   } finally {
     harness.restore();
   }
@@ -1001,7 +993,7 @@ Deno.test("blocked effects remain disqualifying when execution later times out",
     assertEquals(harness.captured.sessions.length, 1);
     assertEquals(harness.captured.sessions[0].sealed, true);
     assertEquals(harness.captured.sessions[0].closeCalls, 1);
-    assertEquals(harness.captured.sessions[0].disposeCalls, 1);
+    assertEquals(harness.captured.sessions[0].disposeCalls, 0);
   } finally {
     harness.restore();
   }
@@ -1022,7 +1014,7 @@ Deno.test("reused execution ids still receive distinct invocation-owned sessions
     );
     for (const session of harness.captured.sessions) {
       assertEquals(session.closeCalls, 1);
-      assertEquals(session.disposeCalls, 1);
+      assertEquals(session.disposeCalls, 0);
     }
   } finally {
     harness.restore();
