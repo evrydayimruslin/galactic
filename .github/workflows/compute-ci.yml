@@ -242,14 +242,17 @@ jobs:
           # CI needs a complete vulnerability inventory, not a release
           # attestation. Execute the pinned Syft binary inside the exact local
           # image ID and scan its mounted root filesystem directly. The
-          # container cannot write that filesystem, reach a network, acquire
-          # capabilities, or inherit host credentials. Production deploy
-          # separately attests the immutable pushed registry manifest.
+          # container cannot write that filesystem, reach a network, or inherit
+          # host credentials. Its only capability is read/search so package
+          # files cannot disappear from the inventory behind Unix modes.
+          # Production deploy separately attests the immutable pushed registry
+          # manifest.
           docker run --rm \
             --name compute-ci-sbom-scan \
             --read-only \
             --network none \
             --cap-drop ALL \
+            --cap-add DAC_READ_SEARCH \
             --security-opt no-new-privileges=true \
             --user 0:0 \
             --pids-limit 256 \

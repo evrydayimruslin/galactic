@@ -175,6 +175,12 @@ describe("Compute release workflow static guards", () => {
     expect(sbomStep).toContain('--read-only');
     expect(sbomStep).toContain('--network none');
     expect(sbomStep).toContain('--cap-drop ALL');
+    expect(sbomStep).toContain('--cap-add DAC_READ_SEARCH');
+    expect(
+      [...sbomStep.matchAll(/--cap-add ([A-Z_]+)/gu)].map(
+        (match) => match[1],
+      ),
+    ).toEqual(["DAC_READ_SEARCH"]);
     expect(sbomStep).toContain('--security-opt no-new-privileges=true');
     expect(sbomStep).toContain('--user 0:0');
     expect(sbomStep).toContain(
