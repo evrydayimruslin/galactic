@@ -184,7 +184,13 @@ describe("Compute release workflow static guards", () => {
       'src=$syft_dir/syft,dst=/__galactic_syft,readonly',
     );
     expect(sbomStep).toContain(
-      'src=$EVIDENCE_DIR,dst=/__galactic_evidence',
+      'install -d -m 0777 "$syft_output_dir"',
+    );
+    expect(sbomStep).toContain(
+      'src=$syft_output_dir,dst=/__galactic_output',
+    );
+    expect(sbomStep).not.toContain(
+      'src=$EVIDENCE_DIR,dst=/__galactic',
     );
     expect(sbomStep).toContain('--entrypoint /__galactic_syft');
     expect(sbomStep).toContain('"$expected_image_id"');
@@ -195,11 +201,15 @@ describe("Compute release workflow static guards", () => {
     expect(sbomStep).not.toContain("docker save");
     expect(sbomStep).not.toContain("docker push");
     expect(sbomStep).toContain(
-      '-o "syft-json=/__galactic_evidence/image.syft.json"',
+      '-o "syft-json=/__galactic_output/image.syft.json"',
     );
     expect(sbomStep).toContain(
-      '-o "spdx-json=/__galactic_evidence/image.raw.spdx.json"',
+      '-o "spdx-json=/__galactic_output/image.raw.spdx.json"',
     );
+    expect(sbomStep).toContain(
+      'mv "$syft_output_dir/image.syft.json" "$EVIDENCE_DIR/image.syft.json"',
+    );
+    expect(sbomStep).toContain('rmdir "$syft_output_dir"');
     expect(sbomStep).toContain("image.syft.json");
     expect(sbomStep).toContain(
       '.source.type == "directory"',

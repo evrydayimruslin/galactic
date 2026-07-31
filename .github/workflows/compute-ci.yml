@@ -236,6 +236,8 @@ jobs:
           printf '%s  %s\n' "$syft_sha256" "$RUNNER_TEMP/$syft_archive" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/$syft_archive" -C "$syft_dir" syft
           rm -f "$RUNNER_TEMP/$syft_archive"
+          syft_output_dir="$EVIDENCE_DIR/syft-output"
+          install -d -m 0777 "$syft_output_dir"
 
           # CI needs a complete vulnerability inventory, not a release
           # attestation. Execute the pinned Syft binary inside the exact local
@@ -253,7 +255,7 @@ jobs:
             --pids-limit 256 \
             --tmpfs /tmp:rw,nosuid,nodev,noexec,size=512m \
             --mount "type=bind,src=$syft_dir/syft,dst=/__galactic_syft,readonly" \
-            --mount "type=bind,src=$EVIDENCE_DIR,dst=/__galactic_evidence" \
+            --mount "type=bind,src=$syft_output_dir,dst=/__galactic_output" \
             --env HOME=/tmp \
             --env XDG_CACHE_HOME=/tmp/.cache \
             --env SYFT_CHECK_FOR_APP_UPDATE=false \
@@ -263,7 +265,7 @@ jobs:
             --source-name "$IMAGE_TAG" \
             --source-version "$expected_image_id" \
             --exclude './__galactic_syft' \
-            --exclude './__galactic_evidence/**' \
+            --exclude './__galactic_output/**' \
             --exclude './dev/**' \
             --exclude './proc/**' \
             --exclude './sys/**' \
@@ -272,11 +274,17 @@ jobs:
             --exclude './etc/hostname' \
             --exclude './etc/hosts' \
             --exclude './etc/resolv.conf' \
-            -o "syft-json=/__galactic_evidence/image.syft.json" \
-            -o "spdx-json=/__galactic_evidence/image.raw.spdx.json"
+            -o "syft-json=/__galactic_output/image.syft.json" \
+            -o "spdx-json=/__galactic_output/image.raw.spdx.json"
+          test -s "$syft_output_dir/image.syft.json"
+          test -s "$syft_output_dir/image.raw.spdx.json"
           sudo chown "$(id -u):$(id -g)" \
-            "$EVIDENCE_DIR/image.syft.json" \
+            "$syft_output_dir/image.syft.json" \
+            "$syft_output_dir/image.raw.spdx.json"
+          mv "$syft_output_dir/image.syft.json" "$EVIDENCE_DIR/image.syft.json"
+          mv "$syft_output_dir/image.raw.spdx.json" \
             "$EVIDENCE_DIR/image.raw.spdx.json"
+          rmdir "$syft_output_dir"
 
           post_scan_image_id="$(docker image inspect --format '{{.Id}}' "$IMAGE_TAG")"
           printf '%s\n' "$post_scan_image_id" \
