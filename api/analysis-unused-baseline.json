@@ -13,12 +13,6 @@
       "file": "handlers/launch-compute.ts"
     },
     {
-      "file": "handlers/launch.ts",
-      "types": [
-        "LaunchHandlerDependencies"
-      ]
-    },
-    {
       "exports": [
         "handleDraftUploadFiles"
       ],
@@ -238,8 +232,7 @@
     {
       "exports": [
         "AUTH_ROUTE_RATE_LIMITS",
-        "buildAuthRateLimitHeaders",
-        "getAuthRateLimitClientIp"
+        "buildAuthRateLimitHeaders"
       ],
       "file": "services/auth-rate-limit.ts",
       "types": [
@@ -289,6 +282,27 @@
         "LIGHT_ECONOMY_POLICY_COPY"
       ],
       "file": "services/billing-config.ts"
+    },
+    {
+      "exports": [
+        "BUILDER_HANDOFF_DESCRIPTION_MAX_LENGTH",
+        "BUILDER_HANDOFF_TERMINAL_STATUSES",
+        "listUploadedBuilderHandoffSessions",
+        "projectBuilderHandoffSession"
+      ],
+      "file": "services/builder-handoff-sessions.ts",
+      "types": [
+        "AdvanceBuilderHandoffSessionInput",
+        "AuthenticateBuilderHandoffSessionInput",
+        "BuilderHandoffAdvanceEvent",
+        "BuilderHandoffCredential",
+        "BuilderHandoffSessionErrorCode",
+        "BuilderHandoffSessionProjection",
+        "BuilderHandoffSessionServiceOptions",
+        "BuilderHandoffTerminalStatus",
+        "CreateBuilderHandoffSessionInput",
+        "TerminateBuilderHandoffSessionInput"
+      ]
     },
     {
       "file": "services/bundler.ts",
@@ -411,7 +425,7 @@
     },
     {
       "duplicates": [
-        "{\"0\":{\"col\":17,\"line\":307,\"name\":\"calculateCloudUsageLight\",\"pos\":8568},\"1\":{\"col\":14,\"line\":321,\"name\":\"calcCloudUsageLight\",\"pos\":9057}}"
+        "{\"0\":{\"col\":17,\"line\":336,\"name\":\"calculateCloudUsageLight\",\"pos\":9423},\"1\":{\"col\":14,\"line\":350,\"name\":\"calcCloudUsageLight\",\"pos\":9912}}"
       ],
       "file": "services/cloud-usage.ts",
       "types": [
@@ -850,6 +864,12 @@
         "deleteD1ForApp"
       ],
       "file": "services/d1-provisioning.ts"
+    },
+    {
+      "file": "services/d1-test-fixtures.ts",
+      "types": [
+        "D1TestFixtureResolutionOptions"
+      ]
     },
     {
       "file": "services/data-quota.ts",
@@ -1451,7 +1471,8 @@
       ],
       "file": "services/parser.ts",
       "types": [
-        "JSDocInfo"
+        "JSDocInfo",
+        "RuntimeModuleImportAnalysis"
       ]
     },
     {
@@ -1922,7 +1943,6 @@
     {
       "file": "services/test-attestation.ts",
       "types": [
-        "TestAttestationClaims",
         "TestAttestationVerification",
         "TestAttestationVerificationReason"
       ]
@@ -1967,12 +1987,16 @@
     {
       "exports": [
         "buildDescriptionHashInput",
-        "getManifestEntrypoints"
+        "getManifestEntrypoints",
+        "resolveAppPermissions"
       ],
       "file": "services/trust.ts",
       "types": [
         "ManifestDiff",
-        "TrustArtifactFile"
+        "TrustArtifactFile",
+        "TrustCardBuildOptions",
+        "VerifiedVersionTrust",
+        "VersionTrustSubject"
       ]
     },
     {
@@ -2010,10 +2034,7 @@
       ],
       "file": "services/upload-pipeline.ts",
       "types": [
-        "D1Status",
-        "PipelineFile",
-        "PipelineOptions",
-        "PipelineResult"
+        "PipelineOptions"
       ]
     },
     {
@@ -2040,32 +2061,7 @@
       ]
     },
     {
-      "file": "src/bindings/ai-binding-structured-output.test.ts",
-      "files": [
-        "src/bindings/ai-binding-structured-output.test.ts"
-      ]
-    },
-    {
-      "file": "src/bindings/ai-model-precedence.test.ts",
-      "files": [
-        "src/bindings/ai-model-precedence.test.ts"
-      ]
-    },
-    {
-      "file": "src/bindings/capacity-dynamic-tail.test.ts",
-      "files": [
-        "src/bindings/capacity-dynamic-tail.test.ts"
-      ]
-    },
-    {
-      "file": "src/bindings/compute-binding-core.test.ts",
-      "files": [
-        "src/bindings/compute-binding-core.test.ts"
-      ]
-    },
-    {
       "exports": [
-        "deriveComputeIdempotencyKey",
         "projectComputeRequest",
         "resolveComputeActor",
         "sanitizeComputeRun"
@@ -2076,28 +2072,10 @@
       ]
     },
     {
-      "file": "src/bindings/embed-binding.test.ts",
-      "files": [
-        "src/bindings/embed-binding.test.ts"
-      ]
-    },
-    {
       "exports": [
         "EMBEDDING_RESERVATION_TOKEN_OVERHEAD"
       ],
       "file": "src/bindings/embedding-budget.ts"
-    },
-    {
-      "file": "src/bindings/memory-binding-scope.test.ts",
-      "files": [
-        "src/bindings/memory-binding-scope.test.ts"
-      ]
-    },
-    {
-      "file": "src/bindings/mime-parse.test.ts",
-      "files": [
-        "src/bindings/mime-parse.test.ts"
-      ]
     },
     {
       "file": "src/bindings/outbound-policy.ts",

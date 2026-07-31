@@ -9,6 +9,10 @@ import {
 } from "https://deno.land/std@0.210.0/assert/mod.ts";
 import { inspectAppDatabase } from "./db-inspect.ts";
 import { CapabilityError } from "../../../shared/contracts/capabilities.ts";
+import {
+  buildVersionMetadataEntry,
+  buildVersionTrustMetadata,
+} from "../trust.ts";
 
 const OWNER = "11111111-1111-4111-8111-111111111111";
 const DBID = "db-abc";
@@ -172,14 +176,129 @@ Deno.test("db-inspect: invalid action is rejected", async () => {
   });
 });
 
-// An app that has DECLARED the disclosed permission (data:support_read).
-const supportApp = { ...ownedApp, manifest: JSON.stringify({ permissions: ["data:support_read"] }) };
+// A manifest declaration alone is disclosure-only; support_read authorization
+// additionally requires exact-subject, platform-signed current-version trust.
+const supportApp = {
+  ...ownedApp,
+  manifest: JSON.stringify({ permissions: ["data:support_read"] }),
+};
+
+async function signedSupportApp(
+  options: {
+    trustAppId?: string;
+    trustVersion?: string;
+    trustRuntime?: string;
+    permissions?: string[];
+  } = {},
+): Promise<Record<string, unknown>> {
+  const version = "1.0.0";
+  const runtime = "deno";
+  const manifest = {
+    name: "Support Agent",
+    version,
+    type: "mcp" as const,
+    entry: { functions: "index.ts" },
+    permissions: options.permissions ?? ["data:support_read"],
+    functions: {},
+  };
+  const trust = await buildVersionTrustMetadata({
+    appId: options.trustAppId ?? "app-1",
+    version: options.trustVersion ?? version,
+    runtime: options.trustRuntime ?? runtime,
+    manifest,
+    files: [{
+      name: "index.ts",
+      content: "export const inspect = () => null;",
+    }],
+  });
+  return {
+    ...ownedApp,
+    current_version: version,
+    runtime,
+    manifest: JSON.stringify(manifest),
+    version_metadata: [
+      buildVersionMetadataEntry(version, 1, trust),
+    ],
+  };
+}
 
 Deno.test("db-inspect: support_read is DENIED unless the app declared the permission", async () => {
   // ownedApp has no manifest → no data:support_read → forbidden.
   await withStub({ app: ownedApp, dbId: DBID, sql: [] }, async () => {
     await assertRejects(
-      () => inspectAppDatabase(OWNER, { app_id: "app-1", action: "support_read", table: "notes" }) as Promise<unknown>,
+      () =>
+        inspectAppDatabase(OWNER, {
+          app_id: "app-1",
+          action: "support_read",
+          table: "notes",
+        }) as Promise<unknown>,
+      CapabilityError,
+      "has not enabled support data access",
+    );
+  });
+});
+
+Deno.test("db-inspect: manifest-only support_read declaration cannot authorize cross-user access", async () => {
+  await withStub({ app: supportApp, dbId: DBID, sql: [] }, async () => {
+    await assertRejects(
+      () =>
+        inspectAppDatabase(OWNER, {
+          app_id: "app-1",
+          action: "support_read",
+          table: "notes",
+        }) as Promise<unknown>,
+      CapabilityError,
+      "has not enabled support data access",
+    );
+  });
+});
+
+Deno.test("db-inspect: transplanted or tampered trust cannot authorize support_read", async () => {
+  const opts: StubOpts = { app: null, dbId: DBID, sql: [] };
+  await withStub(opts, async () => {
+    opts.app = await signedSupportApp({ trustAppId: "other-app" });
+    await assertRejects(
+      () =>
+        inspectAppDatabase(OWNER, {
+          app_id: "app-1",
+          action: "support_read",
+          table: "notes",
+        }) as Promise<unknown>,
+      CapabilityError,
+      "has not enabled support data access",
+    );
+
+    const tampered = await signedSupportApp({ permissions: ["storage:read"] });
+    const metadata = tampered.version_metadata as Array<
+      ReturnType<typeof buildVersionMetadataEntry>
+    >;
+    metadata[0].trust!.permissions = ["data:support_read"];
+    opts.app = tampered;
+    await assertRejects(
+      () =>
+        inspectAppDatabase(OWNER, {
+          app_id: "app-1",
+          action: "support_read",
+          table: "notes",
+        }) as Promise<unknown>,
+      CapabilityError,
+      "has not enabled support data access",
+    );
+
+    const manifestTampered = await signedSupportApp({
+      permissions: ["storage:read"],
+    });
+    manifestTampered.manifest = JSON.stringify({
+      permissions: ["data:support_read"],
+    });
+    opts.app = manifestTampered;
+    await assertRejects(
+      () =>
+        inspectAppDatabase(OWNER, {
+          app_id: "app-1",
+          action: "support_read",
+          table: "notes",
+        }) as Promise<unknown>,
       CapabilityError,
       "has not enabled support data access",
     );
@@ -187,9 +306,15 @@ Deno.test("db-inspect: support_read is DENIED unless the app declared the permis
 });
 
 Deno.test("db-inspect: support_read is UNSCOPED (cross-user) and audit-logged", async () => {
-  const opts: StubOpts = { app: supportApp, dbId: DBID, sql: [], audit: [] };
+  const opts: StubOpts = { app: null, dbId: DBID, sql: [], audit: [] };
   await withStub(opts, async () => {
-    const r = await inspectAppDatabase(OWNER, { app_id: "app-1", action: "support_read", table: "notes", reason: "ticket #7" }) as {
+    opts.app = await signedSupportApp();
+    const r = await inspectAppDatabase(OWNER, {
+      app_id: "app-1",
+      action: "support_read",
+      table: "notes",
+      reason: "ticket #7",
+    }) as {
       scope: string;
       disclosed: boolean;
       audited: boolean;
@@ -197,8 +322,13 @@ Deno.test("db-inspect: support_read is UNSCOPED (cross-user) and audit-logged", 
     assertEquals(r.scope, "all_users");
     assertEquals([r.disclosed, r.audited], [true, true]);
     // The cross-user read must NOT be user_id-scoped (that's the whole point).
-    const selectSql = opts.sql.find((s) => s.includes("FROM \"notes\"") && !s.includes("sqlite_master"))!;
-    assert(!selectSql.includes("user_id"), "support_read must be unscoped (cross-user)");
+    const selectSql = opts.sql.find((s) =>
+      s.includes('FROM "notes"') && !s.includes("sqlite_master")
+    )!;
+    assert(
+      !selectSql.includes("user_id"),
+      "support_read must be unscoped (cross-user)",
+    );
     // Exactly one audit row, with accessor + app + table + reason.
     assertEquals(opts.audit!.length, 1);
     const a = opts.audit![0] as Record<string, unknown>;
@@ -210,10 +340,22 @@ Deno.test("db-inspect: support_read is UNSCOPED (cross-user) and audit-logged", 
 });
 
 Deno.test("db-inspect: support_read FAILS CLOSED when the audit write fails", async () => {
-  const opts: StubOpts = { app: supportApp, dbId: DBID, sql: [], audit: [], auditFail: true };
+  const opts: StubOpts = {
+    app: null,
+    dbId: DBID,
+    sql: [],
+    audit: [],
+    auditFail: true,
+  };
   await withStub(opts, async () => {
+    opts.app = await signedSupportApp();
     await assertRejects(
-      () => inspectAppDatabase(OWNER, { app_id: "app-1", action: "support_read", table: "notes" }) as Promise<unknown>,
+      () =>
+        inspectAppDatabase(OWNER, {
+          app_id: "app-1",
+          action: "support_read",
+          table: "notes",
+        }) as Promise<unknown>,
       Error,
       "audit write failed",
     );

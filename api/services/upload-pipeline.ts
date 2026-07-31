@@ -13,12 +13,15 @@
 // All upload handlers (form upload, programmatic upload, MCP version update,
 // draft upload) call this pipeline instead of duplicating logic.
 
-import type { BuildLogEntry } from '../../shared/types/index.ts';
-import type { AppManifest } from '../../shared/contracts/manifest.ts';
-import { validateManifest } from '../../shared/contracts/manifest.ts';
-import { bundleCode } from './bundler.ts';
-import { hydrateManifestForSource, upsertManifestUploadFile } from './app-manifest-generation.ts';
-import { generateGpuManifest } from './trust.ts';
+import type { BuildLogEntry } from "../../shared/types/index.ts";
+import type { AppManifest } from "../../shared/contracts/manifest.ts";
+import { validateManifest } from "../../shared/contracts/manifest.ts";
+import { bundleCode } from "./bundler.ts";
+import {
+  hydrateManifestForSource,
+  upsertManifestUploadFile,
+} from "./app-manifest-generation.ts";
+import { generateGpuManifest } from "./trust.ts";
 import {
   type MigrationFile,
   type MigrationResult,
@@ -26,12 +29,27 @@ import {
   runMigrations,
   updateMigrationVersion,
   validateMigrationSchema,
-} from './d1-migrations.ts';
-import { type D1ProvisionResult, provisionD1ForApp } from './d1-provisioning.ts';
-import { detectGpuConfig, parseGpuConfig } from './gpu/config.ts';
-import type { GpuConfig } from './gpu/types.ts';
-import { getGpuSupportDisabledMessage, isGpuSupportEnabled } from './gpu/feature-flag.ts';
-import { sourceFileBytes } from './source-file-content.ts';
+} from "./d1-migrations.ts";
+import {
+  type D1ProvisionResult,
+  provisionD1ForApp,
+} from "./d1-provisioning.ts";
+import { detectGpuConfig, parseGpuConfig } from "./gpu/config.ts";
+import type { GpuConfig } from "./gpu/types.ts";
+import {
+  getGpuSupportDisabledMessage,
+  isGpuSupportEnabled,
+} from "./gpu/feature-flag.ts";
+import { sourceFileBytes } from "./source-file-content.ts";
+import {
+  type InterfaceArtifactFile,
+  prepareInterfaceArtifacts,
+} from "./interface-artifacts.ts";
+import {
+  type GalacticAgentDocumentResolution,
+  resolveGalacticAgentDocument,
+} from "./galactic-agent-document.ts";
+import { analyzeRuntimeModuleImports, parseTypeScript } from "./parser.ts";
 
 // ============================================
 // TYPES
@@ -55,11 +73,16 @@ export interface PipelineOptions {
   description?: string;
   /** Override version for generated manifests */
   version?: string;
+  /**
+   * Qualification mode: a build failure must escape instead of falling back
+   * to raw source. Deploy flows retain their legacy fallback behavior.
+   */
+  strictBuild?: boolean;
 }
 
 export interface D1Status {
   provisioned: boolean;
-  status: 'ready' | 'failed' | 'skipped';
+  status: "ready" | "failed" | "skipped";
   database_id?: string;
   migrations_applied: number;
   migrations_skipped: number;
@@ -69,11 +92,13 @@ export interface D1Status {
 
 export interface PipelineResult {
   // Runtime detection
-  runtime: 'deno' | 'gpu';
+  runtime: "deno" | "gpu";
   gpuConfig?: GpuConfig;
 
   // Manifest
   manifest: AppManifest | null;
+  /** Authored Galactic contract, or the validated legacy manifest resolution. */
+  agentDocument: GalacticAgentDocumentResolution | null;
 
   // Entry + exports
   entryFile: PipelineFile;
@@ -96,6 +121,9 @@ export interface PipelineResult {
   filesToUpload: Array<
     { name: string; content: Uint8Array; contentType: string }
   >;
+  // Content-addressed interface files prepared from the exact normalized
+  // upload set. Callers persist these under the Agent's interface prefix.
+  interfaceArtifacts: InterfaceArtifactFile[];
 
   // Normalized entry file name
   normalizedEntryName: string;
@@ -109,16 +137,19 @@ export interface PipelineResult {
 // ============================================
 
 function getContentType(filename: string): string {
-  if (filename.endsWith('.wasm')) return 'application/wasm';
-  if (filename.endsWith('.tsx')) return 'text/typescript-jsx';
-  if (filename.endsWith('.ts')) return 'text/typescript';
-  if (filename.endsWith('.jsx')) return 'text/javascript-jsx';
-  if (filename.endsWith('.js')) return 'application/javascript';
-  if (filename.endsWith('.json')) return 'application/json';
-  if (filename.endsWith('.md')) return 'text/markdown';
-  if (filename.endsWith('.css')) return 'text/css';
-  if (filename.endsWith('.sql')) return 'text/plain';
-  return 'text/plain';
+  if (filename.endsWith(".wasm")) return "application/wasm";
+  if (filename.endsWith(".tsx")) return "text/typescript-jsx";
+  if (filename.endsWith(".ts")) return "text/typescript";
+  if (filename.endsWith(".jsx")) return "text/javascript-jsx";
+  if (filename.endsWith(".js")) return "application/javascript";
+  if (filename.endsWith(".json")) return "application/json";
+  if (filename.endsWith(".yaml") || filename.endsWith(".yml")) {
+    return "application/yaml";
+  }
+  if (filename.endsWith(".md")) return "text/markdown";
+  if (filename.endsWith(".css")) return "text/css";
+  if (filename.endsWith(".sql")) return "text/plain";
+  return "text/plain";
 }
 
 export function extractExports(code: string): string[] {
@@ -132,22 +163,24 @@ export function extractExports(code: string): string[] {
 
   const namedExportRegex = /export\s*\{([^}]+)\}/g;
   while ((match = namedExportRegex.exec(code)) !== null) {
-    const names = match[1].split(',').map((s) => s.trim().split(' as ')[0].trim());
+    const names = match[1].split(",").map((s) =>
+      s.trim().split(" as ")[0].trim()
+    );
     exports.push(...names);
   }
 
-  if (/export\s+default/.test(code)) exports.push('default');
+  if (/export\s+default/.test(code)) exports.push("default");
 
   return [...new Set(exports)];
 }
 
 function normalizeFileName(files: PipelineFile[], name: string): string {
-  const parts = name.split('/');
+  const parts = name.split("/");
   if (parts.length > 1) {
-    const firstPart = files[0]?.name.split('/')[0];
-    const allSameRoot = files.every((f) => f.name.startsWith(firstPart + '/'));
+    const firstPart = files[0]?.name.split("/")[0];
+    const allSameRoot = files.every((f) => f.name.startsWith(firstPart + "/"));
     if (allSameRoot && parts[0] === firstPart) {
-      return parts.slice(1).join('/');
+      return parts.slice(1).join("/");
     }
   }
   return name;
@@ -158,7 +191,7 @@ function normalizeFileName(files: PipelineFile[], name: string): string {
 // ============================================
 
 interface RuntimeDetection {
-  runtime: 'deno' | 'gpu';
+  runtime: "deno" | "gpu";
   gpuConfig?: GpuConfig;
 }
 
@@ -166,17 +199,17 @@ function detectRuntime(files: PipelineFile[]): RuntimeDetection {
   const gpuYamlContent = detectGpuConfig(files);
   if (gpuYamlContent) {
     if (!isGpuSupportEnabled()) {
-      throw new Error(getGpuSupportDisabledMessage('GPU deployments'));
+      throw new Error(getGpuSupportDisabledMessage("GPU deployments"));
     }
     const gpuValidation = parseGpuConfig(gpuYamlContent);
     if (!gpuValidation.valid) {
       throw new Error(
-        `Invalid ultralight.gpu.yaml: ${gpuValidation.errors.join(', ')}`,
+        `Invalid ultralight.gpu.yaml: ${gpuValidation.errors.join(", ")}`,
       );
     }
-    return { runtime: 'gpu', gpuConfig: gpuValidation.config! };
+    return { runtime: "gpu", gpuConfig: gpuValidation.config! };
   }
-  return { runtime: 'deno' };
+  return { runtime: "deno" };
 }
 
 // ============================================
@@ -188,8 +221,8 @@ function parseManifest(
   options: PipelineOptions,
 ): AppManifest | null {
   const manifestFile = files.find((f) => {
-    const fileName = f.name.split('/').pop() || f.name;
-    return fileName === 'manifest.json';
+    const fileName = f.name.split("/").pop() || f.name;
+    return fileName === "manifest.json";
   });
 
   let manifest: AppManifest | null = null;
@@ -202,28 +235,28 @@ function parseManifest(
         throw new Error(
           `Invalid manifest.json: ${
             validation.errors.map((entry) => `${entry.path}: ${entry.message}`)
-              .join(', ')
+              .join(", ")
           }`,
         );
       }
       manifest = validation.manifest!;
     } catch (err) {
       throw new Error(
-        err instanceof Error ? err.message : 'Failed to parse manifest.json',
+        err instanceof Error ? err.message : "Failed to parse manifest.json",
       );
     }
   }
 
   // Apply option overrides
   if (options.appType || options.functionsEntry) {
-    const appType = options.appType === 'mcp' ? 'mcp' : 'mcp';
+    const appType = options.appType === "mcp" ? "mcp" : "mcp";
     const base: AppManifest = manifest ? { ...manifest } : {
-      name: options.name || 'Untitled App',
-      version: '1.0.0',
+      name: options.name || "Untitled App",
+      version: "1.0.0",
       type: appType,
       entry: {},
     };
-    if (options.appType === 'mcp') base.type = 'mcp';
+    if (options.appType === "mcp") base.type = "mcp";
     if (options.functionsEntry) base.entry.functions = options.functionsEntry;
     if (options.description) base.description = options.description;
     manifest = base;
@@ -246,7 +279,7 @@ function detectEntryFile(
   // Manifest-specified entry
   if (manifest && manifest.entry.functions) {
     functionsFile = files.find((f) => {
-      const fileName = f.name.split('/').pop() || f.name;
+      const fileName = f.name.split("/").pop() || f.name;
       return fileName === manifest!.entry.functions;
     });
     if (!functionsFile) {
@@ -259,16 +292,16 @@ function detectEntryFile(
 
   // Auto-detect fallback
   if (!entryFile) {
-    const entryFileNames = ['index.tsx', 'index.ts', 'index.jsx', 'index.js'];
+    const entryFileNames = ["index.tsx", "index.ts", "index.jsx", "index.js"];
     entryFile = files.find((f) => {
-      const fileName = f.name.split('/').pop() || f.name;
+      const fileName = f.name.split("/").pop() || f.name;
       return entryFileNames.includes(fileName);
     });
   }
 
   if (!entryFile) {
     throw new Error(
-      'Entry file required. Provide manifest.json with entry.functions, or include index.ts/tsx/js/jsx',
+      "Entry file required. Provide manifest.json with entry.functions, or include index.ts/tsx/js/jsx",
     );
   }
 
@@ -297,32 +330,38 @@ async function bundleEntryFile(
   files: PipelineFile[],
   entryFileName: string,
   entryFileContent: string,
-  log: (level: BuildLogEntry['level'], message: string) => void,
+  log: (level: BuildLogEntry["level"], message: string) => void,
+  strictBuild = false,
 ): Promise<
   { bundledCode: string; esmBundledCode?: string; bundleUsed: boolean }
 > {
-  log('info', 'Bundling code...');
+  log("info", "Bundling code...");
   try {
     const bundleResult = await bundleCode(files, entryFileName);
     if (!bundleResult.success) {
-      for (const err of bundleResult.errors) log('error', err);
-      throw new Error('Build failed: ' + bundleResult.errors.join(', '));
+      for (const err of bundleResult.errors) log("error", err);
+      throw new Error("Build failed: " + bundleResult.errors.join(", "));
     }
-    for (const warn of bundleResult.warnings) log('warn', warn);
+    for (const warn of bundleResult.warnings) log("warn", warn);
 
     if (bundleResult.code !== entryFileContent) {
-      log('success', 'Bundle complete (IIFE + ESM)');
+      log("success", "Bundle complete (IIFE + ESM)");
       return {
         bundledCode: bundleResult.code,
         esmBundledCode: bundleResult.esmCode,
         bundleUsed: true,
       };
     }
-    log('success', 'No bundling needed (no imports)');
-    return { bundledCode: entryFileContent, bundleUsed: false };
+    log("success", "No bundling needed (no imports)");
+    return {
+      bundledCode: entryFileContent,
+      esmBundledCode: bundleResult.esmCode,
+      bundleUsed: false,
+    };
   } catch (err) {
+    if (strictBuild) throw err;
     log(
-      'warn',
+      "warn",
       `Bundling skipped: ${err instanceof Error ? err.message : String(err)}`,
     );
     return { bundledCode: entryFileContent, bundleUsed: false };
@@ -335,24 +374,24 @@ async function bundleEntryFile(
 
 async function runSafetyScanStage(
   files: PipelineFile[],
-  log: (level: BuildLogEntry['level'], message: string) => void,
+  log: (level: BuildLogEntry["level"], message: string) => void,
 ): Promise<{ passed: boolean; warnings: number }> {
-  log('info', 'Running safety scan...');
-  const { runSafetyScan } = await import('./integrity.ts');
+  log("info", "Running safety scan...");
+  const { runSafetyScan } = await import("./integrity.ts");
   const result = runSafetyScan(files);
 
   if (!result.passed) {
     const errorSummary = result.issues
-      .filter((i) => i.severity === 'error')
+      .filter((i) => i.severity === "error")
       .map((i) => `[${i.rule}] ${i.message}`)
-      .join('; ');
+      .join("; ");
     throw new Error(`Upload blocked by safety scan: ${errorSummary}`);
   }
 
-  for (const warn of result.issues.filter((i) => i.severity === 'warning')) {
-    log('warn', `[${warn.rule}] ${warn.message}`);
+  for (const warn of result.issues.filter((i) => i.severity === "warning")) {
+    log("warn", `[${warn.rule}] ${warn.message}`);
   }
-  log('success', `Safety scan passed (${result.summary.warnings} warnings)`);
+  log("success", `Safety scan passed (${result.summary.warnings} warnings)`);
 
   return { passed: true, warnings: result.summary.warnings };
 }
@@ -363,16 +402,16 @@ async function runSafetyScanStage(
 
 function extractMigrations(
   files: PipelineFile[],
-  log: (level: BuildLogEntry['level'], message: string) => void,
+  log: (level: BuildLogEntry["level"], message: string) => void,
 ): MigrationFile[] {
   const migrationFileMap: Record<string, string> = {};
 
   for (const file of files) {
-    const pathParts = file.name.split('/');
-    const migrationsIdx = pathParts.indexOf('migrations');
+    const pathParts = file.name.split("/");
+    const migrationsIdx = pathParts.indexOf("migrations");
     if (migrationsIdx !== -1 && pathParts.length > migrationsIdx + 1) {
-      const migrationFilename = pathParts.slice(migrationsIdx + 1).join('/');
-      if (migrationFilename.endsWith('.sql')) {
+      const migrationFilename = pathParts.slice(migrationsIdx + 1).join("/");
+      if (migrationFilename.endsWith(".sql")) {
         migrationFileMap[migrationFilename] = file.content;
       }
     }
@@ -387,17 +426,21 @@ function extractMigrations(
     const validation = validateMigrationSchema(migration.sql);
     if (!validation.valid) {
       throw new Error(
-        `Migration ${migration.filename} validation failed: ${validation.errors.join('; ')}`,
+        `Migration ${migration.filename} validation failed: ${
+          validation.errors.join("; ")
+        }`,
       );
     }
     for (const warning of validation.warnings) {
-      log('warn', `[Migration] ${warning}`);
+      log("warn", `[Migration] ${warning}`);
     }
   }
 
   log(
-    'info',
-    `Found ${parsed.length} migration(s): ${parsed.map((m) => m.filename).join(', ')}`,
+    "info",
+    `Found ${parsed.length} migration(s): ${
+      parsed.map((m) => m.filename).join(", ")
+    }`,
   );
   return parsed;
 }
@@ -427,9 +470,9 @@ function prepareFilesForUpload(
         // ESM bundle for browser rendering
         ...(esmBundledCode
           ? [{
-            name: normalizedEntryName.replace(/\.(tsx?|jsx?)$/, '.esm.js'),
+            name: normalizedEntryName.replace(/\.(tsx?|jsx?)$/, ".esm.js"),
             content: new TextEncoder().encode(esmBundledCode),
-            contentType: 'application/javascript',
+            contentType: "application/javascript",
           }]
           : []),
         // Original source (for docs/parsing)
@@ -449,9 +492,9 @@ function prepareFilesForUpload(
       ],
       manifest,
       (manifestJson) => ({
-        name: 'manifest.json',
+        name: "manifest.json",
         content: new TextEncoder().encode(manifestJson),
-        contentType: 'application/json',
+        contentType: "application/json",
       }),
     );
   }
@@ -464,9 +507,9 @@ function prepareFilesForUpload(
     })),
     manifest,
     (manifestJson) => ({
-      name: 'manifest.json',
+      name: "manifest.json",
       content: new TextEncoder().encode(manifestJson),
-      contentType: 'application/json',
+      contentType: "application/json",
     }),
   );
 }
@@ -487,7 +530,7 @@ export async function provisionAndMigrate(
   if (migrations.length === 0) {
     return {
       provisioned: false,
-      status: 'skipped',
+      status: "skipped",
       migrations_applied: 0,
       migrations_skipped: 0,
       migration_errors: [],
@@ -497,14 +540,14 @@ export async function provisionAndMigrate(
   try {
     const provision = await provisionD1ForApp(appId);
 
-    if (provision.status !== 'ready' || !provision.databaseId) {
+    if (provision.status !== "ready" || !provision.databaseId) {
       return {
         provisioned: false,
-        status: 'failed',
+        status: "failed",
         migrations_applied: 0,
         migrations_skipped: 0,
         migration_errors: [],
-        error: provision.error || 'D1 provisioning failed',
+        error: provision.error || "D1 provisioning failed",
       };
     }
 
@@ -520,12 +563,12 @@ export async function provisionAndMigrate(
       );
       return {
         provisioned: true,
-        status: 'failed',
+        status: "failed",
         database_id: provision.databaseId,
         migrations_applied: migrationResult.applied,
         migrations_skipped: migrationResult.skipped,
         migration_errors: migrationResult.errors,
-        error: migrationResult.errors.join('; '),
+        error: migrationResult.errors.join("; "),
       };
     }
 
@@ -536,7 +579,7 @@ export async function provisionAndMigrate(
 
     return {
       provisioned: true,
-      status: 'ready',
+      status: "ready",
       database_id: provision.databaseId,
       migrations_applied: migrationResult.applied,
       migrations_skipped: migrationResult.skipped,
@@ -547,7 +590,7 @@ export async function provisionAndMigrate(
     console.error(`[D1-MIGRATIONS] Error for app ${appId}:`, errMsg);
     return {
       provisioned: false,
-      status: 'failed',
+      status: "failed",
       migrations_applied: 0,
       migrations_skipped: 0,
       migration_errors: [errMsg],
@@ -577,37 +620,41 @@ export async function processUploadPipeline(
   options: PipelineOptions = {},
 ): Promise<PipelineResult> {
   const buildLogs: BuildLogEntry[] = [];
-  const log = (level: BuildLogEntry['level'], message: string) => {
+  const log = (level: BuildLogEntry["level"], message: string) => {
     buildLogs.push({ time: new Date().toISOString(), level, message });
   };
 
-  log('info', `Processing ${files.length} files...`);
+  log("info", `Processing ${files.length} files...`);
 
   // Stage 1: Runtime detection
   const { runtime, gpuConfig } = detectRuntime(files);
 
-  if (runtime === 'gpu') {
+  if (runtime === "gpu") {
     // GPU apps: minimal processing — validate main.py, extract exports
-    const hasMainPy = files.some((f) => (f.name.split('/').pop() || f.name) === 'main.py');
-    if (!hasMainPy) throw new Error('GPU functions require a main.py file');
+    const hasMainPy = files.some((f) =>
+      (f.name.split("/").pop() || f.name) === "main.py"
+    );
+    if (!hasMainPy) throw new Error("GPU functions require a main.py file");
 
-    let gpuExports: string[] = ['main'];
+    let gpuExports: string[] = ["main"];
     const testFixture = files.find((f) =>
-      (f.name.split('/').pop() || f.name) === 'test_fixture.json'
+      (f.name.split("/").pop() || f.name) === "test_fixture.json"
     );
     if (testFixture) {
       try {
         const fixture = JSON.parse(testFixture.content);
-        if (typeof fixture === 'object' && fixture !== null) {
+        if (typeof fixture === "object" && fixture !== null) {
           gpuExports = Object.keys(fixture);
         }
       } catch { /* non-fatal */ }
     }
 
-    const mainPy = files.find((f) => (f.name.split('/').pop() || f.name) === 'main.py')!;
+    const mainPy = files.find((f) =>
+      (f.name.split("/").pop() || f.name) === "main.py"
+    )!;
     const manifest = generateGpuManifest({
-      name: options.name || 'Untitled GPU App',
-      version: options.version || '1.0.0',
+      name: options.name || "Untitled GPU App",
+      version: options.version || "1.0.0",
       description: options.description || null,
       exports: gpuExports,
     });
@@ -615,30 +662,35 @@ export async function processUploadPipeline(
       files.map((f) => ({
         name: f.name,
         content: sourceFileBytes(f),
-        contentType: f.name.endsWith('.py') ? 'text/x-python' : getContentType(f.name),
+        contentType: f.name.endsWith(".py")
+          ? "text/x-python"
+          : getContentType(f.name),
       })),
       manifest,
       (manifestJson) => ({
-        name: 'manifest.json',
+        name: "manifest.json",
         content: new TextEncoder().encode(manifestJson),
-        contentType: 'application/json',
+        contentType: "application/json",
       }),
     );
 
     // D1 migrations not supported for GPU apps
     if (
-      files.some((f) => f.name.includes('migrations/') && f.name.endsWith('.sql'))
+      files.some((f) =>
+        f.name.includes("migrations/") && f.name.endsWith(".sql")
+      )
     ) {
       log(
-        'warn',
-        'D1 migrations detected in GPU app — D1 is not supported for GPU runtime',
+        "warn",
+        "D1 migrations detected in GPU app — D1 is not supported for GPU runtime",
       );
     }
 
     return {
-      runtime: 'gpu',
+      runtime: "gpu",
       gpuConfig,
       manifest,
+      agentDocument: null,
       entryFile: mainPy,
       exports: gpuExports,
       bundledCode: mainPy.content,
@@ -648,72 +700,197 @@ export async function processUploadPipeline(
       migrations: [],
       hasMigrations: false,
       filesToUpload,
-      normalizedEntryName: 'main.py',
+      interfaceArtifacts: [],
+      normalizedEntryName: "main.py",
       buildLogs,
     };
   }
 
-  // Stage 2: Manifest parsing
-  let manifest = parseManifest(files, options);
+  // Stage 2: authored Galactic contract / legacy manifest resolution.
+  //
+  // galactic.yaml is authoritative when present. The resolver rejects an
+  // ambiguous authored YAML + manifest.json pair, then compiles YAML into the
+  // existing runtime manifest so every downstream runtime keeps one contract.
+  let agentDocument = await resolveGalacticAgentDocument(
+    files.map((file) => ({ path: file.name, content: file.content })),
+  );
+  let manifest = agentDocument?.sourceKind === "galactic_yaml"
+    ? agentDocument.compiledManifest
+    : parseManifest(files, options);
   if (manifest) {
-    log('info', `Manifest: ${manifest.name} (type: ${manifest.type})`);
+    log("info", `Manifest: ${manifest.name} (type: ${manifest.type})`);
   }
 
   // Stage 3: Entry file detection
   const { entryFile } = detectEntryFile(files, manifest);
   const normalizedEntryName = normalizeFileName(files, entryFile.name);
-  log('info', `Entry: ${entryFile.name} → ${normalizedEntryName}`);
+  log("info", `Entry: ${entryFile.name} → ${normalizedEntryName}`);
 
   const hydratedManifest = await hydrateManifestForSource({
     app: {
-      name: manifest?.name || options.name || 'Untitled App',
-      slug: options.name || 'uploaded-app',
+      name: manifest?.name || options.name || "Untitled App",
+      slug: options.name || "uploaded-app",
       description: options.description || manifest?.description || null,
     },
     existingManifest: manifest,
     sourceCode: entryFile.content,
     filename: normalizedEntryName,
-    version: manifest?.version || options.version || '1.0.0',
+    version: manifest?.version || options.version || "1.0.0",
+    authoritativeContract: agentDocument?.sourceKind === "galactic_yaml",
   });
   manifest = hydratedManifest.manifest;
-  if (hydratedManifest.source !== 'uploaded') {
-    const manifestMessage = hydratedManifest.source === 'merged'
-      ? 'Normalized manifest-backed contracts from uploaded manifest and source code'
-      : 'Generated manifest-backed contracts from source code';
-    log('info', manifestMessage);
+  if (hydratedManifest.source !== "uploaded") {
+    const manifestMessage = hydratedManifest.source === "merged"
+      ? "Normalized manifest-backed contracts from uploaded manifest and source code"
+      : "Generated manifest-backed contracts from source code";
+    log("info", manifestMessage);
   }
   for (const parseError of hydratedManifest.parseResult.parseErrors) {
-    log('warn', `[Manifest] ${parseError}`);
+    log("warn", `[Manifest] ${parseError}`);
   }
   for (const parseWarning of hydratedManifest.parseResult.parseWarnings) {
-    log('warn', `[Manifest] ${parseWarning}`);
+    log("warn", `[Manifest] ${parseWarning}`);
+  }
+  if (agentDocument?.sourceKind === "galactic_yaml") {
+    const declaredFunctions = new Set(agentDocument.functions);
+    const policyExport = manifest.access_policy?.mode === "module"
+      ? manifest.access_policy.export
+      : undefined;
+    const sourceFunctions = new Set(
+      hydratedManifest.parseResult.functions.map((fn) => fn.name),
+    );
+    const undeclaredExports = [...sourceFunctions].filter((name) =>
+      !declaredFunctions.has(name) && name !== policyExport
+    );
+    const missingExports = [...declaredFunctions].filter((name) =>
+      !sourceFunctions.has(name)
+    );
+    if (undeclaredExports.length > 0 || missingExports.length > 0) {
+      const details = [
+        ...(undeclaredExports.length > 0
+          ? [`undeclared exports: ${undeclaredExports.sort().join(", ")}`]
+          : []),
+        ...(missingExports.length > 0
+          ? [`missing exports: ${missingExports.sort().join(", ")}`]
+          : []),
+      ];
+      throw new Error(
+        `galactic.yaml functions must exactly match executable exports (${
+          details.join("; ")
+        })`,
+      );
+    }
+    if (
+      policyExport &&
+      !declaredFunctions.has(policyExport) &&
+      manifest.functions?.[policyExport]
+    ) {
+      // The access-policy hook is an internal runtime export, not a callable
+      // Agent function. Do not let source hydration accidentally publish it.
+      delete manifest.functions[policyExport];
+    }
   }
 
   // Stage 4: Export extraction
   const exports = extractExportsFromManifestOrCode(manifest, entryFile.content);
   log(
-    'success',
-    `Exports: ${exports.length} (${exports.slice(0, 5).join(', ')}${
-      exports.length > 5 ? '...' : ''
+    "success",
+    `Exports: ${exports.length} (${exports.slice(0, 5).join(", ")}${
+      exports.length > 5 ? "..." : ""
     })`,
   );
 
   // Stage 5: Code bundling
+  if (agentDocument?.sourceKind === "galactic_yaml") {
+    const computedLoadSources: string[] = [];
+    for (
+      const file of files.filter((candidate) =>
+        /\.(?:ts|tsx|js|jsx)$/.test(candidate.name)
+      )
+    ) {
+      const sourceImports = await analyzeRuntimeModuleImports(
+        file.content,
+        file.name,
+      );
+      if (sourceImports.hasComputedLoad) computedLoadSources.push(file.name);
+    }
+    if (computedLoadSources.length > 0) {
+      throw new Error(
+        "galactic.yaml releases must vendor every dependency into the tested " +
+          "source; unbound runtime code is not qualifiable " +
+          `(computed import()/require() target in ${
+            computedLoadSources.sort().join(", ")
+          })`,
+      );
+    }
+  }
   const { bundledCode, esmBundledCode, bundleUsed } = await bundleEntryFile(
     files,
     entryFile.name,
     entryFile.content,
     log,
+    options.strictBuild === true,
   );
+  if (agentDocument?.sourceKind === "galactic_yaml") {
+    if (!esmBundledCode) {
+      throw new Error(
+        "galactic.yaml releases require one prepared, self-contained ESM executable",
+      );
+    }
+    const runtimeImports = await analyzeRuntimeModuleImports(
+      esmBundledCode,
+      normalizedEntryName.replace(/\.(tsx?|jsx?)$/, ".js"),
+    );
+    const unboundImports = runtimeImports.specifiers.filter(
+      (specifier) => specifier !== "ultralight",
+    );
+    if (unboundImports.length > 0 || runtimeImports.hasComputedLoad) {
+      const details = [
+        ...(unboundImports.length > 0
+          ? [`runtime imports: ${unboundImports.join(", ")}`]
+          : []),
+        ...(runtimeImports.hasComputedLoad
+          ? ["computed import()/require() target"]
+          : []),
+      ];
+      throw new Error(
+        "galactic.yaml releases must vendor every dependency into the tested " +
+          `source; unbound runtime code is not qualifiable (${
+            details.join(
+              "; ",
+            )
+          })`,
+      );
+    }
+    // Re-scan the prepared module graph, not only the entry file. This catches
+    // undeclared capabilities reached through ordinary named re-exports or
+    // imported helpers while keeping source inference rejection-only.
+    const preparedParse = await parseTypeScript(
+      esmBundledCode || bundledCode,
+      normalizedEntryName,
+    );
+    const declaredPermissions = new Set(manifest.permissions || []);
+    const undeclaredPermissions = preparedParse.permissions.filter(
+      (permission) => !declaredPermissions.has(permission),
+    );
+    if (undeclaredPermissions.length > 0) {
+      throw new Error(
+        `Prepared release uses runtime permissions not declared by galactic.yaml: ${
+          undeclaredPermissions.sort().join(", ")
+        }`,
+      );
+    }
+  }
 
   // Stage 6: Safety scan
-  const { passed: safetyPassed, warnings: safetyWarnings } = await runSafetyScanStage(files, log);
+  const { passed: safetyPassed, warnings: safetyWarnings } =
+    await runSafetyScanStage(files, log);
 
   // Stage 7: D1 migration extraction + validation
   const migrations = extractMigrations(files, log);
 
   // Stage 8: File preparation
-  const filesToUpload = prepareFilesForUpload(
+  let filesToUpload = prepareFilesForUpload(
     files,
     entryFile,
     bundledCode,
@@ -722,12 +899,39 @@ export async function processUploadPipeline(
     normalizedEntryName,
     manifest,
   );
+  let interfaceArtifacts: InterfaceArtifactFile[] = [];
+  const interfacePrep = await prepareInterfaceArtifacts({
+    manifest,
+    files: filesToUpload,
+  });
+  if (interfacePrep) {
+    manifest = interfacePrep.manifest;
+    interfaceArtifacts = interfacePrep.artifacts;
+    // The server-stamped hashes are part of the release contract. Centralize
+    // this step here so gx.test and every upload path compile identical bytes.
+    filesToUpload = upsertManifestUploadFile(
+      filesToUpload,
+      manifest,
+      (manifestJson) => ({
+        name: "manifest.json",
+        content: new TextEncoder().encode(manifestJson),
+        contentType: "application/json",
+      }),
+    );
+  }
+  if (agentDocument?.sourceKind === "galactic_yaml") {
+    // Hydration and interface stamping add server-derived runtime facts. Keep
+    // the resolution pointed at that exact final manifest without altering the
+    // normalized authored document or its digest.
+    agentDocument = { ...agentDocument, compiledManifest: manifest };
+  }
 
-  log('success', 'Pipeline complete');
+  log("success", "Pipeline complete");
 
   return {
-    runtime: 'deno',
+    runtime: "deno",
     manifest,
+    agentDocument,
     entryFile,
     exports,
     bundledCode,
@@ -738,6 +942,7 @@ export async function processUploadPipeline(
     migrations,
     hasMigrations: migrations.length > 0,
     filesToUpload,
+    interfaceArtifacts,
     normalizedEntryName,
     buildLogs,
   };

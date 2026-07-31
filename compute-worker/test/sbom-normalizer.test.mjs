@@ -2,13 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import { normalizeSyftSpdx } from "../scripts/normalize-syft-spdx.mjs";
 
-function denoPackage(version = "0.77.0") {
+function denoPackage(
+  version = "0.77.0",
+  sourceInfo =
+    "acquired package info from the following paths: /usr/local/bin/deno",
+) {
   return {
     name: "deno",
     SPDXID: "SPDXRef-Package-binary-deno-test",
     versionInfo: version,
-    sourceInfo:
-      "acquired package info from the following paths: /usr/local/bin/deno",
+    sourceInfo,
     externalRefs: [
       {
         referenceCategory: "SECURITY",
@@ -60,6 +63,27 @@ describe("Syft SPDX normalization", () => {
   it("accepts an already-correct future Syft result without claiming a correction", () => {
     const { evidence } = normalizeSyftSpdx(document(denoPackage("2.9.3")));
     expect(evidence.correction_applied).toBe(false);
+  });
+
+  it("accepts Syft's exact relative path from a mounted-rootfs scan", () => {
+    const sourceInfo =
+      "acquired package info from the following paths: usr/local/bin/deno";
+    const { document: normalized, evidence } = normalizeSyftSpdx(
+      document(denoPackage("0.77.0", sourceInfo)),
+    );
+    expect(normalized.packages[0].versionInfo).toBe("2.9.3");
+    expect(evidence).toMatchObject({
+      package_path: "/usr/local/bin/deno",
+      syft_source_info: sourceInfo,
+    });
+  });
+
+  it("fails closed on any other Deno source path", () => {
+    const sourceInfo =
+      "acquired package info from the following paths: opt/deno";
+    expect(() =>
+      normalizeSyftSpdx(document(denoPackage("0.77.0", sourceInfo))),
+    ).toThrow("found 0");
   });
 
   it("fails closed on an unexpected Deno version", () => {

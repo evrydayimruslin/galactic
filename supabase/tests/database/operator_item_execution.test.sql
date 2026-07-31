@@ -27,6 +27,38 @@ INSERT INTO public.users (
     0
   );
 
+-- The active-state transition below is an operator-item invariant fixture.
+-- Supply the now-mandatory Pro entitlement explicitly.
+INSERT INTO public.account_entitlements (
+  user_id,
+  plan_code,
+  source,
+  capacity_anchor_at,
+  subscription_status,
+  updated_at
+) VALUES
+  (
+    '00000000-0000-0000-0000-000000001701',
+    'pro',
+    'admin',
+    now(),
+    'active',
+    now()
+  ),
+  (
+    '00000000-0000-0000-0000-000000001702',
+    'pro',
+    'admin',
+    now(),
+    'active',
+    now()
+  )
+ON CONFLICT (user_id) DO UPDATE
+SET plan_code = EXCLUDED.plan_code,
+    source = EXCLUDED.source,
+    subscription_status = EXCLUDED.subscription_status,
+    updated_at = EXCLUDED.updated_at;
+
 INSERT INTO public.apps (
   id,
   owner_id,

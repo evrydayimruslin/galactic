@@ -43,12 +43,9 @@ describe("Agent Studio Overview projections", () => {
       .toBe("A staged release is ready");
   });
 
-  it("uses the weekly window rather than silently preferring burst usage", () => {
+  it("uses the weekly capacity window", () => {
     const home = {
       agentCapacity: {
-        burst: {
-          capUsedPercent: 8,
-        },
         capPercent: 20,
         weekly: {
           capUsedPercent: 96,

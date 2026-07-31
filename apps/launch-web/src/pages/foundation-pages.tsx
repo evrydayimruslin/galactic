@@ -4327,7 +4327,7 @@ export function AccountFoundationPage(
         <div className="subscription-plan-summary">
           <p className="section-label">Plan</p>
           <div className="subscription-plan-title">
-            <strong>{subscription?.planName ?? "Free"}</strong>
+            <strong>{subscription?.planName ?? "Pro"}</strong>
             <Pill>
               {subscription
                 ? subscription.priceCents === 0
@@ -4337,9 +4337,7 @@ export function AccountFoundationPage(
             </Pill>
           </div>
           <p>
-            {subscription?.plan === "free"
-              ? "One active Agent with shared five-hour and weekly capacity."
-              : "Unlimited active Agents share your five-hour and weekly capacity."}
+            Unlimited active Agents share your weekly capacity.
           </p>
         </div>
         <div className="subscription-capacity-summary">
@@ -4359,20 +4357,15 @@ export function AccountFoundationPage(
           {subscription
             ? (
               <div className="subscription-window-list">
-                {([
-                  ["Five-hour window", subscription.capacity.burst],
-                  ["Weekly window", subscription.capacity.weekly],
-                ] as const).map(([label, window]) => (
-                  <div className="subscription-window-row" key={label}>
-                    <span>{label}</span>
+                <div className="subscription-window-row">
+                    <span>Weekly window</span>
                     <span>
-                      {window.usedPercent !== undefined
-                        ? `${window.usedPercent}% used · `
+                      {subscription.capacity.weekly.usedPercent !== undefined
+                        ? `${subscription.capacity.weekly.usedPercent}% used · `
                         : ""}
-                      resets {new Date(window.resetsAt).toLocaleString()}
+                      resets {new Date(subscription.capacity.weekly.resetsAt).toLocaleString()}
                     </span>
-                  </div>
-                ))}
+                </div>
               </div>
             )
             : <p>Loading account capacity…</p>}

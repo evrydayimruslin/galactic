@@ -14,17 +14,24 @@ import {
 } from "./sandbox-actor.ts";
 import type { RoutineTraceContext } from "./routine-trace.ts";
 import { getUserFromToken, isApiToken } from "./tokens.ts";
+import {
+  authenticateBuilderHandoffSession,
+  BuilderHandoffSessionError,
+  isBuilderHandoffScopeSet,
+} from "./builder-handoff-sessions.ts";
 
 export type RequestTokenSourcePolicy = "bearer_only" | "bearer_or_cookie";
 export type RequestAuthSource =
   | "supabase"
   | "api_token"
+  | "builder_handoff"
   | "routine_actor"
   | "sandbox_actor";
 
 export interface VerifiedSupabaseUser {
   id: string;
   email: string;
+  emailConfirmedAt: string | null;
   user_metadata?: Record<string, string>;
 }
 
@@ -33,11 +40,45 @@ export interface AuthenticatedRequestUser {
   email: string;
   tier: string;
   authSource?: RequestAuthSource;
+  emailConfirmedAt?: string | null;
   provisional?: boolean;
   tokenId?: string;
   tokenAppIds?: string[] | null;
   tokenFunctionNames?: string[] | null;
   scopes?: string[];
+  /**
+   * Durable, server-authoritative handoff context. This is present only after
+   * a token-to-session lookup succeeds for the platform MCP endpoint.
+   */
+  builderHandoff?: {
+    id: string;
+    candidateSetId: string;
+    intent: "agent" | "interface" | "function" | "routine" | "connect";
+    status:
+      | "created"
+      | "connected"
+      | "staged"
+      | "tested"
+      | "uploaded"
+      | "promoted"
+      | "cancelled"
+      | "rejected"
+      | "revoked"
+      | "expired";
+    targetAppId: string | null;
+    boundAppId: string | null;
+    bundleId: string | null;
+    sourceHash: string | null;
+    attestationId: string | null;
+    testAttestationDigest: string | null;
+    documentDigest: string | null;
+    reportDigest: string | null;
+    releaseDigest: string | null;
+    baseVersion: string | null;
+    baseSourceHash: string | null;
+    baseReleaseDigest: string | null;
+    baseStateDigest: string | null;
+  };
   /**
    * Immutable execution attribution recovered from a server-signed actor
    * token. Unlike routineActor, this may be present on a downstream
@@ -100,6 +141,7 @@ export async function verifySupabaseAccessToken(
   const verifiedUser = await verifyResponse.json() as {
     id?: string;
     email?: string;
+    email_confirmed_at?: string | null;
     user_metadata?: Record<string, string>;
   };
   if (!verifiedUser?.id || !verifiedUser?.email) {
@@ -109,6 +151,9 @@ export async function verifySupabaseAccessToken(
   return {
     id: verifiedUser.id,
     email: verifiedUser.email,
+    emailConfirmedAt: typeof verifiedUser.email_confirmed_at === "string"
+      ? verifiedUser.email_confirmed_at
+      : null,
     user_metadata: verifiedUser.user_metadata || {},
   };
 }
@@ -195,9 +240,7 @@ export async function authenticateRequest(
         ...(claims.handler_function
           ? { handlerFunction: claims.handler_function }
           : {}),
-        ...(claims.budget_policy
-          ? { budgetPolicy: claims.budget_policy }
-          : {}),
+        ...(claims.budget_policy ? { budgetPolicy: claims.budget_policy } : {}),
         capabilities: claims.capabilities,
       },
     };
@@ -245,6 +288,67 @@ export async function authenticateRequest(
       throw new Error("Invalid or expired API token");
     }
 
+    const tokenScopes = user.scopes;
+    const hasHandoffMarker = tokenScopes?.some((scope) =>
+      scope.startsWith("handoff:")
+    ) ?? false;
+    if (hasHandoffMarker) {
+      if (
+        !isBuilderHandoffScopeSet(tokenScopes) ||
+        !user.tokenId ||
+        new URL(request.url).pathname !== "/mcp/platform"
+      ) {
+        throw new Error("Invalid or expired builder handoff credential");
+      }
+
+      try {
+        const session = await authenticateBuilderHandoffSession({
+          ownerId: user.id,
+          tokenId: user.tokenId,
+          scopes: tokenScopes!,
+        });
+        return {
+          ...user,
+          authSource: "builder_handoff",
+          builderHandoff: {
+            id: session.id,
+            candidateSetId: session.candidateSetId,
+            intent: session.intent,
+            status: session.status,
+            // A new-Agent handoff receives a reserved identity but may not
+            // inspect an existing Agent. Extension handoffs bind both fields
+            // to their exact owned target.
+            targetAppId: session.intent === "agent"
+              ? null
+              : session.targetAppId,
+            boundAppId: session.targetAppId,
+            bundleId: session.bundleId,
+            sourceHash: session.sourceHash,
+            attestationId: session.attestationId,
+            testAttestationDigest: session.attestationDigest,
+            documentDigest: session.documentDigest,
+            reportDigest: session.reportDigest,
+            releaseDigest: session.releaseDigest,
+            baseVersion: session.baseVersion,
+            baseSourceHash: session.baseSourceHash,
+            baseReleaseDigest: session.baseReleaseDigest,
+            baseStateDigest: session.baseStateDigest,
+          },
+        };
+      } catch (err) {
+        if (
+          err instanceof BuilderHandoffSessionError &&
+          (err.code === "service_unavailable" ||
+            err.code === "invalid_response")
+        ) {
+          throw new Error(
+            "Builder handoff authentication is temporarily unavailable",
+          );
+        }
+        throw new Error("Invalid or expired builder handoff credential");
+      }
+    }
+
     return { ...user, authSource: "api_token" };
   }
 
@@ -264,6 +368,7 @@ export async function authenticateRequest(
     email: user.email,
     tier: resolvedTier,
     authSource: "supabase",
+    emailConfirmedAt: user.emailConfirmedAt,
     user_metadata: user.user_metadata,
   };
 }

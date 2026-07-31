@@ -57,7 +57,10 @@ import { withAuthRouteRateLimit } from "../services/auth-rate-limit.ts";
 import {
   RequestValidationError,
   validateEmbedBridgeExchangeRequest,
+  validateMagicLinkAuthRequest,
+  validateMagicLinkVerifyRequest,
   validatePageShareExchangeRequest,
+  validatePasswordAuthRequest,
   validateRefreshRequest,
   validateSessionBootstrapRequest,
   validateSignoutRequest,
@@ -182,6 +185,103 @@ async function exchangeRefreshToken(refreshToken: string): Promise<{
   return await tokenResponse.json();
 }
 
+interface SupabaseAuthResponse {
+  access_token?: string;
+  expires_in?: number;
+  refresh_token?: string;
+  user?: {
+    email?: string;
+    id?: string;
+    user_metadata?: Record<string, unknown>;
+  };
+  email?: string;
+  id?: string;
+  user_metadata?: Record<string, unknown>;
+}
+
+function supabaseAuthErrorMessage(
+  status: number,
+  payload: Record<string, unknown> | null,
+  mode: "sign_in" | "sign_up",
+): string {
+  const code = typeof payload?.error_code === "string"
+    ? payload.error_code
+    : "";
+  const raw = [
+    payload?.msg,
+    payload?.message,
+    payload?.error_description,
+    payload?.error,
+  ].find((value): value is string =>
+    typeof value === "string" && value.length > 0
+  ) || "";
+
+  if (
+    code === "invalid_credentials" ||
+    /invalid login credentials/iu.test(raw)
+  ) {
+    return "Email or password is incorrect.";
+  }
+  if (code === "email_not_confirmed" || /email not confirmed/iu.test(raw)) {
+    return "Confirm your email before signing in.";
+  }
+  if (status === 429) {
+    return "Too many attempts. Please wait a few minutes and try again.";
+  }
+  if (mode === "sign_up" && raw) return raw;
+  return mode === "sign_up"
+    ? "Unable to create your account. Please try again."
+    : "Unable to sign in. Please try again.";
+}
+
+async function readSupabaseAuthPayload(
+  response: Response,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const payload = await response.json();
+    return payload && typeof payload === "object"
+      ? payload as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function buildLaunchSessionResponse(
+  request: Request,
+  tokens: SupabaseAuthResponse,
+): Promise<Response> {
+  if (!tokens.access_token) {
+    return error("Supabase did not return a session", 502);
+  }
+
+  const verifiedUser = await claimReferralCookieForAccessToken(
+    request,
+    tokens.access_token,
+  );
+  if (!verifiedUser) {
+    return error("Unable to verify the signed-in account", 401);
+  }
+
+  const response = json({
+    access_token: tokens.access_token,
+    audience: "launch_web",
+    confirmation_required: false,
+    expires_in: tokens.expires_in ??
+      getAccessTokenRemainingLifetimeSeconds(tokens.access_token),
+    refresh_supported: Boolean(tokens.refresh_token),
+    user: {
+      id: verifiedUser.id,
+      email: verifiedUser.email,
+      metadata: verifiedUser.user_metadata || {},
+    },
+  });
+  if (tokens.refresh_token) {
+    appendLaunchRefreshCookie(response.headers, tokens.refresh_token);
+  }
+  return response;
+}
+
 function appendBrowserSession(
   response: Response,
   session: {
@@ -238,6 +338,31 @@ function allowedLaunchWebOrigins(): Set<string> {
   return origins;
 }
 
+function rejectDisallowedLaunchSessionOrigin(
+  request: Request,
+  action: "refresh" | "sign out",
+): Response | null {
+  // Browsers attach Origin to cross-origin credentialed POSTs. Non-browser
+  // clients may omit it, while browser callers must match the launch-web
+  // allowlist before a SameSite=None refresh cookie can be used or cleared.
+  const requestOrigin = request.headers.get("Origin");
+  if (!requestOrigin) return null;
+
+  let normalizedOrigin: string | null = null;
+  try {
+    normalizedOrigin = new URL(requestOrigin).origin;
+  } catch {
+    normalizedOrigin = null;
+  }
+  if (
+    normalizedOrigin &&
+    allowedLaunchWebOrigins().has(normalizedOrigin)
+  ) {
+    return null;
+  }
+  return error(`Origin is not allowed to ${action} launch sessions`, 403);
+}
+
 function isSafeLaunchPath(value: string): boolean {
   return value.startsWith("/") && !value.startsWith("//") &&
     !value.includes("\\");
@@ -266,6 +391,49 @@ function resolveLaunchWebReturnTarget(
     isSafeLaunchPath(nextPath) ? nextPath : "/settings",
   );
   return { callbackUrl };
+}
+
+function buildLaunchEmailConfirmationUrl(
+  request: Request,
+  nextPath: string,
+): string | null {
+  let configuredOrigin: string | null = null;
+  try {
+    configuredOrigin = new URL(getEnv("LAUNCH_WEB_BASE_URL")).origin;
+  } catch {
+    configuredOrigin = null;
+  }
+  const apiUrl = new URL(request.url);
+  const candidates = [
+    request.headers.get("Origin") || "",
+    configuredOrigin || "",
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      const origin = new URL(candidate).origin;
+      const candidateHost = new URL(origin).hostname;
+      const localDevelopmentOrigin =
+        (candidateHost === "127.0.0.1" || candidateHost === "localhost") &&
+        (apiUrl.hostname === "127.0.0.1" || apiUrl.hostname === "localhost");
+      if (
+        origin !== apiUrl.origin &&
+        !allowedLaunchWebOrigins().has(origin) &&
+        origin !== configuredOrigin &&
+        !localDevelopmentOrigin
+      ) {
+        continue;
+      }
+      const callbackUrl = new URL("/auth/callback", origin);
+      callbackUrl.searchParams.set("next", nextPath);
+      return callbackUrl.toString();
+    } catch {
+      // Try the next configured candidate.
+    }
+  }
+
+  return null;
 }
 
 async function buildLaunchWebSessionRedirect(
@@ -320,6 +488,238 @@ async function buildLaunchWebSessionRedirect(
 export async function handleAuth(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
+
+  // Start passwordless email authentication. Supabase owns account creation,
+  // email delivery, and token expiry. The response stays generic so callers
+  // cannot use this endpoint to discover whether an address already exists.
+  if (path === "/auth/launch/magic-link" && request.method === "POST") {
+    return withAuthRouteRateLimit(request, "auth:magic_link", async () => {
+      try {
+        const payload = await validateMagicLinkAuthRequest(request);
+        const confirmationUrl = buildLaunchEmailConfirmationUrl(
+          request,
+          payload.nextPath,
+        );
+        if (!confirmationUrl) {
+          return error(
+            "Email sign-in is not configured for this site",
+            503,
+          );
+        }
+
+        const authUrl = new URL(`${getEnv("SUPABASE_URL")}/auth/v1/otp`);
+        authUrl.searchParams.set("redirect_to", confirmationUrl);
+        const authResponse = await fetch(authUrl, {
+          method: "POST",
+          headers: getSupabaseAuthHeaders(),
+          body: JSON.stringify({
+            email: payload.email,
+            create_user: true,
+          }),
+        });
+
+        if (!authResponse.ok) {
+          const authPayload = await readSupabaseAuthPayload(authResponse);
+          if (authResponse.status === 429) {
+            return error(
+              "Please wait before requesting another sign-in link.",
+              429,
+            );
+          }
+          console.error(
+            "[auth] Supabase magic-link request failed:",
+            authResponse.status,
+            authPayload,
+          );
+          return error("Unable to send a sign-in link. Please try again.", 502);
+        }
+
+        return json({
+          audience: "launch_web",
+          email: payload.email,
+          link_sent: true,
+        });
+      } catch (err) {
+        if (err instanceof RequestValidationError) {
+          return error(err.message, err.status);
+        }
+        console.error("[auth] Magic-link request failed:", err);
+        return error("Email sign-in is temporarily unavailable", 502);
+      }
+    });
+  }
+
+  // Verify a one-time email token only after an explicit user action on the
+  // launch confirmation page. Keeping verification behind POST prevents email
+  // security scanners from consuming the link during their automatic GET.
+  if (path === "/auth/launch/verify" && request.method === "POST") {
+    return withAuthRouteRateLimit(
+      request,
+      "auth:magic_link_verify",
+      async () => {
+        try {
+          const payload = await validateMagicLinkVerifyRequest(request);
+          const authResponse = await fetch(
+            `${getEnv("SUPABASE_URL")}/auth/v1/verify`,
+            {
+              method: "POST",
+              headers: getSupabaseAuthHeaders(),
+              body: JSON.stringify({
+                token_hash: payload.tokenHash,
+                type: "email",
+              }),
+            },
+          );
+          const authPayload = await readSupabaseAuthPayload(authResponse);
+
+          if (!authResponse.ok) {
+            if (authResponse.status === 429) {
+              return error(
+                "Too many verification attempts. Request a new sign-in link.",
+                429,
+              );
+            }
+            return error(
+              "This sign-in link is invalid or expired. Request a new one.",
+              401,
+            );
+          }
+
+          return await buildLaunchSessionResponse(
+            request,
+            (authPayload || {}) as SupabaseAuthResponse,
+          );
+        } catch (err) {
+          if (err instanceof RequestValidationError) {
+            return error(err.message, err.status);
+          }
+          console.error("[auth] Magic-link verification failed:", err);
+          return error("Failed to complete email sign-in", 500);
+        }
+      },
+    );
+  }
+
+  // Email/password auth for the launch web app. Supabase remains the source of
+  // truth for password policy, account confirmation, password hashing, and
+  // credential verification; Galactic only validates the transport and turns
+  // successful sessions into the launch app's existing cookie/token contract.
+  if (path === "/auth/launch/password" && request.method === "POST") {
+    return withAuthRouteRateLimit(request, "auth:password", async () => {
+      try {
+        const payload = await validatePasswordAuthRequest(request);
+        const authUrl = payload.mode === "sign_in"
+          ? new URL(
+            `${getEnv("SUPABASE_URL")}/auth/v1/token?grant_type=password`,
+          )
+          : new URL(`${getEnv("SUPABASE_URL")}/auth/v1/signup`);
+
+        if (payload.mode === "sign_up") {
+          const confirmationUrl = buildLaunchEmailConfirmationUrl(
+            request,
+            payload.nextPath,
+          );
+          if (!confirmationUrl) {
+            return error(
+              "Email confirmation is not configured for this site",
+              503,
+            );
+          }
+          authUrl.searchParams.set("redirect_to", confirmationUrl);
+        }
+
+        const authResponse = await fetch(authUrl, {
+          method: "POST",
+          headers: getSupabaseAuthHeaders(),
+          body: JSON.stringify({
+            email: payload.email,
+            password: payload.password,
+          }),
+        });
+        const authPayload = await readSupabaseAuthPayload(authResponse);
+
+        if (!authResponse.ok) {
+          return error(
+            supabaseAuthErrorMessage(
+              authResponse.status,
+              authPayload,
+              payload.mode,
+            ),
+            authResponse.status === 429 ? 429 : 400,
+          );
+        }
+
+        const tokens = (authPayload || {}) as SupabaseAuthResponse;
+        if (tokens.access_token) {
+          return await buildLaunchSessionResponse(request, tokens);
+        }
+
+        if (payload.mode === "sign_up") {
+          // With email confirmations enabled Supabase intentionally returns no
+          // session here. Keep the response generic because it may also be the
+          // anti-enumeration response for an existing address.
+          return json({
+            audience: "launch_web",
+            confirmation_required: true,
+            email: payload.email,
+            refresh_supported: false,
+          });
+        }
+
+        return error("Supabase did not return a sign-in session", 502);
+      } catch (err) {
+        if (err instanceof RequestValidationError) {
+          return error(err.message, err.status);
+        }
+        console.error("[auth] Email/password auth failed:", err);
+        return error("Email sign-in is temporarily unavailable", 502);
+      }
+    });
+  }
+
+  // Complete a confirmation-link flow after Supabase returns session tokens in
+  // the launch callback URL fragment.
+  if (path === "/auth/launch/session" && request.method === "POST") {
+    return withAuthRouteRateLimit(
+      request,
+      "auth:launch_session",
+      async () => {
+        try {
+          const payload = await validateSessionBootstrapRequest(request);
+          let accessToken = payload.accessToken || "";
+          let refreshToken = payload.refreshToken || "";
+          let expiresIn: number | undefined;
+
+          let verifiedUser = accessToken
+            ? await verifySupabaseAccessToken(accessToken)
+            : null;
+          if (!verifiedUser && refreshToken) {
+            const refreshed = await exchangeRefreshToken(refreshToken);
+            accessToken = refreshed.access_token;
+            refreshToken = refreshed.refresh_token || refreshToken;
+            expiresIn = refreshed.expires_in;
+            verifiedUser = await verifySupabaseAccessToken(accessToken);
+          }
+
+          if (!verifiedUser || !accessToken) {
+            return error("Invalid or expired confirmation session", 401);
+          }
+
+          return await buildLaunchSessionResponse(request, {
+            access_token: accessToken,
+            expires_in: expiresIn,
+            refresh_token: refreshToken || undefined,
+          });
+        } catch (err) {
+          if (err instanceof RequestValidationError) {
+            return error(err.message, err.status);
+          }
+          console.error("[auth] Launch session setup failed:", err);
+          return error("Failed to complete email confirmation", 500);
+        }
+      },
+    );
+  }
 
   // Initiate Google OAuth - redirects to Supabase Auth with PKCE
   if (path === "/auth/login") {
@@ -689,23 +1089,11 @@ export async function handleAuth(request: Request): Promise<Response> {
   // without redoing the full OAuth redirect.
   if (path === "/auth/launch/refresh" && request.method === "POST") {
     return withAuthRouteRateLimit(request, "auth:launch_refresh", async () => {
-      // Defense-in-depth CSRF check: browsers always send Origin on
-      // cross-origin POSTs, and only the launch web origins may rotate.
-      const requestOrigin = request.headers.get("Origin");
-      if (requestOrigin) {
-        let normalizedOrigin: string | null = null;
-        try {
-          normalizedOrigin = new URL(requestOrigin).origin;
-        } catch {
-          normalizedOrigin = null;
-        }
-        if (
-          !normalizedOrigin ||
-          !allowedLaunchWebOrigins().has(normalizedOrigin)
-        ) {
-          return error("Origin is not allowed to refresh launch sessions", 403);
-        }
-      }
+      const originError = rejectDisallowedLaunchSessionOrigin(
+        request,
+        "refresh",
+      );
+      if (originError) return originError;
 
       const refreshToken = getLaunchRefreshTokenFromRequest(request);
       if (!refreshToken) {
@@ -944,6 +1332,12 @@ export async function handleAuth(request: Request): Promise<Response> {
 
     return withAuthRouteRateLimit(request, "auth:signout", async () => {
       try {
+        const originError = rejectDisallowedLaunchSessionOrigin(
+          request,
+          "sign out",
+        );
+        if (originError) return originError;
+
         await validateSignoutRequest(request);
         const accessToken = extractBearerToken(request) ||
           getAuthAccessTokenFromRequest(request);
@@ -1079,9 +1473,9 @@ export async function handleAuth(request: Request): Promise<Response> {
           headers: { "Content-Type": "application/json" },
         });
       }
-      if (err.status === 503) {
+      if (err.status === 402 || err.status === 503) {
         return new Response(JSON.stringify({ error: err.message }), {
-          status: 503,
+          status: err.status,
           headers: { "Content-Type": "application/json" },
         });
       }

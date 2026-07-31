@@ -76,6 +76,7 @@ function subscriptionValue(
 ): string {
   if (!subscription) return 'Loading…';
   const price = `$${(subscription.priceCents / 100).toLocaleString()} / month`;
+  if (!subscription.hasActiveSubscription) return `${price} · subscription required`;
   if (!subscription.currentPeriodEnd) return price;
   const renewal = new Date(subscription.currentPeriodEnd).toLocaleDateString(
     undefined,
@@ -243,7 +244,7 @@ function SettingsRoot({
               ? 'Opening…'
               : subscription?.canManage
               ? 'Manage'
-              : 'Upgrade'}
+              : 'Subscribe'}
             label={subscription?.planName ?? 'Plan'}
             value={subscriptionValue(subscription)}
           />
@@ -497,6 +498,7 @@ function ProviderKeyDialog({
 }
 
 function GalacticKeysSettings({
+  hasActiveSubscription,
   copied,
   keys,
   onBack,
@@ -505,6 +507,7 @@ function GalacticKeysSettings({
   onToast,
   setError,
 }: {
+  hasActiveSubscription: boolean;
   copied: boolean;
   keys: LaunchApiKeySummary[];
   onBack: () => void;
@@ -564,8 +567,9 @@ function GalacticKeysSettings({
   return (
     <SettingsBack onBack={onBack} title='Galactic Keys'>
       <p className='neb-settings-subtitle'>
-        API keys that let something act as you outside this browser. Names come from whatever
-        created them; revoking takes effect on the next request.
+        {hasActiveSubscription
+          ? 'API keys let something act as you outside this browser. Names come from whatever created them; revoking takes effect on the next request.'
+          : 'An active Galactic membership is required to create or use persistent API keys. You can still revoke existing keys below.'}
       </p>
       {plaintext
         ? (
@@ -584,7 +588,12 @@ function GalacticKeysSettings({
           </div>
         )
         : null}
-      <button className='neb-settings-create-token' onClick={() => void create()} type='button'>
+      <button
+        className='neb-settings-create-token'
+        disabled={!hasActiveSubscription}
+        onClick={() => void create()}
+        type='button'
+      >
         + Create token
       </button>
       <div className='neb-settings-token-list'>
@@ -919,6 +928,7 @@ export function SettingsStudioPanel({
       {page === 'keys'
         ? (
           <GalacticKeysSettings
+            hasActiveSubscription={subscription?.hasActiveSubscription === true}
             copied={copied === 'token'}
             keys={keys}
             onBack={() => choose('root')}

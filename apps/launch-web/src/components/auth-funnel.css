@@ -1,0 +1,826 @@
+.auth-funnel-topbar-shell {
+  position: fixed;
+  z-index: 40;
+  top: 0;
+  right: 0;
+  left: 0;
+  background:
+    linear-gradient(180deg, var(--topbar-start), var(--topbar-mid) 72%, transparent);
+  pointer-events: none;
+}
+
+.auth-funnel-topbar {
+  display: flex;
+  width: min(100%, 1420px);
+  min-height: 78px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin: 0 auto;
+  padding: 20px 40px 18px;
+  pointer-events: auto;
+}
+
+.auth-funnel-wordmark,
+.auth-funnel-back {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.auth-funnel-wordmark {
+  color: var(--ink);
+  font-family: var(--display) !important;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: .03em;
+}
+
+.auth-funnel-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.auth-funnel-back {
+  min-height: 34px;
+  color: var(--ink-3);
+  font-family: var(--mono) !important;
+  font-size: 11px;
+  letter-spacing: .045em;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.auth-funnel-back:hover {
+  color: var(--ink);
+}
+
+.auth-funnel-signin {
+  min-height: 34px;
+  padding: 0 15px;
+  border: 1px solid var(--line-2);
+  background: var(--chip);
+  color: var(--ink-2);
+  cursor: pointer;
+  font-family: var(--mono) !important;
+  font-size: 11px;
+  letter-spacing: .06em;
+}
+
+.auth-funnel-signin:hover {
+  border-color: var(--accent-line-soft);
+  color: var(--ink);
+}
+
+.auth-funnel-main {
+  position: relative;
+  z-index: 2;
+  width: min(100% - 48px, 1420px);
+  min-height: 100dvh;
+  margin: 0 auto;
+  padding: 108px 0 72px;
+}
+
+.auth-funnel-main.is-handoff,
+.auth-funnel-main.is-review {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.auth-funnel-ballot-layout {
+  display: grid;
+  width: 100%;
+  max-width: 1096px;
+  grid-template-columns: minmax(0, 480px) minmax(0, 560px);
+  align-items: start;
+  justify-content: center;
+  gap: 56px;
+  margin: 0 auto;
+  padding: 18px 0 40px;
+}
+
+.auth-funnel-plan-column,
+.auth-funnel-questions-column {
+  min-width: 0;
+}
+
+.auth-funnel-plan-column h1 {
+  margin: 12px 0 12px;
+  color: var(--hero);
+  font-family: var(--serif);
+  font-size: 34px;
+  font-weight: 500;
+  line-height: 1.12;
+  letter-spacing: -.015em;
+}
+
+.auth-funnel-plan-intro {
+  max-width: 46ch;
+  margin: 0 0 30px;
+  color: var(--ink-2);
+  font-size: 13.5px;
+  line-height: 1.65;
+}
+
+.auth-funnel-manifest-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--ink);
+}
+
+.auth-funnel-manifest-head > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 15px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auth-funnel-planning-status {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  color: var(--success-text);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+
+.auth-funnel-planning-status > span {
+  width: 5px;
+  height: 5px;
+  background: var(--success);
+}
+
+.auth-funnel-manifest {
+  display: flex;
+  flex-direction: column;
+}
+
+.auth-funnel-manifest > button {
+  display: flex;
+  min-height: 46px;
+  align-items: baseline;
+  gap: 18px;
+  padding: 13px 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+}
+
+.auth-funnel-manifest > button:hover > span:first-child,
+.auth-funnel-manifest > button.is-deciding > span:first-child {
+  font-weight: 600;
+}
+
+.auth-funnel-manifest > button > span:first-child {
+  flex: 1;
+  font-size: 13.5px;
+}
+
+.auth-funnel-manifest > button > span:last-child {
+  max-width: 280px;
+  overflow: hidden;
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auth-funnel-manifest > button.is-deciding > span:last-child {
+  color: var(--accent-text);
+}
+
+.auth-funnel-manifest > button > span:last-child.is-empty {
+  color: var(--ink-3);
+}
+
+.auth-funnel-manifest-note {
+  margin: 14px 0 0;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  font-style: italic;
+  line-height: 1.65;
+}
+
+.auth-funnel-questions {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.auth-funnel-questions > li {
+  padding: 14px 2px;
+  border-bottom: 1px solid var(--line);
+}
+
+.auth-funnel-question-toggle {
+  display: flex;
+  width: 100%;
+  min-height: 44px;
+  align-items: flex-start;
+  gap: 14px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+}
+
+.auth-funnel-checkbox {
+  display: flex;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+  border: 1px solid var(--line-2);
+  color: var(--ground);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.auth-funnel-checkbox.is-checked {
+  border-color: var(--ink);
+  background: var(--ink);
+}
+
+.auth-funnel-question-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.auth-funnel-question-title {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+}
+
+.auth-funnel-question-title strong {
+  flex: 1;
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.auth-funnel-question-title > span {
+  flex: none;
+  color: var(--accent-text);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+}
+
+.auth-funnel-question-hint {
+  display: block;
+  max-width: 58ch;
+  margin-top: 4px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.auth-funnel-question-summary {
+  display: block;
+  overflow: hidden;
+  margin-top: 4px;
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auth-funnel-question-body {
+  padding: 14px 0 4px 30px;
+}
+
+.auth-funnel-brief-fields {
+  display: grid;
+  gap: 14px;
+}
+
+.auth-funnel-brief-fields label > span,
+.auth-funnel-more-detail > span {
+  display: block;
+  color: var(--accent-text);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+}
+
+.auth-funnel-brief-fields label > span {
+  margin-bottom: 7px;
+}
+
+.auth-funnel-brief-fields input,
+.auth-funnel-brief-fields textarea {
+  width: 100%;
+  border: 1px solid var(--line-2);
+  border-radius: 0;
+  padding: 11px 13px;
+  background: color-mix(in srgb, var(--input) 55%, transparent);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 13px;
+}
+
+.auth-funnel-brief-fields textarea {
+  min-height: 88px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.auth-funnel-option-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.auth-funnel-option-list button {
+  min-height: 38px;
+  padding: 8px 13px;
+  border: 1px solid var(--line-2);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  font-family: var(--display) !important;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.auth-funnel-option-list button:hover {
+  border-color: var(--accent);
+}
+
+.auth-funnel-option-list button.is-selected {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--ground);
+}
+
+.auth-funnel-more-detail {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.auth-funnel-more-detail > span {
+  flex: none;
+}
+
+.auth-funnel-more-detail input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  border-bottom: 1px solid var(--line-2);
+  border-radius: 0;
+  padding: 6px 2px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.auth-funnel-more-detail input:focus-visible {
+  border-bottom-color: var(--accent);
+  outline-offset: 3px;
+}
+
+.auth-funnel-question-actions {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-top: 14px;
+}
+
+.auth-funnel-question-actions button:first-child {
+  min-height: 38px;
+  padding: 0 20px;
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent-text);
+  cursor: pointer;
+  font-family: var(--display) !important;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.auth-funnel-question-actions button:first-child:hover {
+  background: var(--accent-fill);
+}
+
+.auth-funnel-question-actions button:last-child {
+  min-height: 32px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+  font-family: var(--mono) !important;
+  font-size: 11px;
+  letter-spacing: .02em;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.auth-funnel-ballot-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin-top: 20px;
+}
+
+.auth-funnel-ballot-footer > span {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: .04em;
+}
+
+.auth-funnel-ballot-footer > button,
+.auth-funnel-primary {
+  min-height: 48px;
+  border: 1px solid var(--ink);
+  background: var(--ink);
+  color: var(--ground);
+  cursor: pointer;
+  font-family: var(--display) !important;
+  font-size: 14.5px;
+  font-weight: 600;
+}
+
+.auth-funnel-ballot-footer > button {
+  flex: none;
+  padding: 0 26px;
+}
+
+.auth-funnel-ballot-footer > button:hover,
+.auth-funnel-primary:hover:not(:disabled) {
+  background: var(--hero);
+}
+
+.auth-funnel-handoff-panel {
+  width: min(100%, 680px);
+  margin: auto;
+  padding: 48px 52px 44px;
+  background: var(--card);
+  box-shadow: var(--shadow-panel);
+}
+
+.auth-funnel-handoff-panel > h1 {
+  margin: 0 0 34px;
+  padding-bottom: .1em;
+  color: var(--hero);
+  font-family: var(--serif);
+  font-size: 28px;
+  font-weight: 500;
+  line-height: 1.18;
+  letter-spacing: -.01em;
+  text-wrap: pretty;
+}
+
+.auth-funnel-handoff-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.auth-funnel-handoff-steps > li {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 18px;
+  padding: 22px 0;
+  border-top: 1px solid var(--line);
+}
+
+.auth-funnel-handoff-steps > li:last-child {
+  border-bottom: 1px solid var(--line);
+}
+
+.auth-funnel-step-number {
+  display: flex;
+  width: 30px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.auth-funnel-handoff-steps h2 {
+  margin: 0 0 4px;
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 14.5px;
+  font-weight: 600;
+}
+
+.auth-funnel-handoff-steps h2 + p {
+  margin: 0 0 16px;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.auth-funnel-primary {
+  padding: 0 22px;
+}
+
+.auth-funnel-primary:disabled {
+  border-color: var(--line);
+  background: var(--card);
+  color: var(--ink-3);
+  cursor: not-allowed;
+}
+
+.auth-funnel-primary.is-copied {
+  background: transparent;
+  color: var(--ink);
+}
+
+.auth-funnel-account-confirmed {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--success-text);
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+.auth-funnel-account-confirmed > span {
+  width: 5px;
+  height: 5px;
+  background: var(--success);
+}
+
+.auth-funnel-prompt {
+  max-height: 390px;
+  margin: 0 0 16px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 16px 18px;
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.auth-funnel-prompt mark {
+  padding: 0;
+  background: color-mix(in srgb, var(--accent) 12%, var(--card));
+  color: var(--ink);
+}
+
+.auth-funnel-prompt-collapsed {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 14px 0;
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+.auth-funnel-prompt-collapsed button {
+  flex: none;
+  border: 0;
+  padding: 6px 0;
+  background: transparent;
+  color: var(--accent-text);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.auth-funnel-copy-row,
+.auth-funnel-check-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.auth-funnel-copy-row > span {
+  max-width: 34ch;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.auth-funnel-inline-error {
+  margin: 12px 0 0;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.auth-funnel-checking {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: .04em;
+}
+
+.auth-funnel-checking > span,
+.auth-funnel-review-loading > span {
+  display: block;
+  width: 13px;
+  height: 13px;
+  border: 2px solid color-mix(in srgb, var(--ink) 16%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: auth-funnel-spin 1.1s linear infinite;
+}
+
+.auth-funnel-waiting {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 12px 0 0;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.auth-funnel-waiting > span {
+  width: 5px;
+  height: 5px;
+  flex: none;
+  margin-top: 6px;
+  border: 1px solid currentColor;
+}
+
+.auth-funnel-review-loading {
+  display: flex;
+  width: min(100%, 760px);
+  min-height: 260px;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin: auto;
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+@keyframes auth-funnel-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 1040px) {
+  .auth-funnel-ballot-layout {
+    max-width: 760px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 42px;
+  }
+
+  .auth-funnel-plan-column {
+    max-width: 600px;
+  }
+}
+
+@media (max-width: 720px) {
+  .auth-funnel-topbar {
+    min-height: 68px;
+    padding: 16px 18px 12px;
+  }
+
+  .auth-funnel-topbar-actions {
+    gap: 10px;
+  }
+
+  .auth-funnel-back {
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .auth-funnel-main {
+    width: min(100% - 32px, 680px);
+    padding: 84px 0 44px;
+  }
+
+  .auth-funnel-ballot-layout {
+    gap: 32px;
+    padding-top: 8px;
+  }
+
+  .auth-funnel-plan-column h1 {
+    font-size: 31px;
+  }
+
+  .auth-funnel-ballot-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .auth-funnel-ballot-footer > button {
+    width: 100%;
+  }
+
+  .auth-funnel-handoff-panel {
+    padding: 34px 22px 30px;
+  }
+
+  .auth-funnel-handoff-panel > h1 {
+    font-size: 26px;
+  }
+
+  .auth-funnel-handoff-steps > li {
+    grid-template-columns: 26px minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .auth-funnel-step-number {
+    width: 26px;
+  }
+
+  .auth-funnel-prompt {
+    margin-left: -38px;
+    font-size: 10.5px;
+  }
+
+  .auth-funnel-prompt-collapsed {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 460px) {
+  .auth-funnel-signin {
+    padding: 0 10px;
+  }
+
+  .auth-funnel-question-title {
+    gap: 8px;
+  }
+
+  .auth-funnel-question-title > span {
+    max-width: 105px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .auth-funnel-question-body {
+    padding-left: 0;
+  }
+
+  .auth-funnel-more-detail {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .auth-funnel-question-actions {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-funnel-checking > span,
+  .auth-funnel-review-loading > span {
+    animation-duration: 2s;
+  }
+}

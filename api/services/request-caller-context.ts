@@ -1,20 +1,21 @@
-import type { UserContext } from '../runtime/sandbox.ts';
-import { isApiToken } from './tokens.ts';
+import type { UserContext } from "../runtime/sandbox.ts";
+import { isApiToken } from "./tokens.ts";
 import {
+  type AuthenticatedRequestUser,
   authenticateRequest,
   extractRequestAccessToken,
   hasScope,
-  type AuthenticatedRequestUser,
   type RequestAuthSource,
   type RequestTokenSourcePolicy,
-} from './request-auth.ts';
-import { createUserService, type UserProfile } from './user.ts';
-import { FREE_MODE_BALANCE_LIGHT } from '../../shared/contracts/ai.ts';
+} from "./request-auth.ts";
+import { createUserService, type UserProfile } from "./user.ts";
+import { FREE_MODE_BALANCE_LIGHT } from "../../shared/contracts/ai.ts";
+import { requireActiveProSubscription } from "./pro-subscription.ts";
 
-export const ANONYMOUS_USER_ID = '00000000-0000-0000-0000-000000000000';
+export const ANONYMOUS_USER_ID = "00000000-0000-0000-0000-000000000000";
 
 export interface RequestCallerContext {
-  authState: 'authenticated' | 'anonymous';
+  authState: "authenticated" | "anonymous";
   authSource?: RequestAuthSource;
   authUser: AuthenticatedRequestUser | null;
   authToken?: string;
@@ -35,10 +36,11 @@ export interface RequestCallerContext {
   tokenAppIds: string[] | null;
   tokenFunctionNames: string[] | null;
   scopes?: string[];
-  routineContext?: AuthenticatedRequestUser['routineContext'];
-  routineCapabilityCeiling?: AuthenticatedRequestUser['routineCapabilityCeiling'];
-  routineActor?: AuthenticatedRequestUser['routineActor'];
-  sandboxActor?: AuthenticatedRequestUser['sandboxActor'];
+  routineContext?: AuthenticatedRequestUser["routineContext"];
+  routineCapabilityCeiling?:
+    AuthenticatedRequestUser["routineCapabilityCeiling"];
+  routineActor?: AuthenticatedRequestUser["routineActor"];
+  sandboxActor?: AuthenticatedRequestUser["sandboxActor"];
   // Verified cross-Agent caller identity (from a valid X-Galactic-Caller
   // header). Present only when this request is one Agent calling another on
   // behalf of the user; drives the cross-Agent grant check.
@@ -53,9 +55,14 @@ export interface RequestCallerContext {
 interface ResolveRequestCallerContextOptions {
   authSourcePolicy?: RequestTokenSourcePolicy;
   allowAnonymous?: boolean;
-  invalidAuthPolicy?: 'ignore' | 'throw';
+  invalidAuthPolicy?: "ignore" | "throw";
   loadUserProfile?: boolean;
   loadUserApiKey?: boolean;
+  /**
+   * A route may defer the membership check only when it performs the same
+   * fail-closed gate after validating any signed actor/caller context.
+   */
+  enforceActiveProSubscription?: boolean;
 }
 
 interface RequestCallerContextDeps {
@@ -69,7 +76,7 @@ function buildAnonymousContext(
   authError?: Error,
 ): RequestCallerContext {
   return {
-    authState: 'anonymous',
+    authState: "anonymous",
     authSource: undefined,
     authUser: null,
     authToken,
@@ -98,10 +105,10 @@ function buildAnonymousContext(
  */
 export function deriveCallerEconomicState(
   profile:
-    | Pick<UserProfile, 'balance_light' | 'byok_enabled' | 'byok_provider'>
+    | Pick<UserProfile, "balance_light" | "byok_enabled" | "byok_provider">
     | null,
 ): { balanceLight: number | null; freeMode: boolean; byokPresent: boolean } {
-  const balanceLight = typeof profile?.balance_light === 'number'
+  const balanceLight = typeof profile?.balance_light === "number"
     ? profile.balance_light
     : null;
   return {
@@ -116,50 +123,73 @@ export async function resolveRequestCallerContext(
   options?: ResolveRequestCallerContextOptions,
   deps?: RequestCallerContextDeps,
 ): Promise<RequestCallerContext> {
-  const authSourcePolicy = options?.authSourcePolicy ?? 'bearer_or_cookie';
+  const authSourcePolicy = options?.authSourcePolicy ?? "bearer_or_cookie";
   const allowAnonymous = options?.allowAnonymous ?? false;
-  const invalidAuthPolicy = options?.invalidAuthPolicy ?? 'throw';
+  const invalidAuthPolicy = options?.invalidAuthPolicy ?? "throw";
   const loadUserProfile = options?.loadUserProfile ?? true;
   const loadUserApiKey = options?.loadUserApiKey ?? true;
+  const enforceActiveMembership = options?.enforceActiveProSubscription ?? true;
 
-  const authenticateRequestFn = deps?.authenticateRequestFn ?? authenticateRequest;
-  const extractRequestAccessTokenFn = deps?.extractRequestAccessTokenFn ?? extractRequestAccessToken;
+  const authenticateRequestFn = deps?.authenticateRequestFn ??
+    authenticateRequest;
+  const extractRequestAccessTokenFn = deps?.extractRequestAccessTokenFn ??
+    extractRequestAccessToken;
   const createUserServiceFn = deps?.createUserServiceFn ?? createUserService;
 
-  const authToken = extractRequestAccessTokenFn(request, authSourcePolicy) || undefined;
+  const authToken = extractRequestAccessTokenFn(request, authSourcePolicy) ||
+    undefined;
   if (!authToken) {
     if (allowAnonymous) {
       return buildAnonymousContext();
     }
-    throw new Error('Missing or invalid authorization header');
+    throw new Error("Missing or invalid authorization header");
   }
 
   try {
     const authUser = await authenticateRequestFn(request, authSourcePolicy);
+    // Authentication establishes identity only. Execution resolvers enforce
+    // membership after the route has validated credential source and any
+    // signed caller context, so a valid identity is never downgraded or hidden
+    // behind an unrelated billing error.
+    if (
+      enforceActiveMembership &&
+      authUser.authSource !== "builder_handoff"
+    ) {
+      await requireActiveProSubscription(authUser.id, { enabled: true });
+    }
     const userService = createUserServiceFn();
-    const userProfile = loadUserProfile ? await userService.getUser(authUser.id).catch(() => null) : null;
+    const userProfile = loadUserProfile
+      ? await userService.getUser(authUser.id).catch(() => null)
+      : null;
     let userApiKey: string | null = null;
-    if (loadUserApiKey && userProfile?.byok_enabled && userProfile.byok_provider) {
+    if (
+      loadUserApiKey && userProfile?.byok_enabled && userProfile.byok_provider
+    ) {
       try {
-        userApiKey = await userService.getDecryptedApiKey(authUser.id, userProfile.byok_provider);
+        userApiKey = await userService.getDecryptedApiKey(
+          authUser.id,
+          userProfile.byok_provider,
+        );
       } catch (err) {
-        console.error('[AUTH] Failed to load caller API key:', err);
+        console.error("[AUTH] Failed to load caller API key:", err);
       }
     }
 
-    const displayName = userProfile?.display_name
-      || authUser.user_metadata?.full_name
-      || authUser.user_metadata?.name
-      || authUser.email.split('@')[0]
-      || null;
-    const avatarUrl = userProfile?.avatar_url
-      || authUser.user_metadata?.avatar_url
-      || null;
+    const displayName = userProfile?.display_name ||
+      authUser.user_metadata?.full_name ||
+      authUser.user_metadata?.name ||
+      authUser.email.split("@")[0] ||
+      null;
+    const avatarUrl = userProfile?.avatar_url ||
+      authUser.user_metadata?.avatar_url ||
+      null;
 
-    const { balanceLight, freeMode, byokPresent } = deriveCallerEconomicState(userProfile);
+    const { balanceLight, freeMode, byokPresent } = deriveCallerEconomicState(
+      userProfile,
+    );
 
     return {
-      authState: 'authenticated',
+      authState: "authenticated",
       authSource: authUser.authSource,
       authUser,
       authToken,
@@ -186,35 +216,52 @@ export async function resolveRequestCallerContext(
       sandboxActor: authUser.sandboxActor,
     };
   } catch (err) {
-    if (allowAnonymous && invalidAuthPolicy === 'ignore') {
-      return buildAnonymousContext(undefined, err instanceof Error ? err : new Error(String(err)));
+    if (allowAnonymous && invalidAuthPolicy === "ignore") {
+      return buildAnonymousContext(
+        undefined,
+        err instanceof Error ? err : new Error(String(err)),
+      );
     }
     throw err;
   }
 }
 
 export function callerHasAppAccess(
-  caller: Pick<RequestCallerContext, 'tokenAppIds'>,
+  caller: Pick<RequestCallerContext, "tokenAppIds">,
   appIdentifiers: Array<string | null | undefined>,
 ): boolean {
-  if (!caller.tokenAppIds || caller.tokenAppIds.length === 0 || caller.tokenAppIds.includes('*')) {
+  if (
+    !caller.tokenAppIds || caller.tokenAppIds.length === 0 ||
+    caller.tokenAppIds.includes("*")
+  ) {
     return true;
   }
 
-  const allowedIdentifiers = new Set(appIdentifiers.filter((value): value is string => !!value));
-  return caller.tokenAppIds.some(identifier => allowedIdentifiers.has(identifier));
+  const allowedIdentifiers = new Set(
+    appIdentifiers.filter((value): value is string => !!value),
+  );
+  return caller.tokenAppIds.some((identifier) =>
+    allowedIdentifiers.has(identifier)
+  );
 }
 
 export function callerHasFunctionAccess(
-  caller: Pick<RequestCallerContext, 'tokenFunctionNames'>,
+  caller: Pick<RequestCallerContext, "tokenFunctionNames">,
   functionIdentifiers: Array<string | null | undefined>,
 ): boolean {
-  if (!caller.tokenFunctionNames || caller.tokenFunctionNames.length === 0 || caller.tokenFunctionNames.includes('*')) {
+  if (
+    !caller.tokenFunctionNames || caller.tokenFunctionNames.length === 0 ||
+    caller.tokenFunctionNames.includes("*")
+  ) {
     return true;
   }
 
-  const allowedIdentifiers = new Set(functionIdentifiers.filter((value): value is string => !!value));
-  return caller.tokenFunctionNames.some(identifier => allowedIdentifiers.has(identifier));
+  const allowedIdentifiers = new Set(
+    functionIdentifiers.filter((value): value is string => !!value),
+  );
+  return caller.tokenFunctionNames.some((identifier) =>
+    allowedIdentifiers.has(identifier)
+  );
 }
 
 /**
@@ -225,10 +272,10 @@ export function callerHasFunctionAccess(
 export function callerWithinRoutineCapabilityCeiling(
   caller: Pick<
     RequestCallerContext,
-    | 'routineContext'
-    | 'routineCapabilityCeiling'
-    | 'routineActor'
-    | 'sandboxActor'
+    | "routineContext"
+    | "routineCapabilityCeiling"
+    | "routineActor"
+    | "sandboxActor"
   >,
   targetAppIdentifiers: Array<string | null | undefined>,
   functionIdentifiers: Array<string | null | undefined>,
@@ -267,28 +314,31 @@ export function callerWithinRoutineCapabilityCeiling(
 }
 
 export function callerHasRequiredScope(
-  caller: Pick<RequestCallerContext, 'scopes'>,
+  caller: Pick<RequestCallerContext, "scopes">,
   requiredScope: string,
 ): boolean {
   return hasScope(caller.scopes, requiredScope);
 }
 
 export function callerUsesApiToken(
-  caller: Pick<RequestCallerContext, 'authToken' | 'authState'>,
+  caller: Pick<RequestCallerContext, "authToken" | "authState">,
 ): boolean {
-  return caller.authState === 'authenticated' && !!caller.authToken && isApiToken(caller.authToken);
+  return caller.authState === "authenticated" && !!caller.authToken &&
+    isApiToken(caller.authToken);
 }
 
 export function callerUsesRoutineActorToken(
-  caller: Pick<RequestCallerContext, 'authSource' | 'authState'>,
+  caller: Pick<RequestCallerContext, "authSource" | "authState">,
 ): boolean {
-  return caller.authState === 'authenticated' && caller.authSource === 'routine_actor';
+  return caller.authState === "authenticated" &&
+    caller.authSource === "routine_actor";
 }
 
 export function callerUsesSandboxActorToken(
-  caller: Pick<RequestCallerContext, 'authSource' | 'authState'>,
+  caller: Pick<RequestCallerContext, "authSource" | "authState">,
 ): boolean {
-  return caller.authState === 'authenticated' && caller.authSource === 'sandbox_actor';
+  return caller.authState === "authenticated" &&
+    caller.authSource === "sandbox_actor";
 }
 
 /**
@@ -299,11 +349,11 @@ export function callerUsesSandboxActorToken(
  * those capabilities were never bound into its sandbox.
  */
 export function callerCanInvokeMcpTool(
-  caller: Pick<RequestCallerContext, 'authSource' | 'authState'>,
+  caller: Pick<RequestCallerContext, "authSource" | "authState">,
   toolName: string,
 ): boolean {
-  const syntheticSdkTool = toolName.startsWith('ultralight.') ||
-    toolName.startsWith('ul.');
+  const syntheticSdkTool = toolName.startsWith("ultralight.") ||
+    toolName.startsWith("ul.");
   if (!syntheticSdkTool) return true;
   return !callerUsesRoutineActorToken(caller) &&
     !callerUsesSandboxActorToken(caller);
@@ -315,8 +365,8 @@ export function callerCanInvokeMcpTool(
  * Keep actor execution on MCP until those routes carry the complete context.
  */
 export function callerCanUseLegacyExecutionRoute(
-  caller: Pick<RequestCallerContext, 'authSource' | 'authState'>,
+  caller: Pick<RequestCallerContext, "authSource" | "authState">,
 ): boolean {
-  return caller.authSource !== 'routine_actor' &&
-    caller.authSource !== 'sandbox_actor';
+  return caller.authSource !== "routine_actor" &&
+    caller.authSource !== "sandbox_actor";
 }

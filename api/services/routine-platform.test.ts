@@ -569,6 +569,12 @@ Deno.test("routine platform: resume applies the centralized launch contract", as
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = input.toString();
     const method = init?.method || "GET";
+    if (url.includes("/account_entitlements?")) {
+      return jsonResponse([{
+        plan_code: "pro",
+        subscription_status: "active",
+      }]);
+    }
     if (url.includes("/apps?") && url.includes(`id=eq.${APP_ID}`)) {
       return jsonResponse([routineComposerApp()]);
     }

@@ -7,6 +7,10 @@
 // R2 layout per user:     users/{userId}/library.md, users/{userId}/memory.md
 
 import { getEnv } from "../lib/env.ts";
+import {
+  type AppManifest,
+  validateManifest,
+} from "../../shared/contracts/manifest.ts";
 import { createR2Service } from "./storage.ts";
 import { createAppsService } from "./apps.ts";
 import { parseTypeScript, toSkillsParsed } from "./parser.ts";
@@ -413,10 +417,62 @@ export interface VersionArtifacts {
   };
 }
 
+interface VersionManifestReader {
+  listFiles(prefix: string): Promise<string[]>;
+  fetchTextFile(key: string): Promise<string>;
+}
+
+interface RetainedGalacticManifest {
+  manifest: AppManifest;
+  json: string;
+}
+
 /**
- * Auto-generate Skills.md, library.txt, manifest.json, and embedding.json for a specific
- * version of an app. Stores artifacts in R2 at the version's storage key
- * and also updates the app DB record with the latest skills/embedding/manifest.
+ * Detect the authored-contract boundary before documentation generation.
+ *
+ * A root galactic.yaml makes the compiler-owned manifest authoritative. Once
+ * that marker exists, a storage/read/parse/schema failure must abort instead of
+ * silently switching to legacy source inference and overwriting signed bytes.
+ */
+export async function readRetainedGalacticManifest(
+  storageKey: string,
+  reader: VersionManifestReader,
+): Promise<RetainedGalacticManifest | null> {
+  const keys = await reader.listFiles(storageKey);
+  if (!keys.includes(`${storageKey}galactic.yaml`)) return null;
+
+  let json: string;
+  try {
+    json = await reader.fetchTextFile(`${storageKey}manifest.json`);
+  } catch {
+    throw new Error(
+      "galactic.yaml release is missing its compiled manifest.json",
+    );
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new Error(
+      "galactic.yaml release has a malformed compiled manifest.json",
+    );
+  }
+  const validation = validateManifest(parsed);
+  if (!validation.valid || !validation.manifest) {
+    throw new Error(
+      "galactic.yaml release has an invalid compiled manifest.json",
+    );
+  }
+  return { manifest: validation.manifest, json };
+}
+
+/**
+ * Auto-generate Skills.md, library.txt, and embedding.json for a specific
+ * version of an app. Legacy releases also receive a source-hydrated
+ * manifest.json. For galactic.yaml releases, the compiler-owned manifest is
+ * retained byte-for-byte: documentation generation must never mutate a
+ * qualified release artifact after its digest has been signed.
  *
  * @param app       The app record (needs .id, .name, .slug, .description, .exports)
  * @param storageKey  The R2 prefix for this version, e.g. "apps/{id}/{ver}/"
@@ -452,8 +508,9 @@ export async function generateSkillsForVersion(
   // Parse code → all artifacts derive from ParseResult
   const parseResult = await parseTypeScript(code);
 
-  // Generate manifest: keep rich uploaded manifests when possible, but converge
-  // back onto source-derived contracts when the stored manifest is thin or stale.
+  // Generate a legacy manifest from source when needed. galactic.yaml is the
+  // authored source of truth, so its already-compiled stored manifest must stay
+  // byte-identical to the artifact gx.test and upload qualified.
   const existingManifest = app.manifest
     ? (() => {
       try {
@@ -463,15 +520,20 @@ export async function generateSkillsForVersion(
       }
     })()
     : null;
-  const { manifest } = mergeManifestWithParseResult(
-    app,
-    existingManifest,
-    parseResult,
-    _version,
-    { entryFileName: "index.ts" },
+  const retainedGalacticManifest = await readRetainedGalacticManifest(
+    storageKey,
+    r2Service,
   );
-
-  const manifestJson = JSON.stringify(manifest, null, 2);
+  const manifest = retainedGalacticManifest?.manifest ??
+    mergeManifestWithParseResult(
+      app,
+      existingManifest,
+      parseResult,
+      _version,
+      { entryFileName: "index.ts" },
+    ).manifest;
+  const manifestJson = retainedGalacticManifest?.json ??
+    JSON.stringify(manifest, null, 2);
 
   // Generate skills_parsed directly from parser (not from Skills.md round-trip)
   const skillsParsed = toSkillsParsed(parseResult);

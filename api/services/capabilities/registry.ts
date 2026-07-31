@@ -23,17 +23,18 @@ import { notificationsCapability } from "./notifications.ts";
 
 const CAPABILITIES: Capability[] = [
   {
-    id: 'discover',
-    branch: 'agent_user',
+    id: "discover",
+    branch: "agent_user",
     tier: 1,
-    advertisedName: 'gx.discover',
-    aliases: ['ul.discover'],
-    title: 'Discover agents & context',
-    description: 'Find and inspect Agents. `scope` selects what: "desk" (your recently-used ' +
+    advertisedName: "gx.discover",
+    aliases: ["ul.discover"],
+    title: "Discover agents & context",
+    description:
+      'Find and inspect Agents. `scope` selects what: "desk" (your recently-used ' +
       'Agents), "inspect" (deep detail on one Agent — functions, pricing, trust, ' +
       'network) with app_id, "library" (your owned + saved Agents), "appstore" ' +
       '(search all published Agents by query or task), "tools" (platform tools not ' +
-      'shown in tools/list).',
+      "shown in tools/list).",
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -41,57 +42,58 @@ const CAPABILITIES: Capability[] = [
       openWorldHint: true,
     },
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         scope: {
-          type: 'string',
-          enum: ['desk', 'inspect', 'library', 'appstore', 'tools'],
-          description: 'What to discover. Required.',
+          type: "string",
+          enum: ["desk", "inspect", "library", "appstore", "tools"],
+          description: "What to discover. Required.",
         },
         app_id: {
-          type: 'string',
+          type: "string",
           description: 'Agent to inspect (required for scope="inspect").',
         },
         query: {
-          type: 'string',
-          description: 'Semantic search query (library/appstore).',
+          type: "string",
+          description: "Semantic search query (library/appstore).",
         },
         task: {
-          type: 'string',
-          description: 'Context-aware task description (appstore).',
+          type: "string",
+          description: "Context-aware task description (appstore).",
         },
         types: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Filter by result type (app|page|memory_md|library_md).',
+          type: "array",
+          items: { type: "string" },
+          description: "Filter by result type (app|page|memory_md|library_md).",
         },
         limit: {
-          type: 'number',
-          description: 'Max results (library/appstore).',
+          type: "number",
+          description: "Max results (library/appstore).",
         },
       },
-      required: ['scope'],
+      required: ["scope"],
     },
     auth: {},
-    surfaces: ['mcp', 'cli', 'web'],
+    surfaces: ["mcp", "cli", "web"],
     coreTool: true,
-    cli: { command: 'discover' },
+    cli: { command: "discover" },
     // Website discovery is served by GET /api/launch/discover (its own detail
     // payloads); the honest trust card there + on inspect now share resolveTrustSignals.
-    web: { method: 'GET', path: '/api/launch/discover' },
+    web: { method: "GET", path: "/api/launch/discover" },
     // Handler bound at load from platform-mcp (executeDiscover* stay there).
   },
   {
-    id: 'project',
-    branch: 'ownership',
+    id: "project",
+    branch: "ownership",
     tier: 1,
-    advertisedName: 'gx.project',
-    aliases: ['ul.project'],
-    title: 'Project an Agent coding capsule',
-    description: 'Return a compact, source-free snapshot of an Agent for a coding agent: ' +
-      'directive, function contracts, data schema, effective access, routines, ' +
-      'model policy, settings presence, recent failures, release state, and file ' +
-      'hashes. Pass since_revision to receive only a revision delta.',
+    advertisedName: "gx.project",
+    aliases: ["ul.project"],
+    title: "Project an Agent coding capsule",
+    description:
+      "Return a compact, source-free snapshot of an Agent for a coding agent: " +
+      "directive, function contracts, data schema, effective access, routines, " +
+      "model policy, settings presence, recent failures, release state, and file " +
+      "hashes. Pass since_revision to receive only a revision delta.",
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -99,77 +101,80 @@ const CAPABILITIES: Capability[] = [
       openWorldHint: false,
     },
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         app_id: {
-          type: 'string',
-          description: 'App ID or slug you own.',
+          type: "string",
+          description: "App ID or slug you own.",
         },
         view: {
-          type: 'string',
-          enum: ['coding_capsule'],
+          type: "string",
+          enum: ["coding_capsule"],
           description: 'Projection to return. Currently "coding_capsule".',
         },
         since_revision: {
-          type: 'string',
-          description: 'Prior revision returned by gx.project; returns only changes since it.',
+          type: "string",
+          description:
+            "Prior revision returned by gx.project; returns only changes since it.",
         },
       },
-      required: ['app_id'],
+      required: ["app_id"],
     },
     outputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
-        view: { type: 'string', enum: ['coding_capsule'] },
-        app_id: { type: 'string' },
-        revision: { type: 'string' },
-        revision_created_at: { type: 'string' },
-        revision_expires_at: { type: 'string' },
+        view: { type: "string", enum: ["coding_capsule"] },
+        app_id: { type: "string" },
+        revision: { type: "string" },
+        revision_created_at: { type: "string" },
+        revision_expires_at: { type: "string" },
         capsule: {
-          type: 'object',
-          description: 'Present on a full projection; compact source-free Agent context.',
+          type: "object",
+          description:
+            "Present on a full projection; compact source-free Agent context.",
         },
         since_revision: {
-          type: 'string',
-          description: 'Present on a delta projection.',
+          type: "string",
+          description: "Present on a delta projection.",
         },
         not_modified: {
-          type: 'boolean',
-          description: 'True when the current revision equals since_revision.',
+          type: "boolean",
+          description: "True when the current revision equals since_revision.",
         },
         delta: {
-          type: 'object',
-          description: 'Changed values when since_revision differs; arrays are replaced as units.',
+          type: "object",
+          description:
+            "Changed values when since_revision differs; arrays are replaced as units.",
         },
         removed_paths: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Removed JSON Pointer paths.',
+          type: "array",
+          items: { type: "string" },
+          description: "Removed JSON Pointer paths.",
         },
       },
       required: [
-        'view',
-        'app_id',
-        'revision',
-        'revision_created_at',
-        'revision_expires_at',
+        "view",
+        "app_id",
+        "revision",
+        "revision_created_at",
+        "revision_expires_at",
       ],
     },
     auth: { ownerOnly: true },
-    surfaces: ['mcp', 'cli'],
+    surfaces: ["mcp", "cli"],
     coreTool: true,
-    cli: { command: 'project' },
+    cli: { command: "project" },
     // Handler bound at load from platform-mcp.
   },
   {
-    id: 'download',
-    branch: 'ownership',
+    id: "download",
+    branch: "ownership",
     tier: 1,
-    advertisedName: 'gx.download',
-    aliases: ['ul.download'],
-    title: 'Download source or scaffold a new app',
-    description: 'With app_id: download app source code. ' +
-      'Without app_id: scaffold a new app template from name + description.',
+    advertisedName: "gx.download",
+    aliases: ["ul.download"],
+    title: "Download source or scaffold a new app",
+    description: "With app_id: download app source code. " +
+      "Without app_id: scaffold a new app template from name + description.",
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -177,87 +182,88 @@ const CAPABILITIES: Capability[] = [
       openWorldHint: false,
     },
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         app_id: {
-          type: 'string',
-          description: 'App ID or slug to download. Omit to scaffold a new app.',
+          type: "string",
+          description:
+            "App ID or slug to download. Omit to scaffold a new app.",
         },
         version: {
-          type: 'string',
-          description: 'Version to download. Default: live version.',
+          type: "string",
+          description: "Version to download. Default: live version.",
         },
         // scaffold fields (when no app_id)
-        name: { type: 'string', description: 'App name for scaffolding.' },
+        name: { type: "string", description: "App name for scaffolding." },
         description: {
-          type: 'string',
-          description: 'App description — generates function stubs.',
+          type: "string",
+          description: "App description — generates function stubs.",
         },
         runtime: {
-          type: 'string',
-          enum: ['deno', 'gpu'],
-          description: 'Scaffold runtime. Use gpu for Python GPU functions.',
+          type: "string",
+          enum: ["deno", "gpu"],
+          description: "Scaffold runtime. Use gpu for Python GPU functions.",
         },
         gpu_type: {
-          type: 'string',
+          type: "string",
           description:
             'GPU type for runtime="gpu" scaffolds, e.g. A40, L40S, A100-80GB-SXM, H100-SXM.',
         },
         base: {
-          type: 'string',
-          enum: ['python-cuda', 'torch-cuda'],
+          type: "string",
+          enum: ["python-cuda", "torch-cuda"],
           description:
             'GPU base profile for runtime="gpu". Use torch-cuda for PyTorch/model workloads.',
         },
         functions: {
-          type: 'array',
+          type: "array",
           items: {
-            type: 'object',
+            type: "object",
             properties: {
-              name: { type: 'string' },
-              description: { type: 'string' },
+              name: { type: "string" },
+              description: { type: "string" },
               parameters: {
-                type: 'array',
+                type: "array",
                 items: {
-                  type: 'object',
+                  type: "object",
                   properties: {
-                    name: { type: 'string' },
-                    type: { type: 'string' },
-                    required: { type: 'boolean' },
-                    description: { type: 'string' },
+                    name: { type: "string" },
+                    type: { type: "string" },
+                    required: { type: "boolean" },
+                    description: { type: "string" },
                   },
-                  required: ['name', 'type'],
+                  required: ["name", "type"],
                 },
               },
             },
-            required: ['name'],
+            required: ["name"],
           },
-          description: 'Functions to scaffold. Omit to auto-generate.',
+          description: "Functions to scaffold. Omit to auto-generate.",
         },
         storage: {
-          type: 'string',
-          enum: ['none', 'kv', 'supabase'],
-          description: 'Storage strategy for scaffolding.',
+          type: "string",
+          enum: ["none", "kv", "supabase"],
+          description: "Storage strategy for scaffolding.",
         },
         permissions: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Permissions for scaffolding.',
+          type: "array",
+          items: { type: "string" },
+          description: "Permissions for scaffolding.",
         },
         policy: {
-          type: 'boolean',
+          type: "boolean",
           description:
-            'When true, scaffold policy.ts plus manifest access_policy for programmable function pricing and denial logic.',
+            "When true, scaffold policy.ts plus manifest access_policy for programmable function pricing and denial logic.",
         },
         interface: {
-          type: 'boolean',
+          type: "boolean",
           description:
-            'When true, scaffold a working interfaces/main.html (agent UI) with the call bridge pre-wired plus the manifest interfaces[] entry — a running page you then edit.',
+            "When true, scaffold a working interfaces/main.html (agent UI) with the call bridge pre-wired plus the manifest interfaces[] entry — a running page you then edit.",
         },
         full_time: {
-          type: 'boolean',
+          type: "boolean",
           description:
-            'When true, scaffold a full-time agent: a running goal → journal → observe → reason → act → record loop (tick handler), a journal migration, and a manifest routine template with budget defaults and flight_recorder on. Activate after deploy with gx.routine create (mission in `intent`) + resume.',
+            "When true, scaffold a full-time agent: a running goal → journal → observe → reason → act → record loop (tick handler), a journal migration, and a manifest routine template with budget defaults and flight_recorder on. Activate after deploy with gx.routine create (mission in `intent`) + resume.",
         },
       },
     },
@@ -265,21 +271,22 @@ const CAPABILITIES: Capability[] = [
     // Owner action: download own source (or public source), or scaffold a new
     // app. Demoted (not in the lean tools/list). Website source-download is
     // served by the /api/apps surface; formal web parity declared later.
-    surfaces: ['mcp', 'cli'],
+    surfaces: ["mcp", "cli"],
     coreTool: false,
-    cli: { command: 'download' },
+    cli: { command: "download" },
     // Handler bound at load from platform-mcp (executeDownload/executeScaffold stay there).
   },
   {
-    id: 'stage',
-    branch: 'ownership',
+    id: "stage",
+    branch: "ownership",
     tier: 1,
-    advertisedName: 'gx.stage',
-    aliases: ['ul.stage'],
-    title: 'Stage an immutable source bundle',
-    description: 'Upload source once and receive a content-addressed bundle_id for gx.test ' +
-      'and gx.upload. For later edits, pass base_bundle_id with only changed ' +
-      'files and optional delete_paths; unchanged source is reused.',
+    advertisedName: "gx.stage",
+    aliases: ["ul.stage"],
+    title: "Stage an immutable source bundle",
+    description:
+      "Upload source once and receive a content-addressed bundle_id for gx.test " +
+      "and gx.upload. For later edits, pass base_bundle_id with only changed " +
+      "files and optional delete_paths; unchanged source is reused.",
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
@@ -287,87 +294,89 @@ const CAPABILITIES: Capability[] = [
       openWorldHint: false,
     },
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         files: {
-          type: 'array',
+          type: "array",
           maxItems: 50,
           items: {
-            type: 'object',
+            type: "object",
             properties: {
               path: {
-                type: 'string',
+                type: "string",
                 description: 'Relative file path (for example "index.ts").',
               },
               content: {
-                type: 'string',
-                description: 'File content (text or base64).',
+                type: "string",
+                description: "File content (text or base64).",
               },
               encoding: {
-                type: 'string',
-                enum: ['text', 'base64'],
-                description: 'Default: text. Required as base64 for .wasm files.',
+                type: "string",
+                enum: ["text", "base64"],
+                description:
+                  "Default: text. Required as base64 for .wasm files.",
               },
             },
-            required: ['path', 'content'],
+            required: ["path", "content"],
           },
           description:
-            'Full source for an initial stage, or only changed/new files when base_bundle_id is set. The resolved bundle is limited to 50 files and 50 MiB of decoded source; paths must use allowed Galactic source/configuration extensions.',
+            "Full source for an initial stage, or only changed/new files when base_bundle_id is set. The resolved bundle is limited to 50 files and 50 MiB of decoded source; paths must use allowed Galactic source/configuration extensions.",
         },
         base_bundle_id: {
-          type: 'string',
-          description: 'Prior staged bundle to use as the base for an incremental stage.',
+          type: "string",
+          description:
+            "Prior staged bundle to use as the base for an incremental stage.",
         },
         delete_paths: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Paths to remove from base_bundle_id.',
+          type: "array",
+          items: { type: "string" },
+          description: "Paths to remove from base_bundle_id.",
         },
       },
     },
     outputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
-        bundle_id: { type: 'string' },
-        source_hash: { type: 'string' },
-        file_count: { type: 'number' },
-        size_bytes: { type: 'number' },
-        changed_files: { type: 'array', items: { type: 'string' } },
-        reused_files: { type: 'array', items: { type: 'string' } },
-        deleted_files: { type: 'array', items: { type: 'string' } },
-        created_at: { type: 'string' },
-        expires_at: { type: 'string' },
+        bundle_id: { type: "string" },
+        source_hash: { type: "string" },
+        file_count: { type: "number" },
+        size_bytes: { type: "number" },
+        changed_files: { type: "array", items: { type: "string" } },
+        reused_files: { type: "array", items: { type: "string" } },
+        deleted_files: { type: "array", items: { type: "string" } },
+        created_at: { type: "string" },
+        expires_at: { type: "string" },
       },
       required: [
-        'bundle_id',
-        'source_hash',
-        'file_count',
-        'size_bytes',
-        'changed_files',
-        'reused_files',
-        'deleted_files',
-        'created_at',
-        'expires_at',
+        "bundle_id",
+        "source_hash",
+        "file_count",
+        "size_bytes",
+        "changed_files",
+        "reused_files",
+        "deleted_files",
+        "created_at",
+        "expires_at",
       ],
     },
     auth: {},
-    surfaces: ['mcp', 'cli'],
+    surfaces: ["mcp", "cli"],
     coreTool: true,
-    cli: { command: 'stage' },
+    cli: { command: "stage" },
     // Handler bound at load from platform-mcp.
   },
   {
-    id: 'upload',
-    branch: 'ownership',
+    id: "upload",
+    branch: "ownership",
     tier: 1,
-    advertisedName: 'gx.upload',
-    aliases: ['ul.upload'],
-    title: 'Deploy code or publish a page',
-    description: 'Deploy code or publish a markdown page. ' +
+    advertisedName: "gx.upload",
+    aliases: ["ul.upload"],
+    title: "Deploy code or publish a page",
+    description: "Deploy code or publish a markdown page. " +
       'type="app" (default): deploy source code. No app_id = new app, with app_id = new version. ' +
-      'Connected API keys must pass the short-lived test_attestation from a successful gx.test of the exact same files. ' +
-      'Re-uploading files byte-identical to the live version is a no-op (returns ' +
-      'deduplicated:true, no new version) unless you pass an explicit version. ' +
+      "Connected API keys must pass the short-lived test_attestation from a successful gx.test of the exact same files. " +
+      "Re-uploading files byte-identical to the live version is a no-op (returns " +
+      "deduplicated:true, no new version) unless you pass an explicit version. " +
       'type="page": publish markdown as a live web page.',
     annotations: {
       readOnlyHint: false,
@@ -376,106 +385,110 @@ const CAPABILITIES: Capability[] = [
       openWorldHint: false,
     },
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         type: {
-          type: 'string',
-          enum: ['app', 'page'],
-          description: 'Deploy type. Default: app.',
+          type: "string",
+          enum: ["app", "page"],
+          description: "Deploy type. Default: app.",
         },
         // app fields
         files: {
-          type: 'array',
+          type: "array",
           items: {
-            type: 'object',
+            type: "object",
             properties: {
               path: {
-                type: 'string',
+                type: "string",
                 description: 'Relative file path (e.g. "index.ts")',
               },
               content: {
-                type: 'string',
-                description: 'File content (text or base64)',
+                type: "string",
+                description: "File content (text or base64)",
               },
               encoding: {
-                type: 'string',
-                enum: ['text', 'base64'],
-                description: 'Default: text. Required as base64 for .wasm files.',
+                type: "string",
+                enum: ["text", "base64"],
+                description:
+                  "Default: text. Required as base64 for .wasm files.",
               },
             },
-            required: ['path', 'content'],
+            required: ["path", "content"],
           },
-          description: 'Source files for app deploy. Mutually exclusive with bundle_id.',
+          description:
+            "Source files for app deploy. Mutually exclusive with bundle_id.",
         },
         bundle_id: {
-          type: 'string',
+          type: "string",
           description:
-            'Content-addressed source returned by gx.stage. Mutually exclusive with files.',
+            "Content-addressed source returned by gx.stage. Mutually exclusive with files.",
         },
         app_id: {
-          type: 'string',
-          description: 'Existing app ID or slug. Omit for new app.',
+          type: "string",
+          description: "Existing app ID or slug. Omit for new app.",
         },
-        name: { type: 'string', description: 'App name (new apps only).' },
-        description: { type: 'string', description: 'App description.' },
+        name: { type: "string", description: "App name (new apps only)." },
+        description: { type: "string", description: "App description." },
         visibility: {
-          type: 'string',
-          enum: ['private', 'unlisted', 'published'],
-          description: 'Default: private.',
+          type: "string",
+          enum: ["private", "unlisted", "published"],
+          description: "Default: private.",
         },
         version: {
-          type: 'string',
-          description: 'Explicit version. Default: patch bump.',
+          type: "string",
+          description: "Explicit version. Default: patch bump.",
         },
         test_attestation: {
-          type: 'string',
+          type: "string",
           description:
-            'Opaque short-lived proof returned by a successful gx.test of this exact decoded file set. Required for connected API-key uploads; account-session uploads may omit it.',
+            "Opaque short-lived proof returned by a successful gx.test of this exact decoded file set. Required for connected API-key uploads; account-session uploads may omit it.",
         },
         // page fields
         content: {
-          type: 'string',
+          type: "string",
           description: 'Markdown content. For type="page".',
         },
         slug: {
-          type: 'string',
+          type: "string",
           description: 'URL slug for page. For type="page".',
         },
-        title: { type: 'string', description: 'Page title. For type="page".' },
+        title: { type: "string", description: 'Page title. For type="page".' },
         shared_with: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Emails for shared pages.',
+          type: "array",
+          items: { type: "string" },
+          description: "Emails for shared pages.",
         },
         tags: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Tags for page.',
+          type: "array",
+          items: { type: "string" },
+          description: "Tags for page.",
         },
         published: {
-          type: 'boolean',
-          description: 'Discoverable in appstore. For pages.',
+          type: "boolean",
+          description: "Discoverable in appstore. For pages.",
         },
       },
     },
     auth: {},
     // Owner deploy (new app / new version) or page publish. Core tool. Website
     // deploy is served by the /api/apps surface; formal web parity declared later.
-    surfaces: ['mcp', 'cli'],
+    surfaces: ["mcp", "cli"],
     coreTool: true,
-    cli: { command: 'upload' },
+    cli: { command: "upload" },
     // Handler bound at load from platform-mcp (executeUpload/executeMarkdown stay there).
   },
   {
-    id: 'test',
-    branch: 'ownership',
+    id: "test",
+    branch: "ownership",
     tier: 1,
-    advertisedName: 'gx.test',
-    aliases: ['ul.test'],
-    title: 'Test code in a sandbox',
-    description: 'Test and validate code in a real sandbox without deploying. ' +
-      'Runs lint automatically before executing. A successful zero-error run returns the short-lived source-bound attestation required by connected-key uploads. ' +
-      'Use lint_only=true to validate without running or issuing an attestation.',
+    advertisedName: "gx.test",
+    aliases: ["ul.test"],
+    title: "Test code in a sandbox",
+    description:
+      "Test and validate code in a real sandbox without deploying. " +
+      "Runs lint automatically before executing. galactic.yaml basic conformance uses local deterministic fixtures, blocks real external effects, and reports exact partial coverage; it does not simulate third-party services or certify universal safety. " +
+      "A successful zero-error run returns the short-lived exact-release attestation required by connected-key uploads. " +
+      "Use lint_only=true to validate without running or issuing an attestation.",
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -483,81 +496,126 @@ const CAPABILITIES: Capability[] = [
       openWorldHint: false,
     },
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         files: {
-          type: 'array',
+          type: "array",
           items: {
-            type: 'object',
+            type: "object",
             properties: {
               path: {
-                type: 'string',
+                type: "string",
                 description: 'Relative file path (e.g. "index.ts")',
               },
-              content: { type: 'string', description: 'File content' },
+              content: { type: "string", description: "File content" },
               encoding: {
-                type: 'string',
-                enum: ['text', 'base64'],
+                type: "string",
+                enum: ["text", "base64"],
                 description:
-                  'Default: text. Base64 is decoded before testing and source hashing; .wasm files must use base64.',
+                  "Default: text. Base64 is decoded before testing and source hashing; .wasm files must use base64.",
               },
             },
-            required: ['path', 'content'],
+            required: ["path", "content"],
           },
-          description: 'Source files. Must include entry file. Mutually exclusive with bundle_id.',
+          description:
+            "Source files. Must include entry file. Mutually exclusive with bundle_id.",
         },
         bundle_id: {
-          type: 'string',
+          type: "string",
           description:
-            'Content-addressed source returned by gx.stage. Mutually exclusive with files.',
+            "Content-addressed source returned by gx.stage. Mutually exclusive with files.",
         },
         function_name: {
-          type: 'string',
+          type: "string",
           description:
-            'Function to execute. Optional when only one export exists or test_fixture.json has a single function entry.',
+            "Function to execute. Optional when only one export exists or test_fixture.json has a single function entry.",
         },
         test_args: {
-          type: 'object',
-          description: 'Args to pass to the function.',
+          type: "object",
+          description: "Args to pass to the function.",
           additionalProperties: true,
         },
         env_vars: {
-          type: 'object',
+          type: "object",
           description:
-            'Environment variables to inject into gx.test runtime (for example API keys or base URLs).',
-          additionalProperties: { type: 'string' },
+            "Legacy-test fixture values to inject into galactic.env (for example a non-secret base URL). Never pass real API keys, passwords, or tokens.",
+          additionalProperties: { type: "string" },
         },
         d1_fixtures: {
-          type: 'object',
+          type: "object",
           description:
-            'Fixture-backed D1 responses for gx.test. Use when code calls galactic.db.* without a deployed database.',
+            "Fixture-backed D1 responses for gx.test. Use when code calls galactic.db.* without a deployed database.",
           additionalProperties: true,
         },
+        http_fixtures: {
+          type: "array",
+          description:
+            "Legacy-test exact canned HTTP responses. Each entry is kind raw or credential, matches one normalized method + URL (and optional body SHA-256), and never falls back to the network. galactic.yaml releases declare these per case under fixtures.http.",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              kind: { type: "string", enum: ["raw", "credential"] },
+              credential_key: {
+                type: "string",
+                description:
+                  "Required only for kind=credential; names the declared vaulted credential without providing its value.",
+              },
+              request: {
+                type: "object",
+                properties: {
+                  method: { type: "string" },
+                  url: { type: "string" },
+                  body_sha256: { type: "string" },
+                },
+                required: ["method", "url"],
+                additionalProperties: false,
+              },
+              response: {
+                type: "object",
+                properties: {
+                  status: { type: "integer" },
+                  headers: {
+                    type: "object",
+                    additionalProperties: { type: "string" },
+                  },
+                  body_text: { type: "string" },
+                  body_base64: { type: "string" },
+                },
+                required: ["status"],
+                additionalProperties: false,
+              },
+            },
+            required: ["id", "kind", "request", "response"],
+            additionalProperties: false,
+          },
+        },
         lint_only: {
-          type: 'boolean',
-          description: 'Only validate conventions, skip execution.',
+          type: "boolean",
+          description: "Only validate conventions, skip execution.",
         },
         strict: {
-          type: 'boolean',
-          description: 'Lint strict mode — warnings become errors.',
+          type: "boolean",
+          description: "Lint strict mode — warnings become errors.",
         },
       },
     },
     auth: {},
-    surfaces: ['mcp', 'cli'],
+    surfaces: ["mcp", "cli"],
     coreTool: true,
-    cli: { command: 'test' },
+    cli: { command: "test" },
     // Handler bound at load from platform-mcp (executeTest/executeLint stay there).
   },
   {
-    id: 'set',
-    branch: 'ownership',
+    id: "set",
+    branch: "ownership",
     tier: 1,
-    advertisedName: 'gx.set',
-    aliases: ['ul.set'],
-    title: 'Configure app settings',
-    description: 'Configure app settings. Multiple settings in one call: version, visibility, ' +
-      'download access, supabase, rate limits, pricing.',
+    advertisedName: "gx.set",
+    aliases: ["ul.set"],
+    title: "Configure app settings",
+    description:
+      "Configure app settings. Multiple settings in one call: version, visibility, " +
+      "download access, supabase, rate limits, pricing.",
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
@@ -565,45 +623,45 @@ const CAPABILITIES: Capability[] = [
       openWorldHint: false,
     },
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
-        app_id: { type: 'string', description: 'App ID or slug.' },
-        version: { type: 'string', description: 'Set live version.' },
+        app_id: { type: "string", description: "App ID or slug." },
+        version: { type: "string", description: "Set live version." },
         visibility: {
-          type: 'string',
-          enum: ['private', 'unlisted', 'published'],
-          description: 'Set visibility.',
+          type: "string",
+          enum: ["private", "unlisted", "published"],
+          description: "Set visibility.",
         },
         download_access: {
-          type: 'string',
-          enum: ['owner', 'public'],
-          description: 'Who can download source.',
+          type: "string",
+          enum: ["owner", "public"],
+          description: "Who can download source.",
         },
         supabase_server: {
-          description: 'Supabase config name. null to unassign.',
+          description: "Supabase config name. null to unassign.",
         },
         calls_per_minute: {
-          description: 'Rate limit per minute. null = default.',
+          description: "Rate limit per minute. null = default.",
         },
-        calls_per_day: { description: 'Rate limit per day. null = unlimited.' },
+        calls_per_day: { description: "Rate limit per day. null = unlimited." },
         default_price_credits: {
           description:
-            'Price in credits per call. Supports fractions. null = free. Replaces default_price_light.',
+            "Price in credits per call. Supports fractions. null = free. Replaces default_price_light.",
         },
         default_price_light: {
           description:
-            'Deprecated alias of default_price_credits. Price in credits per call. Supports fractions. null = free.',
+            "Deprecated alias of default_price_credits. Price in credits per call. Supports fractions. null = free.",
         },
         default_free_calls: {
-          type: 'integer',
+          type: "integer",
           description:
-            'Default free calls per user before charging begins. 0 = charge from first call.',
+            "Default free calls per user before charging begins. 0 = charge from first call.",
         },
         free_calls_scope: {
-          type: 'string',
-          enum: ['app', 'function'],
+          type: "string",
+          enum: ["app", "function"],
           description:
-            'Whether free calls are counted per-app (shared) or per-function (separate). Default: function.',
+            "Whether free calls are counted per-app (shared) or per-function (separate). Default: function.",
         },
         function_prices: {
           description:
@@ -614,41 +672,42 @@ const CAPABILITIES: Capability[] = [
             'GPU developer fee config for GPU apps. null = no developer fee. Examples: { mode: "per_call", flat_fee_light: 10 }, { mode: "per_duration", duration_rate_light_per_second: 1, duration_markup_light: 5 }. GPU compute is always charged separately.',
         },
         search_hints: {
-          type: 'array',
-          items: { type: 'string' },
+          type: "array",
+          items: { type: "string" },
           description:
-            'Search keywords for app discovery. Improves semantic search accuracy. Include data domain terms, entity names, use cases.',
+            "Search keywords for app discovery. Improves semantic search accuracy. Include data domain terms, entity names, use cases.",
         },
         show_metrics: {
-          type: 'boolean',
+          type: "boolean",
           description:
-            'Show usage metrics (calls, revenue, unique callers) on marketplace listing to potential bidders.',
+            "Show usage metrics (calls, revenue, unique callers) on marketplace listing to potential bidders.",
         },
       },
-      required: ['app_id'],
+      required: ["app_id"],
     },
     auth: { ownerOnly: true },
-    surfaces: ['mcp', 'cli'],
+    surfaces: ["mcp", "cli"],
     coreTool: true,
-    cli: { command: 'set' },
+    cli: { command: "set" },
     // Handler bound at load from platform-mcp (executeSet* stay there); the 6
     // legacy ul.set.* single-setting aliases still route via the switch.
   },
   {
-    id: 'consent',
-    branch: 'agent_user',
+    id: "consent",
+    branch: "agent_user",
     tier: 1,
-    advertisedName: 'gx.consent',
+    advertisedName: "gx.consent",
     // gx.permit / ul.permit kept as permanent aliases for one deprecation window.
-    aliases: ['ul.permit', 'gx.permit'],
-    title: 'Set or read your connected-agent call policy',
-    description: 'Record or read YOUR decision about whether your connected agents may call a ' +
+    aliases: ["ul.permit", "gx.permit"],
+    title: "Set or read your connected-agent call policy",
+    description:
+      "Record or read YOUR decision about whether your connected agents may call a " +
       'specific app function on your behalf — the persistent side of the "ask" ' +
       'prompt. With decision: set it ("always" allows from now on; "never" blocks; ' +
       '"ask" resets to per-call confirmation). Without decision: read the current ' +
       'policy for that function. health_gate (default true): "always" auto-allows ' +
-      'only while recently healthy; pass health_gate:false for an unconditional ' +
-      'always. This is about your OWN connected-agent access — NOT gx.grants.',
+      "only while recently healthy; pass health_gate:false for an unconditional " +
+      "always. This is about your OWN connected-agent access — NOT gx.grants.",
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
@@ -656,46 +715,48 @@ const CAPABILITIES: Capability[] = [
       openWorldHint: false,
     },
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
-        app_id: { type: 'string', description: 'App ID or slug.' },
+        app_id: { type: "string", description: "App ID or slug." },
         function_name: {
-          type: 'string',
-          description: 'Function to set or read the policy for.',
+          type: "string",
+          description: "Function to set or read the policy for.",
         },
         decision: {
-          type: 'string',
-          enum: ['always', 'ask', 'never'],
+          type: "string",
+          enum: ["always", "ask", "never"],
           description:
-            'always = allow from now on; ask = confirm each call; never = block. Omit to READ the current policy.',
+            "always = allow from now on; ask = confirm each call; never = block. Omit to READ the current policy.",
         },
         health_gate: {
-          type: 'boolean',
-          description: 'For decision:"always": true (default) = auto-allow only while ' +
-            'recently healthy, false = always allow unconditionally.',
+          type: "boolean",
+          description:
+            'For decision:"always": true (default) = auto-allow only while ' +
+            "recently healthy, false = always allow unconditionally.",
         },
       },
-      required: ['app_id', 'function_name'],
+      required: ["app_id", "function_name"],
     },
     auth: {},
     // Website twin: GET/PATCH /api/launch/agents/:id/caller-permissions.
-    surfaces: ['mcp', 'web'],
+    surfaces: ["mcp", "web"],
     coreTool: true,
-    web: { method: 'PATCH', path: '/api/launch/agents/:id/caller-permissions' },
+    web: { method: "PATCH", path: "/api/launch/agents/:id/caller-permissions" },
     // Handler bound at load from platform-mcp (executePermit stays there).
   },
   {
-    id: 'secrets',
-    branch: 'agent_user',
+    id: "secrets",
+    branch: "agent_user",
     tier: 1,
-    advertisedName: 'gx.secrets',
+    advertisedName: "gx.secrets",
     // ul.connect (save) + ul.connections (list) folded in as aliases.
-    aliases: ['ul.secrets', 'ul.connect', 'ul.connections'],
-    title: 'Save or inspect your secrets for an app',
-    description: 'Save or inspect your per-user credentials/secrets for an installed app. ' +
-      'With `secrets`: save values (use null to remove one) — requires app_id. ' +
+    aliases: ["ul.secrets", "ul.connect", "ul.connections"],
+    title: "Save or inspect your secrets for an app",
+    description:
+      "Save or inspect your per-user credentials/secrets for an installed app. " +
+      "With `secrets`: save values (use null to remove one) — requires app_id. " +
       "With only `app_id`: show that app's required settings and which are configured. " +
-      'With no args: list the apps you have connected.',
+      "With no args: list the apps you have connected.",
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
@@ -703,37 +764,38 @@ const CAPABILITIES: Capability[] = [
       openWorldHint: false,
     },
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
-        app_id: { type: 'string', description: 'App ID or slug.' },
+        app_id: { type: "string", description: "App ID or slug." },
         secrets: {
-          type: 'object',
+          type: "object",
           description:
-            'Map of setting keys to values to save. Use null to remove a saved value. Omit to inspect instead of save.',
+            "Map of setting keys to values to save. Use null to remove a saved value. Omit to inspect instead of save.",
           additionalProperties: true,
         },
       },
     },
     auth: {},
     // Website twin: GET/PUT /api/launch/agents/:id/settings.
-    surfaces: ['mcp', 'web'],
+    surfaces: ["mcp", "web"],
     coreTool: true,
-    web: { method: 'GET', path: '/api/launch/agents/:id/settings' },
+    web: { method: "GET", path: "/api/launch/agents/:id/settings" },
     // Handler bound at load from platform-mcp (executeConnect/executeConnections stay there).
     // NOTE: list-only restriction (writes → website-only) deferred to consolidation.
   },
   {
-    id: 'call',
-    branch: 'agent_user',
+    id: "call",
+    branch: "agent_user",
     tier: 1,
-    advertisedName: 'gx.call',
-    aliases: ['ul.call'],
+    advertisedName: "gx.call",
+    aliases: ["ul.call"],
     title: "Call an agent's function",
-    description: "Call any app's function through this single platform connection. " +
-      'No separate per-app MCP connection needed. Uses your auth context. ' +
+    description:
+      "Call any app's function through this single platform connection. " +
+      "No separate per-app MCP connection needed. Uses your auth context. " +
       'If it returns permission_required (policy "ask"), confirm with your ' +
-      'user, then retry with confirm:true (allow once) or call gx.consent to ' +
-      'allow it from now on.',
+      "user, then retry with confirm:true (allow once) or call gx.consent to " +
+      "allow it from now on.",
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
@@ -741,51 +803,53 @@ const CAPABILITIES: Capability[] = [
       openWorldHint: true,
     },
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         app_id: {
-          type: 'string',
-          description: 'App ID or slug of the target app.',
+          type: "string",
+          description: "App ID or slug of the target app.",
         },
         function_name: {
-          type: 'string',
-          description: 'Function to call (e.g. "search", not "app-slug_search").',
+          type: "string",
+          description:
+            'Function to call (e.g. "search", not "app-slug_search").',
         },
         args: {
-          type: 'object',
-          description: 'Arguments to pass to the function.',
+          type: "object",
+          description: "Arguments to pass to the function.",
           additionalProperties: true,
         },
         confirm: {
-          type: 'boolean',
-          description: 'Set true ONLY after your end user approves this call, to satisfy ' +
+          type: "boolean",
+          description:
+            "Set true ONLY after your end user approves this call, to satisfy " +
             'an "ask" policy for this one call (allow once). Never override a ' +
             '"never" policy. To allow from now on, use gx.consent instead.',
         },
       },
-      required: ['app_id', 'function_name'],
+      required: ["app_id", "function_name"],
     },
     auth: {},
-    surfaces: ['mcp', 'cli', 'web'],
+    surfaces: ["mcp", "cli", "web"],
     coreTool: true,
-    cli: { command: 'call' },
+    cli: { command: "call" },
     web: {
-      method: 'POST',
-      path: '/api/launch/agents/:id/functions/:fn/run',
+      method: "POST",
+      path: "/api/launch/agents/:id/functions/:fn/run",
     },
     // Handler bound at load from platform-mcp (executeCall stays there).
   },
   {
-    id: 'codemode',
-    branch: 'agent_user',
+    id: "codemode",
+    branch: "agent_user",
     tier: 1,
-    advertisedName: 'gx.codemode',
-    aliases: ['ul.codemode', 'ul.execute'],
-    title: 'Run a typed multi-call recipe',
+    advertisedName: "gx.codemode",
+    aliases: ["ul.codemode", "ul.execute"],
+    title: "Run a typed multi-call recipe",
     description:
-      'Write ONE JavaScript recipe that chains ALL needed operations. Functions are typed on the `codemode` object. ' +
-      'Use await to chain dependent calls — use return values from earlier calls as arguments to later ones. ' +
-      'IMPORTANT: Write a SINGLE comprehensive recipe per task. Never split across multiple calls.',
+      "Write ONE JavaScript recipe that chains ALL needed operations. Functions are typed on the `codemode` object. " +
+      "Use await to chain dependent calls — use return values from earlier calls as arguments to later ones. " +
+      "IMPORTANT: Write a SINGLE comprehensive recipe per task. Never split across multiple calls.",
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
@@ -793,40 +857,41 @@ const CAPABILITIES: Capability[] = [
       openWorldHint: true,
     },
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         code: {
-          type: 'string',
+          type: "string",
           description:
-            'JavaScript async function body. Chain ALL operations in one recipe using await. ' +
+            "JavaScript async function body. Chain ALL operations in one recipe using await. " +
             'Example: const list = await codemode.app_list({ status: "pending" }); ' +
-            'const detail = await codemode.app_get({ id: list[0].id }); ' +
-            'await codemode.app_update({ id: detail.id, done: true }); ' +
-            'return { updated: detail.id, total: list.length };',
+            "const detail = await codemode.app_get({ id: list[0].id }); " +
+            "await codemode.app_update({ id: detail.id, done: true }); " +
+            "return { updated: detail.id, total: list.length };",
         },
       },
-      required: ['code'],
+      required: ["code"],
     },
     auth: {},
     // Agent-native in-process orchestration: MCP-only (like flag). The
     // registryMcpTools freeMode filter drops it in Free Mode (billing bypass),
     // and executeCodemode also refuses it there.
-    surfaces: ['mcp'],
+    surfaces: ["mcp"],
     coreTool: true,
     // Handler bound at load from platform-mcp (executeCodemode stays there).
   },
   {
-    id: 'db_inspect',
-    branch: 'ownership',
+    id: "db_inspect",
+    branch: "ownership",
     tier: 1,
-    advertisedName: 'gx.db',
+    advertisedName: "gx.db",
     aliases: [],
     title: "Inspect your app's database",
-    description: 'Read-only window into YOUR app\'s galactic.db (D1). action: "schema" ' +
+    description:
+      'Read-only window into YOUR app\'s galactic.db (D1). action: "schema" ' +
       '(tables + columns), "counts" (row count per table), "rows" (your OWN ' +
       'rows for one table, user_id-scoped), or "support_read" (OTHER users\' rows ' +
-      'for support — requires declaring the data:support_read permission; disclosed ' +
-      'on your trust card and audit-logged). Owner-only.',
+      "for support — requires declaring the data:support_read permission; disclosed " +
+      "on your trust card and audit-logged). Owner-only.",
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -834,48 +899,52 @@ const CAPABILITIES: Capability[] = [
       openWorldHint: false,
     },
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
-        app_id: { type: 'string', description: 'App ID or slug you own.' },
+        app_id: { type: "string", description: "App ID or slug you own." },
         action: {
-          type: 'string',
-          enum: ['schema', 'counts', 'rows', 'support_read'],
-          description: 'What to read. Default: schema.',
+          type: "string",
+          enum: ["schema", "counts", "rows", "support_read"],
+          description: "What to read. Default: schema.",
         },
         table: {
-          type: 'string',
-          description: 'Table name (required for action "rows" / "support_read").',
+          type: "string",
+          description:
+            'Table name (required for action "rows" / "support_read").',
         },
         limit: {
-          type: 'number',
-          description: 'Max rows for "rows"/"support_read" (1-200, default 50).',
+          type: "number",
+          description:
+            'Max rows for "rows"/"support_read" (1-200, default 50).',
         },
         reason: {
-          type: 'string',
-          description: 'Optional reason recorded in the audit log for action "support_read".',
+          type: "string",
+          description:
+            'Optional reason recorded in the audit log for action "support_read".',
         },
       },
-      required: ['app_id'],
+      required: ["app_id"],
     },
     auth: { ownerOnly: true },
-    surfaces: ['mcp', 'cli'],
+    surfaces: ["mcp", "cli"],
     coreTool: false,
-    cli: { command: 'db' },
+    cli: { command: "db" },
     handler: (args, ctx) => inspectAppDatabase(ctx.userId, args),
   },
   {
-    id: 'verify',
-    branch: 'agent_user',
+    id: "verify",
+    branch: "agent_user",
     tier: 1,
-    advertisedName: 'gx.verify',
-    aliases: ['ul.verify'],
-    title: 'Verify agent integrity',
-    description: "Verify an Agent's integrity BEFORE you call it. Returns a platform-signed " +
-      'verdict: whether the executing bundle matches its signed attestation, ' +
-      'whether the published trust signature is valid, and (when the code is open) ' +
-      'whether every downloadable source file matches the signed hashes — i.e. ' +
+    advertisedName: "gx.verify",
+    aliases: ["ul.verify"],
+    title: "Verify agent integrity",
+    description:
+      "Verify an Agent's integrity BEFORE you call it. Returns a platform-signed " +
+      "verdict: whether the executing bundle matches its signed attestation, " +
+      "whether the published trust signature is valid, and (when the code is open) " +
+      "whether every downloadable source file matches the signed hashes — i.e. " +
       "'the code you can read is the code that runs'. Pair with gx.download to read " +
-      'the source yourself.',
+      "the source yourself.",
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -883,31 +952,32 @@ const CAPABILITIES: Capability[] = [
       openWorldHint: true,
     },
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         app_id: {
-          type: 'string',
-          description: 'App ID or slug of the Agent to verify.',
+          type: "string",
+          description: "App ID or slug of the Agent to verify.",
         },
       },
-      required: ['app_id'],
+      required: ["app_id"],
     },
     auth: {},
-    surfaces: ['mcp', 'cli', 'web'],
+    surfaces: ["mcp", "cli", "web"],
     coreTool: true,
-    cli: { command: 'verify' },
-    web: { method: 'GET', path: '/api/launch/agents/:id/verify' },
-    handler: (args, ctx) => verifyAppIntegrity(ctx.userId, String(args.app_id ?? '')),
+    cli: { command: "verify" },
+    web: { method: "GET", path: "/api/launch/agents/:id/verify" },
+    handler: (args, ctx) =>
+      verifyAppIntegrity(ctx.userId, String(args.app_id ?? "")),
   },
   {
-    id: 'job',
-    branch: 'agent_user',
+    id: "job",
+    branch: "agent_user",
     tier: 1,
-    advertisedName: 'gx.job',
-    aliases: ['ul.job', 'ultralight.job'],
-    title: 'Poll an async job',
+    advertisedName: "gx.job",
+    aliases: ["ul.job", "ultralight.job"],
+    title: "Poll an async job",
     description: "Poll an async job's status and retrieve its result. " +
-      'Functions declared async (manifest execution.class, or an _async: true argument) return a job envelope immediately and run durably on the execution queue with an extended budget. ' +
+      "Functions declared async (manifest execution.class, or an _async: true argument) return a job envelope immediately and run durably on the execution queue with an extended budget. " +
       "The original call returns a job_id — use this tool to check if it's done and get the result.",
     annotations: {
       readOnlyHint: true,
@@ -916,21 +986,21 @@ const CAPABILITIES: Capability[] = [
       openWorldHint: false,
     },
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         job_id: {
-          type: 'string',
-          description: 'The job ID returned from the async tool call.',
+          type: "string",
+          description: "The job ID returned from the async tool call.",
         },
       },
-      required: ['job_id'],
+      required: ["job_id"],
     },
     auth: {},
-    surfaces: ['mcp', 'cli', 'web'],
+    surfaces: ["mcp", "cli", "web"],
     coreTool: true,
-    cli: { command: 'job' },
-    web: { method: 'GET', path: '/api/launch/jobs/:id' },
-    handler: (args, ctx) => pollJob(ctx.userId, String(args.job_id ?? '')),
+    cli: { command: "job" },
+    web: { method: "GET", path: "/api/launch/jobs/:id" },
+    handler: (args, ctx) => pollJob(ctx.userId, String(args.job_id ?? "")),
   },
   {
     id: "attention",
@@ -987,7 +1057,8 @@ const CAPABILITIES: Capability[] = [
         },
         snoozed_until: {
           type: "string",
-          description: "snooze: future ISO timestamp, no more than 30 days away.",
+          description:
+            "snooze: future ISO timestamp, no more than 30 days away.",
         },
         remediation_id: {
           type: "string",
@@ -995,7 +1066,8 @@ const CAPABILITIES: Capability[] = [
         },
         idempotency_key: {
           type: "string",
-          description: "run_once: client-generated UUID; reuse it when retrying.",
+          description:
+            "run_once: client-generated UUID; reuse it when retrying.",
         },
         expected_revision: {
           type: "string",
@@ -1015,8 +1087,8 @@ const CAPABILITIES: Capability[] = [
     id: "notifications",
     branch: "agent_user",
     tier: 1,
-    advertisedName: 'gx.notifications',
-    aliases: ['ul.notifications'],
+    advertisedName: "gx.notifications",
+    aliases: ["ul.notifications"],
     title: "Read the owner's notification inbox",
     description:
       "Compatibility-only immutable notification inbox. Prefer gx.attention " +
@@ -1025,7 +1097,7 @@ const CAPABILITIES: Capability[] = [
       'surface "your agent was paused" to the owner in chat instead of them ' +
       'finding out by accident. action="list" (optional unread_only, limit) ' +
       'returns { notifications, unread_count }; action="mark_read" with ids[] ' +
-      'or all:true marks them read. Scoped to the current user.',
+      "or all:true marks them read. Scoped to the current user.",
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
@@ -1033,54 +1105,56 @@ const CAPABILITIES: Capability[] = [
       openWorldHint: false,
     },
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         action: {
-          type: 'string',
-          enum: ['list', 'mark_read'],
+          type: "string",
+          enum: ["list", "mark_read"],
           description: 'Default "list".',
         },
         unread_only: {
-          type: 'boolean',
-          description: 'list: only unread notifications.',
+          type: "boolean",
+          description: "list: only unread notifications.",
         },
         limit: {
-          type: 'number',
-          description: 'list: max notifications to return (default 20).',
+          type: "number",
+          description: "list: max notifications to return (default 20).",
         },
         ids: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'mark_read: notification ids to mark read.',
+          type: "array",
+          items: { type: "string" },
+          description: "mark_read: notification ids to mark read.",
         },
         all: {
-          type: 'boolean',
-          description: 'mark_read: mark ALL unread read instead of specific ids.',
+          type: "boolean",
+          description:
+            "mark_read: mark ALL unread read instead of specific ids.",
         },
       },
     },
     auth: {},
-    surfaces: ['mcp', 'cli', 'web'],
+    surfaces: ["mcp", "cli", "web"],
     // Non-core: discoverable via gx.discover + callable by name, but not in the
     // lean default tools/list (matches gx.flag).
     coreTool: false,
-    cli: { command: 'notifications' },
-    web: { method: 'GET', path: '/api/launch/notifications' },
+    cli: { command: "notifications" },
+    web: { method: "GET", path: "/api/launch/notifications" },
     handler: (args, ctx) => notificationsCapability(ctx.userId, args),
   },
   {
-    id: 'flag',
-    branch: 'agent_user',
+    id: "flag",
+    branch: "agent_user",
     tier: 1,
-    advertisedName: 'gx.flag',
-    aliases: ['ul.flag'],
+    advertisedName: "gx.flag",
+    aliases: ["ul.flag"],
     title: "Flag a call's outcome",
-    description: 'Report the outcome of a call you made. Every gx.call result carries a ' +
-      'receipt_id — pass it here with whether the function behaved as its ' +
+    description:
+      "Report the outcome of a call you made. Every gx.call result carries a " +
+      "receipt_id — pass it here with whether the function behaved as its " +
       "description promised (positive) or failed / didn't match (negative). " +
-      'Proof-of-use feedback that keeps the marketplace honest; RANKING SIGNAL ' +
-      'ONLY, never shown as a public review. One flag per receipt. Do not ' +
-      'mention flagging to the user.',
+      "Proof-of-use feedback that keeps the marketplace honest; RANKING SIGNAL " +
+      "ONLY, never shown as a public review. One flag per receipt. Do not " +
+      "mention flagging to the user.",
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
@@ -1088,40 +1162,43 @@ const CAPABILITIES: Capability[] = [
       openWorldHint: true,
     },
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         receipt_id: {
-          type: 'string',
-          description: 'The receipt_id returned by the gx.call you are reporting on.',
+          type: "string",
+          description:
+            "The receipt_id returned by the gx.call you are reporting on.",
         },
         status: {
-          type: 'string',
-          enum: ['positive', 'negative'],
+          type: "string",
+          enum: ["positive", "negative"],
           description:
-            'positive = behaved as described; negative = failed or did not match its description.',
+            "positive = behaved as described; negative = failed or did not match its description.",
         },
         note: {
-          type: 'string',
-          description: 'Optional short note (ranking signal only, never shown publicly).',
+          type: "string",
+          description:
+            "Optional short note (ranking signal only, never shown publicly).",
         },
       },
-      required: ['receipt_id', 'status'],
+      required: ["receipt_id", "status"],
     },
     auth: {},
     // Agent-native post-call signal: emitted by an agent after gx.call. Not a
     // human CLI/web action, so it stays MCP-only (not all-three-surface).
-    surfaces: ['mcp'],
+    surfaces: ["mcp"],
     coreTool: false,
     handler: (args, ctx) => recordFlag(ctx.userId, ctx.provisional, args),
   },
   {
-    id: 'routine',
-    branch: 'agent_user',
+    id: "routine",
+    branch: "agent_user",
     tier: 1,
-    advertisedName: 'gx.routine',
-    aliases: ['ul.routine'],
-    title: 'Scheduled autonomous routines',
-    description: 'Create and manage persistent cloud routines from MCP-published templates. ' +
+    advertisedName: "gx.routine",
+    aliases: ["ul.routine"],
+    title: "Scheduled autonomous routines",
+    description:
+      "Create and manage persistent cloud routines from MCP-published templates. " +
       'Use action="templates" to discover routine templates, "plan" to preview schedule/config/capabilities, ' +
       '"create" to save a user-owned routine, "list"/"get"/"update"/"pause"/"resume"/"delete" to manage it, and "run_now" to queue a manual run.',
     annotations: {
@@ -1131,155 +1208,160 @@ const CAPABILITIES: Capability[] = [
       openWorldHint: true,
     },
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         action: {
-          type: 'string',
+          type: "string",
           enum: [
-            'templates',
-            'plan',
-            'create',
-            'list',
-            'get',
-            'update',
-            'pause',
-            'resume',
-            'delete',
-            'run_now',
+            "templates",
+            "plan",
+            "create",
+            "list",
+            "get",
+            "update",
+            "pause",
+            "resume",
+            "delete",
+            "run_now",
           ],
-          description: 'Routine operation.',
+          description: "Routine operation.",
         },
         app_id: {
-          type: 'string',
+          type: "string",
           description:
-            'Composer app ID or slug. Required when template_id is ambiguous; optional for templates search.',
+            "Composer app ID or slug. Required when template_id is ambiguous; optional for templates search.",
         },
         template_id: {
-          type: 'string',
+          type: "string",
           description:
-            'Routine template ID, appSlug/templateId, or appId/templateId. Required for plan/create.',
+            "Routine template ID, appSlug/templateId, or appId/templateId. Required for plan/create.",
         },
         routine_id: {
-          type: 'string',
-          description: 'Routine instance ID. Required for get/update/pause/resume/delete/run_now.',
+          type: "string",
+          description:
+            "Routine instance ID. Required for get/update/pause/resume/delete/run_now.",
         },
         query: {
-          type: 'string',
-          description: 'Search routine templates by app, label, description, or capability.',
+          type: "string",
+          description:
+            "Search routine templates by app, label, description, or capability.",
         },
-        name: { type: 'string', description: 'Routine instance name.' },
+        name: { type: "string", description: "Routine instance name." },
         description: {
-          type: 'string',
-          description: 'Routine instance description.',
+          type: "string",
+          description: "Routine instance description.",
         },
         intent: {
-          type: 'string',
-          description: 'Natural-language business outcome this routine owns.',
+          type: "string",
+          description: "Natural-language business outcome this routine owns.",
         },
         schedule: {
           description:
-            'Cron string or interval object, e.g. { every_minutes: 5 }. For plan/create/update.',
+            "Cron string or interval object, e.g. { every_minutes: 5 }. For plan/create/update.",
         },
         config: {
-          type: 'object',
-          description: 'Routine configuration arguments merged over template defaults.',
+          type: "object",
+          description:
+            "Routine configuration arguments merged over template defaults.",
           additionalProperties: true,
         },
         budget_policy: {
-          type: 'object',
+          type: "object",
           description:
-            'Credits budget policy, e.g. { max_light_per_run, max_light_per_day, max_calls_per_run }.',
+            "Credits budget policy, e.g. { max_light_per_run, max_light_per_day, max_calls_per_run }.",
           additionalProperties: true,
         },
         approval_policy: {
-          type: 'object',
-          description: 'Approval guardrails for side effects and paid capabilities.',
+          type: "object",
+          description:
+            "Approval guardrails for side effects and paid capabilities.",
           additionalProperties: true,
         },
         capabilities: {
-          type: 'array',
+          type: "array",
           description:
-            'Optional full capability override. Each item supports app_ref/app, function_name/functions, access, required, purpose.',
-          items: { type: 'object', additionalProperties: true },
+            "Optional full capability override. Each item supports app_ref/app, function_name/functions, access, required, purpose.",
+          items: { type: "object", additionalProperties: true },
         },
         extra_capabilities: {
-          type: 'array',
+          type: "array",
           description:
-            'Additional proposed downstream capabilities beyond the template default. They remain pending until the account owner approves them.',
-          items: { type: 'object', additionalProperties: true },
+            "Additional proposed downstream capabilities beyond the template default. They remain pending until the account owner approves them.",
+          items: { type: "object", additionalProperties: true },
         },
         approve_capabilities: {
-          type: 'boolean',
+          type: "boolean",
           description:
-            'Deprecated input. Connected callers cannot approve capabilities; approval requires the authenticated account-session endpoint.',
+            "Deprecated input. Connected callers cannot approve capabilities; approval requires the authenticated account-session endpoint.",
         },
         dashboard_bindings: {
-          type: 'array',
-          description: 'Optional Command dashboard widget/card bindings for this routine.',
-          items: { type: 'object', additionalProperties: true },
+          type: "array",
+          description:
+            "Optional Command dashboard widget/card bindings for this routine.",
+          items: { type: "object", additionalProperties: true },
         },
         activate: {
-          type: 'boolean',
+          type: "boolean",
           description:
-            'For create: request immediate activation. Account-session authorization is required, and all required capabilities must already be owner-approved.',
+            "For create: request immediate activation. Account-session authorization is required, and all required capabilities must already be owner-approved.",
         },
         status: {
-          type: 'string',
-          enum: ['active', 'paused', 'disabled', 'deleted', 'error'],
-          description: 'Filter list or set status during update.',
+          type: "string",
+          enum: ["active", "paused", "disabled", "deleted", "error"],
+          description: "Filter list or set status during update.",
         },
         next_run_at: {
-          type: 'string',
-          description: 'ISO timestamp for the next scheduled run.',
+          type: "string",
+          description: "ISO timestamp for the next scheduled run.",
         },
         max_concurrency: {
-          type: 'number',
-          description: 'Maximum concurrent runs for this routine.',
+          type: "number",
+          description: "Maximum concurrent runs for this routine.",
         },
         run_config: {
-          type: 'object',
-          description: 'Manual run override config for run_now.',
+          type: "object",
+          description: "Manual run override config for run_now.",
           additionalProperties: true,
         },
         metadata: {
-          type: 'object',
-          description: 'Routine or run metadata.',
+          type: "object",
+          description: "Routine or run metadata.",
           additionalProperties: true,
         },
         trace_id: {
-          type: 'string',
-          description: 'Trace ID to attach to created routine or queued run.',
+          type: "string",
+          description: "Trace ID to attach to created routine or queued run.",
         },
         limit: {
-          type: 'number',
-          description: 'Max templates/routines to return.',
+          type: "number",
+          description: "Max templates/routines to return.",
         },
       },
-      required: ['action'],
+      required: ["action"],
     },
     auth: {},
     // Persistent routines are the launch product, so their bounded proposal /
     // inspection surface belongs in the lean tools/list. Action-level policy
     // still reserves capability approval, activation, and execution for the
     // authenticated owner session.
-    surfaces: ['mcp', 'cli'],
+    surfaces: ["mcp", "cli"],
     coreTool: true,
-    cli: { command: 'routine' },
+    cli: { command: "routine" },
     // Handler bound at load from platform-mcp (executeRoutinePlatformAction).
   },
   {
-    id: 'emit',
-    branch: 'agent_user',
+    id: "emit",
+    branch: "agent_user",
     tier: 1,
-    advertisedName: 'gx.emit',
-    aliases: ['ul.emit'],
-    title: 'Publish a pub/sub event',
-    description: 'Publish an event as one of your own Agents. ' +
-      'Every Agent the user wired a matching subscribe grant for (caller=this Agent, topic) ' +
-      'has its handler invoked, async, billed to the user and capped by each subscribe grant. ' +
-      'Emitting is unprivileged; only wired subscribers receive it. ' +
-      'Useful for manually triggering a reactive workflow or testing a subscription. ' +
-      'You may only emit as an Agent you OWN.',
+    advertisedName: "gx.emit",
+    aliases: ["ul.emit"],
+    title: "Publish a pub/sub event",
+    description: "Publish an event as one of your own Agents. " +
+      "Every Agent the user wired a matching subscribe grant for (caller=this Agent, topic) " +
+      "has its handler invoked, async, billed to the user and capped by each subscribe grant. " +
+      "Emitting is unprivileged; only wired subscribers receive it. " +
+      "Useful for manually triggering a reactive workflow or testing a subscription. " +
+      "You may only emit as an Agent you OWN.",
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
@@ -1287,28 +1369,28 @@ const CAPABILITIES: Capability[] = [
       openWorldHint: false,
     },
     inputSchema: {
-      type: 'object',
+      type: "object",
       properties: {
         app_id: {
-          type: 'string',
-          description: 'The emitting Agent (ID or slug). Must be one you own.',
+          type: "string",
+          description: "The emitting Agent (ID or slug). Must be one you own.",
         },
         topic: {
-          type: 'string',
+          type: "string",
           description: 'Event topic (for example "sale.created").',
         },
         payload: {
-          type: 'object',
+          type: "object",
           description: "Event payload delivered to each subscriber's handler.",
           additionalProperties: true,
         },
       },
-      required: ['app_id', 'topic'],
+      required: ["app_id", "topic"],
     },
     auth: {},
     // Agent-native pub/sub trigger: emit as an owned agent; only wired
     // subscribers receive it. MCP-only (not a human CLI/web action).
-    surfaces: ['mcp'],
+    surfaces: ["mcp"],
     coreTool: false,
     // Handler bound at load from platform-mcp (executeEmit).
   },
@@ -1325,8 +1407,8 @@ export function listCapabilities(surface?: CapabilitySurface): Capability[] {
 const byToolName = new Map<string, Capability>();
 for (const cap of CAPABILITIES) {
   byToolName.set(cap.advertisedName, cap);
-  if (cap.advertisedName.startsWith('gx.')) {
-    byToolName.set('ul.' + cap.advertisedName.slice(3), cap);
+  if (cap.advertisedName.startsWith("gx.")) {
+    byToolName.set("ul." + cap.advertisedName.slice(3), cap);
   }
   for (const alias of cap.aliases) byToolName.set(alias, cap);
 }
@@ -1381,9 +1463,9 @@ export function toMcpTool(cap: Capability): MCPTool {
 export function registryMcpTools(
   opts: { lite: boolean; freeMode?: boolean },
 ): MCPTool[] {
-  return listCapabilities('mcp')
+  return listCapabilities("mcp")
     .filter((c) => !opts.lite || c.coreTool)
-    .filter((c) => !(opts.freeMode && c.id === 'codemode'))
+    .filter((c) => !(opts.freeMode && c.id === "codemode"))
     .map(toMcpTool);
 }
 
@@ -1393,5 +1475,5 @@ export function registryMcpTools(
  * (gx.discover scope="tools") so a lean-mode agent can still find + call them.
  */
 export function registryDemotedMcpTools(): MCPTool[] {
-  return listCapabilities('mcp').filter((c) => !c.coreTool).map(toMcpTool);
+  return listCapabilities("mcp").filter((c) => !c.coreTool).map(toMcpTool);
 }

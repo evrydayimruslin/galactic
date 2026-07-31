@@ -9,7 +9,7 @@ import {
 import { parseAppManifest } from "./app-settings.ts";
 import {
   resolveAppRuntimeEnvVars,
-  resolveStrictManifestPermissions,
+  resolveFunctionStrictManifestPermissions,
 } from "./app-runtime-resources.ts";
 import { resolveCallerGrant } from "./agent-grants.ts";
 import {
@@ -448,14 +448,18 @@ async function assertRequiredRoutineSettings(
 
 async function assertRoutineReportingAndIntegrity(
   app: RoutineTemplateApp,
+  functionName: string,
 ): Promise<void> {
-  const permissions = resolveStrictManifestPermissions({
-    manifest: typeof app.manifest === "string"
-      ? app.manifest
-      : app.manifest
-      ? JSON.stringify(app.manifest)
-      : null,
-  }).permissions;
+  const permissions = resolveFunctionStrictManifestPermissions(
+    {
+      manifest: typeof app.manifest === "string"
+        ? app.manifest
+        : app.manifest
+        ? JSON.stringify(app.manifest)
+        : null,
+    },
+    functionName,
+  ).permissions;
   if (!permissions.includes("notify:owner")) {
     throw new RoutinePlatformError(
       ROUTINE_PLATFORM_INVALID_PARAMS,
@@ -565,7 +569,7 @@ export async function validateRoutineLaunchActivation(
     activation: true,
   });
   await assertRequiredRoutineSettings(userId, app);
-  await assertRoutineReportingAndIntegrity(app);
+  await assertRoutineReportingAndIntegrity(app, routine.handler_function);
   await assertRequiredCapabilityGrants(userId, routine);
 }
 

@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
 import { assertRejects } from "https://deno.land/std@0.210.0/assert/assert_rejects.ts";
+import { assertThrows } from "https://deno.land/std@0.210.0/assert/assert_throws.ts";
 import {
   addCapacityQueueOperationEnvelope,
   addCapacityQueueOperations,
@@ -12,6 +13,7 @@ import {
   calculateWorkerRequestLight,
   calcWorkerCloudUnits,
   calcWorkerCpuCloudUnits,
+  CapacityExecutionLimitError,
   CloudUsageRpcError,
   createCapacityResourceMeter,
   createCloudUsageHold,
@@ -95,6 +97,55 @@ Deno.test("subscription capacity meter preserves resource facts without double c
     amountLight: 0.002,
     metadata: { source: "legacy_aggregate" },
   }]);
+});
+
+Deno.test("subscription capacity meter enforces a hard per-execution ceiling", () => {
+  const meter = createCapacityResourceMeter({ maxLight: 10 });
+  meter.addResource({
+    resource: "d1_write",
+    units: 1,
+    cloudUnits: 0.1,
+    amountLight: 9.75,
+  });
+  meter.addLight(0.25);
+  assertEquals(meter.totalLight(), 10);
+
+  const error = assertThrows(
+    () => meter.addLight(0.0001),
+    CapacityExecutionLimitError,
+  );
+  assertEquals(error.code, "CAPACITY_EXECUTION_LIMIT");
+  assertEquals(error.limitLight, 10);
+  assertEquals(error.usedLight, 10);
+  assertEquals(error.attemptedLight, 0.0001);
+  assertEquals(meter.totalLight(), 10);
+  assertEquals(meter.snapshot().length, 2);
+});
+
+Deno.test("subscription capacity refuses a marginal operation beyond the execution ceiling", async () => {
+  const meter = createCapacityResourceMeter({ maxLight: 10 });
+  meter.addLight(9.9999);
+
+  await assertRejects(
+    () =>
+      debitCloudOperation({
+        payerUserId: "u1",
+        source: "tools/call",
+        resource: "kv_operation",
+        operation: "put",
+        units: 1,
+        capacityMeter: meter,
+        billingConfig: {
+          version: 1,
+          cloudUnitLightPer1k: 1,
+          r2OpsPerCloudUnit: 1,
+          kvOpsPerCloudUnit: 1,
+          capacityKvWriteLightPerMillionOperations: 500,
+        },
+      }),
+    CapacityExecutionLimitError,
+  );
+  assertEquals(meter.totalLight(), 9.9999);
 });
 
 Deno.test("cloud usage debit calls atomic no-partial RPC with fractional amount", async () => {

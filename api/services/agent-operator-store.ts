@@ -1289,10 +1289,7 @@ function mapFleetCapacity(
   generatedAt: string,
 ): LaunchAgentCapacityResponse | null {
   const fields = [
-    row.capacity_state,
-    row.capacity_burst_state,
     row.capacity_weekly_state,
-    row.capacity_burst_resets_at,
     row.capacity_weekly_resets_at,
   ];
   if (fields.every((value) => value == null)) return null;
@@ -1311,18 +1308,18 @@ function mapFleetCapacity(
   if (basisPoints !== null && (basisPoints < 1 || basisPoints > 10_000)) {
     throw error("SERVICE_UNAVAILABLE", "Agent capacity cap is invalid.");
   }
-  const capPercent = basisPoints === null ? null : basisPoints / 100;
+  const capPercent = basisPoints === null ? 100 : basisPoints / 100;
   const window = (
     state: LaunchAgentCapacityResponse["state"],
     resetsAt: string,
     rawShareUsedPercent: unknown,
     label: string,
-  ): LaunchAgentCapacityResponse["burst"] => {
+  ): LaunchAgentCapacityResponse["weekly"] => {
     const shareUsedPercent = optionalPercentage(rawShareUsedPercent, label);
     return {
       state,
       resetsAt,
-      ...(capPercent !== null && shareUsedPercent !== null
+      ...(shareUsedPercent !== null
         ? {
           shareUsedPercent,
           capUsedPercent: Math.min(
@@ -1336,16 +1333,7 @@ function mapFleetCapacity(
   return {
     agentId,
     capPercent,
-    state: capacityState(row.capacity_state),
-    burst: window(
-      capacityState(row.capacity_burst_state),
-      requireTimestamp(
-        row.capacity_burst_resets_at,
-        "Agent burst reset timestamp",
-      ),
-      row.capacity_burst_used_percent,
-      "Agent burst usage",
-    ),
+    state: capacityState(row.capacity_weekly_state),
     weekly: window(
       capacityState(row.capacity_weekly_state),
       requireTimestamp(

@@ -8,20 +8,12 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { emitEvent } from "../../services/agent-events.ts";
 import { verifyCallerContextToken } from "../../services/agent-caller-context.ts";
-import { resolveExecutionContext } from "../../services/execution-context-registry.ts";
+import {
+  consumeExecutionEventPublish,
+  resolveExecutionContext,
+} from "../../services/execution-context-registry.ts";
 
-interface EventsBindingProps {
-  // Signed X-Galactic-Caller token minted server-side for this execution. Set
-  // host-side from RuntimeConfig.callerContextToken — never a sandbox input.
-  // Kept as the legacy fresh-load fallback; the live token is resolved per-RPC
-  // from the execution-context registry (the prop is frozen under warm reuse).
-  callerContextToken: string;
-  // Set for bindings loaded into a REUSABLE isolate (loader.get): emit() then
-  // resolves the token ONLY from the registry, so a direct-binding bypass that
-  // omits the handle can never emit under the stale frozen prop (whose baked
-  // hop would defeat the hop ceiling).
-  requireExecCtx?: boolean;
-}
+type EventsBindingProps = Record<string, never>;
 
 interface EmitResult {
   ok: boolean;
@@ -43,17 +35,13 @@ export class EventsBinding
     if (typeof topic !== "string" || !topic) {
       throw new Error("emit requires a topic string");
     }
-    // Resolve the signed caller-context token per-RPC. Handle threaded — or
-    // the binding loaded into a reusable isolate (props.requireExecCtx, which
-    // also catches a direct-binding bypass omitting the handle) → the registry
-    // ONLY: a warm-reused isolate's frozen prop carries call 1's hop, which
-    // would defeat the hop ceiling. An unresolvable handle yields a null token
-    // → the claims check below fails closed. Handle absent on a legacy
-    // fresh-load binding → the prop, where they agree.
+    // Every production emit consumes its host-owned execution budget before
+    // any asynchronous verification or delivery. There is intentionally no
+    // frozen-prop fallback: a raw binding call that omits, forges, or replays a
+    // handle must fail closed in fresh and warm isolates alike.
+    consumeExecutionEventPublish(execCtxHandle);
     const callerContextToken =
-      execCtxHandle !== undefined || this.ctx.props.requireExecCtx
-        ? (resolveExecutionContext(execCtxHandle)?.callerContextToken ?? null)
-        : this.ctx.props.callerContextToken;
+      resolveExecutionContext(execCtxHandle)?.callerContextToken ?? null;
     // Identity + hop come from the VERIFIED signed token, never from sandbox
     // input — this is the same trust boundary the /api/events/emit endpoint used.
     const verified = await verifyCallerContextToken(callerContextToken);

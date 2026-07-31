@@ -4,6 +4,7 @@ import { assertThrows } from "https://deno.land/std@0.210.0/assert/assert_throws
 import {
   _executionContextRegistrySize,
   assertExecutionContext,
+  consumeExecutionEventPublish,
   deregisterExecutionContext,
   registerExecutionContext,
   resolveExecutionContext,
@@ -76,7 +77,11 @@ Deno.test("registry: deregister removes the entry → later resolve fails closed
   const h = registerExecutionContext(entry("r1", "exec-1"));
   assert(resolveExecutionContext(h));
   deregisterExecutionContext(h);
-  assertEquals(resolveExecutionContext(h), null, "replay after deregister → null");
+  assertEquals(
+    resolveExecutionContext(h),
+    null,
+    "replay after deregister → null",
+  );
 });
 
 Deno.test("registry: concurrent executions resolve independently (no cross-talk)", () => {
@@ -84,12 +89,16 @@ Deno.test("registry: concurrent executions resolve independently (no cross-talk)
   const hB = registerExecutionContext(entry("rB", "exec-B"));
   // Interleaved resolves — each handle yields only its own context.
   assertEquals(
-    (resolveExecutionContext(hA)!.cloudOperationMetering as { receiptId: string })
+    (resolveExecutionContext(hA)!.cloudOperationMetering as {
+      receiptId: string;
+    })
       .receiptId,
     "rA",
   );
   assertEquals(
-    (resolveExecutionContext(hB)!.cloudOperationMetering as { receiptId: string })
+    (resolveExecutionContext(hB)!.cloudOperationMetering as {
+      receiptId: string;
+    })
       .receiptId,
     "rB",
   );
@@ -98,6 +107,47 @@ Deno.test("registry: concurrent executions resolve independently (no cross-talk)
   assertEquals(resolveExecutionContext(hA), null);
   assert(resolveExecutionContext(hB));
   deregisterExecutionContext(hB);
+});
+
+Deno.test("registry: event publish budget permits 50 attempts and rejects the 51st", () => {
+  const h = registerExecutionContext(entry("r-events", "exec-events"));
+  try {
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      consumeExecutionEventPublish(h);
+    }
+    assertThrows(
+      () => consumeExecutionEventPublish(h),
+      Error,
+      "at most 50 publishes",
+    );
+  } finally {
+    deregisterExecutionContext(h);
+  }
+});
+
+Deno.test("registry: event publish budgets are independent per execution handle", () => {
+  const hA = registerExecutionContext(entry("r-events-a", "exec-events-a"));
+  const hB = registerExecutionContext(entry("r-events-b", "exec-events-b"));
+  try {
+    consumeExecutionEventPublish(hA, 1);
+    consumeExecutionEventPublish(hB, 1);
+    assertThrows(() => consumeExecutionEventPublish(hA, 1));
+    assertThrows(() => consumeExecutionEventPublish(hB, 1));
+  } finally {
+    deregisterExecutionContext(hA);
+    deregisterExecutionContext(hB);
+  }
+});
+
+Deno.test("registry: event publish rejects missing, unknown, and deregistered handles", () => {
+  assertThrows(() => consumeExecutionEventPublish(undefined));
+  assertThrows(() => consumeExecutionEventPublish(null));
+  assertThrows(() => consumeExecutionEventPublish(""));
+  assertThrows(() => consumeExecutionEventPublish("forged-handle"));
+
+  const h = registerExecutionContext(entry("r-events", "exec-events"));
+  deregisterExecutionContext(h);
+  assertThrows(() => consumeExecutionEventPublish(h));
 });
 
 Deno.test("registry: deregister is idempotent + no leak after paired register/deregister", () => {
@@ -125,7 +175,8 @@ Deno.test("registry: host RPC resolution emits only its owning capacity marker",
   const receiptId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
   const messages: string[] = [];
   const originalLog = console.log;
-  console.log = (...parts: unknown[]) => messages.push(parts.map(String).join(" "));
+  console.log = (...parts: unknown[]) =>
+    messages.push(parts.map(String).join(" "));
   const h = registerExecutionContext({
     ...entry(receiptId, "exec-capacity"),
     capacityReceiptId: receiptId,

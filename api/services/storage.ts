@@ -31,6 +31,13 @@ export interface FileListPage {
   nextCursor: string | null;
 }
 
+export class StorageObjectNotFoundError extends Error {
+  constructor(readonly key: string) {
+    super(`File not found: ${key}`);
+    this.name = "StorageObjectNotFoundError";
+  }
+}
+
 export class R2Service {
   private bucket: R2Bucket;
   private options: R2ServiceOptions;
@@ -56,14 +63,14 @@ export class R2Service {
   async fetchFile(key: string): Promise<Uint8Array> {
     await this.meter("get", key);
     const obj = await this.bucket.get(key);
-    if (!obj) throw new Error(`File not found: ${key}`);
+    if (!obj) throw new StorageObjectNotFoundError(key);
     return new Uint8Array(await obj.arrayBuffer());
   }
 
   async fetchTextFile(key: string): Promise<string> {
     await this.meter("get", key);
     const obj = await this.bucket.get(key);
-    if (!obj) throw new Error(`File not found: ${key}`);
+    if (!obj) throw new StorageObjectNotFoundError(key);
     return await obj.text();
   }
 

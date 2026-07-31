@@ -24,6 +24,39 @@ export interface PlatformMcpAuthContext {
   scopes?: string[];
   tokenId?: string;
   tokenAppIds?: string[] | null;
+  /**
+   * Server-authoritative builder handoff state loaded from the durable
+   * token-to-session mapping. Scope strings alone never create this context.
+   */
+  builderHandoff?: {
+    id: string;
+    candidateSetId: string;
+    intent: "agent" | "interface" | "function" | "routine" | "connect";
+    status:
+      | "created"
+      | "connected"
+      | "staged"
+      | "tested"
+      | "uploaded"
+      | "promoted"
+      | "cancelled"
+      | "rejected"
+      | "revoked"
+      | "expired";
+    targetAppId: string | null;
+    boundAppId: string | null;
+    bundleId: string | null;
+    sourceHash: string | null;
+    attestationId: string | null;
+    testAttestationDigest: string | null;
+    documentDigest: string | null;
+    reportDigest: string | null;
+    releaseDigest: string | null;
+    baseVersion: string | null;
+    baseSourceHash: string | null;
+    baseReleaseDigest: string | null;
+    baseStateDigest: string | null;
+  };
 }
 
 export interface PlatformMcpAuthorizationDecision {
@@ -41,7 +74,8 @@ export interface PlatformMcpAuthorizationDecision {
 export function isApiTokenPlatformAuth(
   auth: PlatformMcpAuthContext | undefined,
 ): boolean {
-  return auth?.authSource === "api_token";
+  return auth?.authSource === "api_token" ||
+    auth?.authSource === "builder_handoff";
 }
 
 export function violatesPrivateAgentCreationPolicy(input: {
@@ -187,7 +221,7 @@ const HANDOFF_INTENTS = new Set([
   "connect",
 ]);
 
-function handoffIntent(scopes: string[] | undefined): string | null {
+function scopeHandoffIntent(scopes: string[] | undefined): string | null {
   const values = (scopes || [])
     .filter((scope) => scope.startsWith(HANDOFF_SCOPE_PREFIX))
     .map((scope) => scope.slice(HANDOFF_SCOPE_PREFIX.length));
@@ -197,6 +231,14 @@ function handoffIntent(scopes: string[] | undefined): string | null {
 
 function hasHandoffScope(scopes: string[] | undefined): boolean {
   return (scopes || []).some((scope) => scope.startsWith(HANDOFF_SCOPE_PREFIX));
+}
+
+function handoffIntent(auth: PlatformMcpAuthContext): string | null {
+  if (auth.authSource !== "builder_handoff" || !auth.builderHandoff) {
+    return null;
+  }
+  const scopeIntent = scopeHandoffIntent(auth.scopes);
+  return scopeIntent === auth.builderHandoff.intent ? scopeIntent : null;
 }
 
 function appIdArgument(args: Record<string, unknown>): string | null {
@@ -228,6 +270,8 @@ function apiTokenAppBoundaryRestriction(
   args: Record<string, unknown>,
   auth: PlatformMcpAuthContext,
 ): string | null {
+  // Durable handoffs have a stricter, lifecycle-aware target check below.
+  if (auth.authSource === "builder_handoff") return null;
   const allowedAppIds = constrainedTokenAppIds(auth);
   if (!allowedAppIds) return null;
   const name = canonicalPlatformMcpToolName(requestedName);
@@ -264,48 +308,103 @@ function handoffToolRestriction(
   args: Record<string, unknown>,
   auth: PlatformMcpAuthContext,
 ): string | null {
-  const intent = handoffIntent(auth.scopes);
-  if (!intent) return null;
+  const intent = handoffIntent(auth);
+  const handoff = auth.builderHandoff;
+  if (!intent || !handoff) {
+    return "This builder credential is not bound to a valid Galactic handoff session.";
+  }
   const name = canonicalPlatformMcpToolName(requestedName);
-  if (!handoffAdvertisesTool(name, intent)) {
+  if (!handoffAdvertisesTool(name, handoff)) {
+    if (intent === "connect") {
+      return "A Connect handoff is an inspection-only temporary machine connection. Request a purpose-bound Agent handoff to stage, test, or submit source.";
+    }
     return `The ${intent} handoff credential is limited to source inspection, testing, and release building.`;
   }
 
   if (name === "ul.discover") {
     const scope = typeof args.scope === "string" ? args.scope : "";
+    if (scope === "tools") return null;
     if (
-      intent !== "connect" &&
-      intent !== "agent" &&
-      scope !== "tools" &&
-      scope !== "inspect"
+      scope === "inspect" &&
+      handoff.targetAppId &&
+      appIdArgument(args) === handoff.targetAppId
     ) {
-      return `The ${intent} handoff cannot enumerate unrelated Agents or marketplace content.`;
+      return null;
+    }
+    return `The ${intent} handoff cannot enumerate unrelated Agents, account data, or marketplace content.`;
+  }
+
+  if (name === "ul.project" || name === "ul.download") {
+    if (
+      !handoff.targetAppId ||
+      appIdArgument(args) !== handoff.targetAppId
+    ) {
+      return `The ${intent} handoff may inspect only its exact assigned Agent.`;
+    }
+  }
+
+  if (name === "ul.stage") {
+    if (handoff.status !== "connected" && handoff.status !== "staged") {
+      return "This handoff has already moved past source staging.";
+    }
+  }
+
+  if (name === "ul.test") {
+    const bundleId = typeof args.bundle_id === "string" ? args.bundle_id : null;
+    if (args.files !== undefined || !bundleId) {
+      return "Builder handoff tests require the exact bundle_id returned by gx.stage; direct files are not accepted.";
+    }
+    if (
+      (handoff.status !== "staged" && handoff.status !== "tested") ||
+      !handoff.bundleId ||
+      bundleId !== handoff.bundleId
+    ) {
+      return "gx.test must use the current staged bundle bound to this handoff.";
     }
   }
 
   if (name === "ul.upload") {
+    const bundleId = typeof args.bundle_id === "string" ? args.bundle_id : null;
+    if (
+      args.files !== undefined ||
+      !bundleId ||
+      handoff.status !== "tested" ||
+      bundleId !== handoff.bundleId ||
+      typeof args.test_attestation !== "string"
+    ) {
+      return "Candidate submission requires this handoff's exact tested bundle and test attestation.";
+    }
     const appId = appIdArgument(args);
     if (intent === "agent") {
-      return "New-Agent publication is unavailable until the handoff can bind itself to exactly one created Agent.";
-    }
-    if (intent !== "agent" && !appId) {
-      return `The ${intent} handoff cannot create another Agent; pass the exact target app_id.`;
+      if (appId) {
+        return "A new-Agent handoff cannot modify an existing Agent.";
+      }
+    } else if (
+      intent === "connect" ||
+      !handoff.targetAppId ||
+      appId !== handoff.targetAppId
+    ) {
+      return intent === "connect"
+        ? "A workspace connection cannot submit an Agent candidate. Request a purpose-bound Agent handoff."
+        : `The ${intent} handoff must submit to its exact assigned Agent.`;
     }
   }
   return null;
 }
 
-function handoffAdvertisesTool(name: string, intent: string): boolean {
+function handoffAdvertisesTool(
+  name: string,
+  handoff: NonNullable<PlatformMcpAuthContext["builderHandoff"]>,
+): boolean {
+  const targetInspection = Boolean(handoff.targetAppId) &&
+    (name === "ul.project" || name === "ul.download");
   const allowed = name === "ul.discover" ||
-    name === "ul.verify" ||
-    name === "ul.project" ||
-    name === "ul.download" ||
-    name === "ul.stage" ||
-    name === "ul.test" ||
-    name === "ul.upload" ||
+    targetInspection ||
     name === "ul.lint" ||
     name === "ul.scaffold";
-  return allowed && !(name === "ul.upload" && intent === "agent");
+  return allowed ||
+    (handoff.intent !== "connect" &&
+      (name === "ul.stage" || name === "ul.test" || name === "ul.upload"));
 }
 
 function apiTokenAccountSessionRestriction(
@@ -429,12 +528,17 @@ export function authorizePlatformMcpTool(input: {
 
   const args = input.args || {};
   const requiredScopes = requiredPlatformMcpScopes(input.requestedName);
-  if (hasHandoffScope(input.auth.scopes) && !handoffIntent(input.auth.scopes)) {
+  if (
+    (input.auth.authSource === "builder_handoff" &&
+      !handoffIntent(input.auth)) ||
+    (input.auth.authSource === "api_token" &&
+      hasHandoffScope(input.auth.scopes))
+  ) {
     return {
       allowed: false,
       requiredScopes: requiredScopes || [],
       reason:
-        "This API key has an invalid coding-agent handoff scope and cannot use platform tools.",
+        "This API key has no valid durable coding-agent handoff and cannot use platform tools.",
     };
   }
   if (!requiredScopes) {
@@ -469,17 +573,19 @@ export function authorizePlatformMcpTool(input: {
     };
   }
 
-  const handoffReason = handoffToolRestriction(
-    input.requestedName,
-    args,
-    input.auth,
-  );
-  if (handoffReason) {
-    return {
-      allowed: false,
-      requiredScopes,
-      reason: handoffReason,
-    };
+  if (input.auth.authSource === "builder_handoff") {
+    const handoffReason = handoffToolRestriction(
+      input.requestedName,
+      args,
+      input.auth,
+    );
+    if (handoffReason) {
+      return {
+        allowed: false,
+        requiredScopes,
+        reason: handoffReason,
+      };
+    }
   }
 
   const appBoundaryReason = apiTokenAppBoundaryRestriction(
@@ -503,8 +609,13 @@ export function filterPlatformMcpToolsForAuth<T extends { name: string }>(
   auth: PlatformMcpAuthContext,
 ): T[] {
   if (!isApiTokenPlatformAuth(auth)) return tools;
-  const intent = handoffIntent(auth.scopes);
-  if (hasHandoffScope(auth.scopes) && !intent) return [];
+  const intent = handoffIntent(auth);
+  if (
+    (auth.authSource === "builder_handoff" && !intent) ||
+    (auth.authSource === "api_token" && hasHandoffScope(auth.scopes))
+  ) {
+    return [];
+  }
   return tools.filter((tool) => {
     const required = requiredPlatformMcpScopes(tool.name);
     if (required === null || !explicitScopeMatch(auth.scopes, required)) {
@@ -513,7 +624,7 @@ export function filterPlatformMcpToolsForAuth<T extends { name: string }>(
     return intent
       ? handoffAdvertisesTool(
         canonicalPlatformMcpToolName(tool.name),
-        intent,
+        auth.builderHandoff!,
       )
       : true;
   });

@@ -64,6 +64,7 @@ import {
 } from "../services/execution-settlement.ts";
 import {
   ACCOUNT_CAPACITY_ADMISSION_EXPOSURE_LIGHT,
+  ACCOUNT_CAPACITY_EXECUTION_RESOURCE_CEILING_LIGHT,
   accountCapacityErrorDetails,
   accountCapacityErrorMessage,
   releaseAccountCapacity,
@@ -102,8 +103,8 @@ import {
   resolveAppRuntimeEnvVars,
   resolveAppSupabaseConfig,
   resolveFunctionExecutionPolicy,
+  resolveFunctionStrictManifestPermissions,
   resolveRuntimeAppCallDependencies,
-  resolveStrictManifestPermissions,
   SupabaseConfigMigrationRequiredError,
 } from "../services/app-runtime-resources.ts";
 import { getManifestAllowedDestinations } from "../services/trust.ts";
@@ -123,6 +124,10 @@ import {
   resolveRequestCallerContext,
 } from "../services/request-caller-context.ts";
 import {
+  isProSubscriptionError,
+  requireActiveProSubscription,
+} from "../services/pro-subscription.ts";
+import {
   type RoutineTraceContext,
   routineTraceContextFromCaller,
 } from "../services/routine-trace.ts";
@@ -141,6 +146,10 @@ import {
   MAX_AGENT_CALL_HOP_DEPTH,
 } from "../../shared/contracts/agent-grants.ts";
 import { classifyRuntimeExecution } from "../services/execution-classification.ts";
+import {
+  AppDeploymentExecutionError,
+  assertAppDeploymentRunnable,
+} from "../services/app-deployment-lifecycle.ts";
 import type {
   MCPContent,
   MCPJsonSchema,
@@ -456,6 +465,7 @@ const AUTH_REQUIRED = -32001;
 const NOT_FOUND = -32002;
 const RATE_LIMITED = -32000;
 const PAYMENT_REQUIRED = -32004;
+const APP_NOT_RUNNABLE = -32011;
 
 // Session sequence counters — tracks call order within a session.
 // Key: sessionId → next sequence number. Auto-expires after 1 hour.
@@ -886,7 +896,13 @@ export async function handleMcp(
 
   try {
     [callerContext, app] = await Promise.all([
-      resolveRequestCallerContext(request, { authSourcePolicy: "bearer_only" }),
+      resolveRequestCallerContext(request, {
+        authSourcePolicy: "bearer_only",
+        // Discovery and public skills/resources are available before
+        // membership. tools/call is gated below, after any signed
+        // cross-Agent caller context has been validated.
+        enforceActiveProSubscription: false,
+      }),
       appsService.findById(appId),
     ]);
   } catch (authErr) {
@@ -894,6 +910,19 @@ export async function handleMcp(
     let message = authErr instanceof Error
       ? authErr.message
       : "Authentication required";
+
+    if (isProSubscriptionError(authErr)) {
+      const response = jsonRpcErrorResponse(
+        rpcRequest.id,
+        PAYMENT_REQUIRED,
+        message,
+        { type: authErr.code },
+      );
+      return authErr.status === 402 ? response : new Response(response.body, {
+        status: authErr.status,
+        headers: response.headers,
+      });
+    }
 
     // Classify the auth error for client-side handling
     let errorType = "AUTH_REQUIRED";
@@ -1008,6 +1037,26 @@ export async function handleMcp(
     );
   }
 
+  if (rpcRequest.method === "tools/call") {
+    try {
+      await requireActiveProSubscription(userId, { enabled: true });
+    } catch (authErr) {
+      if (isProSubscriptionError(authErr)) {
+        const response = jsonRpcErrorResponse(
+          rpcRequest.id,
+          PAYMENT_REQUIRED,
+          authErr.message,
+          { type: authErr.code },
+        );
+        return authErr.status === 402 ? response : new Response(response.body, {
+          status: authErr.status,
+          headers: response.headers,
+        });
+      }
+      throw authErr;
+    }
+  }
+
   // Update last_active_at for provisional users (fire-and-forget)
   if (callerContext.authUser?.provisional) {
     updateLastActive(userId);
@@ -1047,11 +1096,53 @@ export async function handleMcp(
     }
   }
 
+  const isToolsCall = rpcRequest.method === "tools/call";
+  const isNonOwner = app.owner_id !== userId;
+  let toolsCallPermissions:
+    | Awaited<ReturnType<typeof getPermissionsForUser>>
+    | undefined;
+
+  // Private-app authorization is a read-only prerequisite. Resolve it before
+  // the lifecycle response so a caller cannot use deployment state to probe a
+  // private Agent they cannot access.
+  if (isToolsCall && app.visibility === "private" && isNonOwner) {
+    toolsCallPermissions = await getPermissionsForUser(
+      userId,
+      app.id,
+      app.owner_id,
+      app.visibility,
+      app.slug,
+    );
+    if (
+      toolsCallPermissions !== null &&
+      toolsCallPermissions.allowed.size === 0
+    ) {
+      return jsonRpcErrorResponse(rpcRequest.id, -32002, "App not found");
+    }
+  }
+
+  if (isToolsCall) {
+    try {
+      assertAppDeploymentRunnable(app);
+    } catch (err) {
+      if (err instanceof AppDeploymentExecutionError) {
+        return jsonRpcErrorResponse(
+          rpcRequest.id,
+          APP_NOT_RUNNABLE,
+          err.message,
+          {
+            type: err.code,
+            deployment_state: err.deploymentState,
+          },
+        );
+      }
+      throw err;
+    }
+  }
+
   // Phase 2B: Run gate checks in parallel — rate limit, weekly calls, per-app RL, permissions
   // All depend on userId (from auth) and app (from findById), both now resolved
   {
-    const isToolsCall = rpcRequest.method === "tools/call";
-    const isNonOwner = app.owner_id !== userId;
     const rlConfig = app.rate_limit_config as {
       calls_per_minute?: number;
       calls_per_day?: number;
@@ -1119,7 +1210,7 @@ export async function handleMcp(
         : null,
       // [4] Visibility/permissions (private apps, non-owner)
       app.visibility === "private" && isNonOwner
-        ? getPermissionsForUser(
+        ? isToolsCall ? toolsCallPermissions : getPermissionsForUser(
           userId,
           app.id,
           app.owner_id,
@@ -2625,10 +2716,29 @@ async function executeAppFunction(
     capacityRootWorkerRequest?: boolean;
   },
 ): Promise<Response> {
+  try {
+    assertAppDeploymentRunnable(app);
+  } catch (err) {
+    if (err instanceof AppDeploymentExecutionError) {
+      return jsonRpcErrorResponse(
+        id,
+        APP_NOT_RUNNABLE,
+        err.message,
+        {
+          type: err.code,
+          deployment_state: err.deploymentState,
+        },
+      );
+    }
+    throw err;
+  }
+
   let accountCapacityReservationId: string | null = null;
   let accountCapacityActualLight: number | undefined;
   let tenantExecutionAttempted = false;
-  const capacityResourceMeter = createCapacityResourceMeter();
+  const capacityResourceMeter = createCapacityResourceMeter({
+    maxLight: ACCOUNT_CAPACITY_EXECUTION_RESOURCE_CEILING_LIGHT,
+  });
   try {
     // The reserved _async argument is platform routing, never function input —
     // strip it before ANY execution branch (GPU included) sees the args.
@@ -2803,7 +2913,10 @@ async function executeAppFunction(
       }
       : null;
 
-    const permissions = resolveStrictManifestPermissions(app).permissions;
+    const {
+      permissions,
+      declaredEffects,
+    } = resolveFunctionStrictManifestPermissions(app, functionName);
     const manifestDependencies = resolveRuntimeAppCallDependencies(
       app,
       callerContext,
@@ -3118,6 +3231,9 @@ async function executeAppFunction(
       userId,
       ownerId: app.owner_id,
       expectedVersion: app.current_version || undefined,
+      immutableReleaseDigest: app.deployment_state === "ready"
+        ? app.active_release_digest || undefined
+        : undefined,
       executionId,
       capacityReceiptId: accountCapacityReservationId ? receiptId : undefined,
       capacityAgentId: meta?.capacityAgentId ||
@@ -3127,6 +3243,7 @@ async function executeAppFunction(
       // only to satisfy RuntimeConfig until the legacy Deno path is removed.
       code: "",
       permissions,
+      declaredEffects,
       flightRecorder: flightRecorderEnabled,
       allowedDestinations: getManifestAllowedDestinations(app.manifest),
       userApiKey: runtimeAI.userApiKey,
@@ -3424,6 +3541,23 @@ export async function executeEventDelivery(input: {
   capacityQueueOperations?: unknown;
   capacityRootWorkerRequest?: boolean;
 }): Promise<EventDeliveryOutcome> {
+  // Membership may lapse after the event was emitted but before this delivery
+  // is claimed. Re-check at the last boundary before tenant code can run. A
+  // subscription failure intentionally has no admission envelope: the event
+  // dispatcher records it as terminal instead of retrying a claimed delivery.
+  try {
+    await requireActiveProSubscription(input.userId, { enabled: true });
+  } catch (err) {
+    if (isProSubscriptionError(err)) {
+      return {
+        success: false,
+        receiptId: null,
+        error: `${err.code}: ${err.message}`,
+      };
+    }
+    throw err;
+  }
+
   const appsService = createAppsService();
   const app = await appsService.findById(input.subscriberAppId);
   if (!app || app.deleted_at) {
@@ -3657,6 +3791,22 @@ export async function executeQueuedJob(
   } = await import("../services/async-jobs.ts");
   const startedAt = Date.now();
 
+  // A job can sit in the queue after the account that created it loses
+  // membership. Fail the claimed row durably before app/runtime lookup; the
+  // consumer then acknowledges this delivery and does not retry it.
+  try {
+    await requireActiveProSubscription(job.user_id, { enabled: true });
+  } catch (err) {
+    if (isProSubscriptionError(err)) {
+      await failJobIfActive(job.id, {
+        type: err.code,
+        message: err.message,
+      }, Date.now() - startedAt);
+      return { kind: "complete" };
+    }
+    throw err;
+  }
+
   const appsService = createAppsService();
   const app = await appsService.findById(job.app_id);
   if (!app || app.deleted_at) {
@@ -3665,6 +3815,19 @@ export async function executeQueuedJob(
       message: "The Agent for this job no longer exists",
     }, Date.now() - startedAt);
     return { kind: "complete" };
+  }
+
+  try {
+    assertAppDeploymentRunnable(app);
+  } catch (err) {
+    if (err instanceof AppDeploymentExecutionError) {
+      await failJobIfActive(job.id, {
+        type: err.code,
+        message: err.message,
+      }, Date.now() - startedAt);
+      return { kind: "complete" };
+    }
+    throw err;
   }
 
   // GPU apps cannot be queued at dispatch (the GPU branch precedes the queue

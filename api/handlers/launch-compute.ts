@@ -1,6 +1,10 @@
 import { authenticate } from './auth.ts';
 import { isAccountSessionAuthSource } from '../services/control-plane-auth.ts';
 import {
+  isProSubscriptionError,
+  requireActiveProSubscription,
+} from '../services/pro-subscription.ts';
+import {
   COMPUTE_V1_ASYNC_MAX_TIMEOUT_MS,
   COMPUTE_V1_MAX_ARTIFACT_BYTES,
 } from '../../shared/contracts/compute.ts';
@@ -883,6 +887,18 @@ async function requireAccountSession(
       status: 403,
       message: 'Compute management requires an account session',
     });
+  }
+  try {
+    await requireActiveProSubscription(user.id);
+  } catch (error) {
+    if (isProSubscriptionError(error)) {
+      throw new ComputeLaunchServiceError({
+        code: error.code,
+        status: error.status,
+        message: error.message,
+      });
+    }
+    throw error;
   }
   return user;
 }

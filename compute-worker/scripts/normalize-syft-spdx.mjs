@@ -6,8 +6,10 @@ import { pathToFileURL } from "node:url";
 const EXPECTED_SYFT_CREATOR = "Tool: syft-1.44.0";
 const EXPECTED_DENO_VERSION = "2.9.3";
 const MISCLASSIFIED_DENO_VERSION = "0.77.0";
-const DENO_SOURCE_INFO =
-  "acquired package info from the following paths: /usr/local/bin/deno";
+const DENO_SOURCE_INFOS = new Set([
+  "acquired package info from the following paths: /usr/local/bin/deno",
+  "acquired package info from the following paths: usr/local/bin/deno",
+]);
 
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -58,7 +60,7 @@ export function normalizeSyftSpdx(input) {
     (pkg) =>
       isRecord(pkg) &&
       pkg.name === "deno" &&
-      pkg.sourceInfo === DENO_SOURCE_INFO,
+      DENO_SOURCE_INFOS.has(pkg.sourceInfo),
   );
   if (candidates.length !== 1) {
     throw new Error(
@@ -102,6 +104,7 @@ export function normalizeSyftSpdx(input) {
       correction_applied: originalVersion !== EXPECTED_DENO_VERSION,
       package_spdx_id: pkg.SPDXID,
       package_path: "/usr/local/bin/deno",
+      syft_source_info: pkg.sourceInfo,
       classifier: "syft-1.44.0 binary-classifier-cataloger",
       reason:
         "Syft selected an embedded Deno/0.77.0 token instead of the independently pinned and runtime-smoked Deno 2.9.3 release.",

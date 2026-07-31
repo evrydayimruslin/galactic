@@ -31,6 +31,14 @@ function liveKey(appId: string): string {
   return `esm:${appId}:latest`;
 }
 
+function versionedKey(appId: string, version: string): string {
+  return `esm:${appId}:${version}`;
+}
+
+function releaseKey(appId: string, releaseDigest: string): string {
+  return `esm:${appId}:release:${releaseDigest}`;
+}
+
 // ── Integrity-secret alarm ───────────────────────────────────────────────────
 // If the trust signing secret can't be resolved, signing AND verification both
 // fail with status "error" — which never blocks — so `enforce` silently degrades
@@ -65,16 +73,25 @@ export async function assertTrustSecretResolvable(): Promise<boolean> {
   }
 }
 
-interface AttestationBody {
+interface LegacyAttestationBody {
   v: 1;
   app_id: string;
   version: string;
   bundle_hash: string;
   signed_at: string;
 }
-export interface BundleAttestation extends AttestationBody {
-  sig: string;
+
+interface ReleaseAttestationBody {
+  v: 2;
+  app_id: string;
+  version: string;
+  release_digest: string;
+  bundle_hash: string;
+  signed_at: string;
 }
+
+type AttestationBody = LegacyAttestationBody | ReleaseAttestationBody;
+export type BundleAttestation = AttestationBody & { sig: string };
 
 function signAttestationBody(body: AttestationBody): Promise<string> {
   return signWithTrustSecret(canonicalJson(body));
@@ -83,7 +100,9 @@ function signAttestationBody(body: AttestationBody): Promise<string> {
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let result = 0;
-  for (let i = 0; i < a.length; i++) result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
   return result === 0;
 }
 
@@ -94,7 +113,13 @@ function codeCache() {
 function isAttestation(value: unknown): value is BundleAttestation {
   if (!value || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
-  return v.v === 1 && typeof v.app_id === "string" &&
+  const validReleaseIdentity = v.v === 1 ||
+    (
+      v.v === 2 &&
+      typeof v.release_digest === "string" &&
+      /^[a-f0-9]{64}$/.test(v.release_digest)
+    );
+  return validReleaseIdentity && typeof v.app_id === "string" &&
     typeof v.version === "string" && typeof v.bundle_hash === "string" &&
     typeof v.sig === "string" && typeof v.signed_at === "string";
 }
@@ -129,16 +154,90 @@ export async function putLiveExecutedBundle(input: {
     // misconfigured/rotated trust secret surfaces at publish time, not silently.
     const detail = err instanceof Error ? err.message : String(err);
     alarmIntegritySecretOnce("putLiveExecutedBundle", detail);
-    console.error("[BUNDLE-ATTEST][ALARM] sign failed; writing bundle UNATTESTED", {
-      appId: input.appId,
-      error: detail,
-    });
+    console.error(
+      "[BUNDLE-ATTEST][ALARM] sign failed; writing bundle UNATTESTED",
+      {
+        appId: input.appId,
+        error: detail,
+      },
+    );
   }
   await cache.put(
     liveKey(input.appId),
     input.esmCode,
     attestation ? { metadata: attestation } : undefined,
   );
+}
+
+/**
+ * Materializes a canonical release executable under its content-addressed
+ * identity. Unlike the legacy live pointer, canonical releases never permit an
+ * unsigned write: the exact bytes, semantic version, and release digest must be
+ * signed atomically and verify after read-back before deployment may continue.
+ */
+export async function putReleaseExecutedBundle(input: {
+  appId: string;
+  version: string;
+  releaseDigest: string;
+  esmCode: string;
+}): Promise<string> {
+  if (!/^[a-f0-9]{64}$/.test(input.releaseDigest)) {
+    throw new Error("Invalid canonical release digest");
+  }
+  const cache = codeCache();
+  if (!cache?.put || !cache?.getWithMetadata) {
+    throw new Error(
+      "Canonical release storage requires atomic metadata support",
+    );
+  }
+  const key = releaseKey(input.appId, input.releaseDigest);
+  const existing = await loadExecutedBundleAtKey(key);
+  if (existing.code !== null && existing.code !== input.esmCode) {
+    throw new Error(
+      "Canonical release executable already exists with different bytes",
+    );
+  }
+  if (existing.code === input.esmCode) {
+    const existingVerdict = await verifyExecutedBundle({
+      appId: input.appId,
+      esmCode: input.esmCode,
+      attestation: existing.attestation,
+      expectedVersion: input.version,
+      expectedReleaseDigest: input.releaseDigest,
+    });
+    if (existingVerdict.status === "ok") return key;
+  }
+
+  const body: ReleaseAttestationBody = {
+    v: 2,
+    app_id: input.appId,
+    version: input.version,
+    release_digest: input.releaseDigest,
+    bundle_hash: await sha256Hex(input.esmCode),
+    signed_at: new Date().toISOString(),
+  };
+  const attestation: BundleAttestation = {
+    ...body,
+    sig: await signAttestationBody(body),
+  };
+  await cache.put(key, input.esmCode, { metadata: attestation });
+  const retained = await loadExecutedBundleAtKey(key);
+  if (retained.code !== input.esmCode) {
+    throw new Error("Canonical release executable read-back diverged");
+  }
+  const verdict = await verifyExecutedBundle({
+    appId: input.appId,
+    esmCode: input.esmCode,
+    attestation: retained.attestation,
+    expectedVersion: input.version,
+    expectedReleaseDigest: input.releaseDigest,
+  });
+  if (verdict.status !== "ok") {
+    throw new Error(
+      `Canonical release executable failed verification (${verdict.status})`,
+    );
+  }
+  return key;
 }
 
 /** Remove an ephemeral executed-bundle pointer (used by gx.test cleanup). */
@@ -153,10 +252,40 @@ export async function deleteLiveExecutedBundle(appId: string): Promise<void> {
 export async function loadLiveExecutedBundle(
   appId: string,
 ): Promise<{ code: string | null; attestation: BundleAttestation | null }> {
+  return await loadExecutedBundleAtKey(liveKey(appId));
+}
+
+/**
+ * Fetches the immutable executable retained for one exact release version.
+ * Canonical member releases use this instead of the mutable `latest` pointer,
+ * binding execution to the database snapshot that passed lifecycle checks.
+ */
+export async function loadVersionedExecutedBundle(
+  appId: string,
+  version: string,
+): Promise<{ code: string | null; attestation: BundleAttestation | null }> {
+  return await loadExecutedBundleAtKey(versionedKey(appId, version));
+}
+
+/**
+ * Fetches a canonical release by its compiled release digest. Unlike a
+ * semantic version key, this namespace cannot collide with a concurrent
+ * legacy upload that happened to choose the same next version.
+ */
+export async function loadReleaseExecutedBundle(
+  appId: string,
+  releaseDigest: string,
+): Promise<{ code: string | null; attestation: BundleAttestation | null }> {
+  return await loadExecutedBundleAtKey(releaseKey(appId, releaseDigest));
+}
+
+async function loadExecutedBundleAtKey(
+  key: string,
+): Promise<{ code: string | null; attestation: BundleAttestation | null }> {
   const cache = codeCache();
   if (cache?.getWithMetadata) {
     const { value, metadata } = await cache.getWithMetadata<BundleAttestation>(
-      liveKey(appId),
+      key,
     );
     return {
       code: typeof value === "string" ? value : null,
@@ -164,7 +293,7 @@ export async function loadLiveExecutedBundle(
     };
   }
   // Fallback for a cache without metadata support (tests/mocks): no attestation.
-  const code = cache?.get ? await cache.get(liveKey(appId)) : null;
+  const code = cache?.get ? await cache.get(key) : null;
   return { code: typeof code === "string" ? code : null, attestation: null };
 }
 
@@ -174,6 +303,7 @@ export type BundleVerifyStatus =
   | "bad_signature"
   | "hash_mismatch"
   | "version_mismatch"
+  | "release_mismatch"
   | "error";
 
 export interface BundleVerifyResult {
@@ -200,7 +330,8 @@ export function executedBundleVerifyMode(): ExecutedBundleVerifyMode {
 // Internal-only (read by handleExecutedBundleVerdict); not part of the module's
 // public surface.
 function executedBundleRequireAttestation(): boolean {
-  const raw = (getEnv("EXECUTED_BUNDLE_REQUIRE_ATTESTATION") || "").toLowerCase();
+  const raw = (getEnv("EXECUTED_BUNDLE_REQUIRE_ATTESTATION") || "")
+    .toLowerCase();
   return raw === "1" || raw === "true";
 }
 
@@ -220,7 +351,12 @@ export function isExecutedBundleViolation(
   status: BundleVerifyStatus,
   requireAttestation = false,
 ): boolean {
-  if (status === "bad_signature" || status === "hash_mismatch") return true;
+  if (
+    status === "bad_signature" || status === "hash_mismatch" ||
+    status === "release_mismatch"
+  ) {
+    return true;
+  }
   // When attestation is required (post-backfill), an unattested live bundle is a
   // stripped sidecar, not a benign legacy bundle — block it.
   if (requireAttestation && status === "no_attestation") return true;
@@ -247,8 +383,15 @@ export async function verifyExecutedBundle(input: {
   esmCode: string;
   attestation: BundleAttestation | null;
   expectedVersion?: string | null;
+  expectedReleaseDigest?: string | null;
 }): Promise<BundleVerifyResult> {
-  const { appId, esmCode, attestation, expectedVersion } = input;
+  const {
+    appId,
+    esmCode,
+    attestation,
+    expectedVersion,
+    expectedReleaseDigest,
+  } = input;
   if (!attestation) return { status: "no_attestation" };
   if (attestation.app_id !== appId) {
     return { status: "bad_signature", detail: "app_id mismatch" };
@@ -263,14 +406,16 @@ export async function verifyExecutedBundle(input: {
   } catch {
     return { status: "error", detail: "hash failed" };
   }
-  const cacheKey =
-    `${appId}:${attestation.sig}:${expectedVersion ?? ""}:${actualHash}`;
+  const cacheKey = `${appId}:${attestation.sig}:${expectedVersion ?? ""}:${
+    expectedReleaseDigest ?? ""
+  }:${actualHash}`;
   const cached = VERDICT_CACHE.get(cacheKey);
   if (cached !== undefined) return { status: cached };
 
   const result = await computeVerdict(
     attestation,
     expectedVersion,
+    expectedReleaseDigest,
     actualHash,
   );
   if (result.status !== "error") {
@@ -283,6 +428,7 @@ export async function verifyExecutedBundle(input: {
 async function computeVerdict(
   att: BundleAttestation,
   expectedVersion: string | null | undefined,
+  expectedReleaseDigest: string | null | undefined,
   actualHash: string,
 ): Promise<BundleVerifyResult> {
   const { sig, ...body } = att;
@@ -303,7 +449,9 @@ async function computeVerdict(
   if (actualHash !== att.bundle_hash) {
     return {
       status: "hash_mismatch",
-      detail: `attested ${att.bundle_hash.slice(0, 12)} != actual ${actualHash.slice(0, 12)}`,
+      detail: `attested ${att.bundle_hash.slice(0, 12)} != actual ${
+        actualHash.slice(0, 12)
+      }`,
     };
   }
   // Downgrade/replay DETECTION (non-blocking — see isExecutedBundleViolation):
@@ -313,6 +461,17 @@ async function computeVerdict(
     return {
       status: "version_mismatch",
       detail: `attested ${att.version} != current ${expectedVersion}`,
+    };
+  }
+  if (
+    expectedReleaseDigest &&
+    (att.v !== 2 || att.release_digest !== expectedReleaseDigest)
+  ) {
+    return {
+      status: "release_mismatch",
+      detail: att.v === 2
+        ? `attested ${att.release_digest} != active ${expectedReleaseDigest}`
+        : "canonical release is missing a release-bound attestation",
     };
   }
   return { status: "ok" };
@@ -345,7 +504,9 @@ export function handleExecutedBundleVerdict(
     (mode === "enforce" &&
       (verdict.status === "error" ||
         isExecutedBundleViolation(verdict.status, requireAttestation)));
-  if (requireVerified || verdict.status !== "no_attestation" || mode === "enforce") {
+  if (
+    requireVerified || verdict.status !== "no_attestation" || mode === "enforce"
+  ) {
     console.warn("[BUNDLE-VERIFY] executed bundle not verified-ok", {
       appId,
       status: verdict.status,
@@ -377,7 +538,11 @@ export async function resolveExecutedIntegrity(
   try {
     const { code, attestation } = await loadLiveExecutedBundle(appId);
     if (code === null) return "unknown";
-    const verdict = await verifyExecutedBundle({ appId, esmCode: code, attestation });
+    const verdict = await verifyExecutedBundle({
+      appId,
+      esmCode: code,
+      attestation,
+    });
     return verdict.status === "ok" ? "verified" : "unverified";
   } catch {
     return "unknown";
@@ -442,7 +607,9 @@ export async function backfillExecutedBundleAttestations(
       { headers: { apikey: key, Authorization: `Bearer ${key}` } },
     );
     if (!res.ok) {
-      console.error("[BUNDLE-BACKFILL] apps query failed", { status: res.status });
+      console.error("[BUNDLE-BACKFILL] apps query failed", {
+        status: res.status,
+      });
       result.errors++;
       return result;
     }

@@ -59,9 +59,18 @@ export { RunsBinding } from "./bindings/runs-binding.ts";
 export { NotifyBinding } from "./bindings/notify-binding.ts";
 export {
   TestAIBinding,
+  TestAppCallBinding,
+  TestAppDataBinding,
   TestComputeBinding,
+  TestCredentialBinding,
   TestEmbedBinding,
+  TestEventsBinding,
+  TestMemoryBinding,
+  TestNetworkBinding,
   TestNotifyBinding,
+  TestOutboundBinding,
+  TestRunsBinding,
+  TestRuntimeSessionFactory,
 } from "./bindings/test-runtime-bindings.ts";
 export { NetworkBinding } from "./bindings/network-binding.ts";
 export { EventsBinding } from "./bindings/events-binding.ts";

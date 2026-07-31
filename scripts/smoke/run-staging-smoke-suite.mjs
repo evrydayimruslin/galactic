@@ -2,7 +2,8 @@
 // G1 smoke-suite orchestrator — runs the WHOLE smoke pass into one evidence dir
 // so "run the staging smoke" is a single command. It wraps run-release-smoke
 // (guardrails / auth / API / CORS / chat) and the standalone smokes
-// (launch-web-pages, durable-exec, interface-deploy), records
+// (launch-web-pages, durable-exec, interface-deploy, gx.test containment),
+// records
 // each one's exit code, and writes a top-level g1-smoke-suite-summary.{json,md}.
 //
 // A smoke is SKIPPED (not failed) when its required inputs aren't provided, so
@@ -154,6 +155,25 @@ results.push(await runStep({
   commandArgs: ["scripts/smoke/interface-deploy-smoke.mjs", "--url", apiBase],
   env: { ULTRALIGHT_TOKEN: token },
   skipReason: token ? "" : "needs --token (agents:build scope)",
+}));
+
+// 5. gx.test containment is intentionally staging-only. It runs ephemeral
+// source through the deployed Dynamic Worker / ctx.exports RPC graph and writes
+// redacted evidence only; no Agent is uploaded and no attestation is persisted.
+results.push(await runStep({
+  name: "gx-test-containment",
+  command: "node",
+  commandArgs: [
+    "scripts/smoke/gx-test-containment-smoke.mjs",
+    "--url", apiBase,
+    "--output", join(smokeDir, "gx-test-containment.json"),
+  ],
+  env: { ULTRALIGHT_TOKEN: token },
+  skipReason: target !== "staging"
+    ? "staging-only containment certification"
+    : token
+    ? ""
+    : "needs --token (agents:build scope)",
 }));
 
 // ── Aggregate ──

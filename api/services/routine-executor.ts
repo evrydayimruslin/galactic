@@ -314,6 +314,24 @@ async function fetchRows<T>(
   );
 }
 
+async function rpcRows<T>(
+  name: string,
+  payload: Record<string, unknown>,
+  label: string,
+): Promise<T[]> {
+  return await readRows<T>(
+    await fetch(
+      `${getEnv("SUPABASE_URL")}/rest/v1/rpc/${name}`,
+      {
+        method: "POST",
+        headers: serviceHeaders(),
+        body: JSON.stringify(payload),
+      },
+    ),
+    label,
+  );
+}
+
 async function authorizeOperatorRunOnce(
   run: ExecutorRunRow,
 ): Promise<OperatorRunOnceAuthorization> {
@@ -922,27 +940,17 @@ async function claimRoutine(
   leaseMs: number,
 ): Promise<ExecutorRoutineRow | null> {
   const leaseId = crypto.randomUUID();
-  // FLAT filter only (id + status + lease_id.is.null) — the CAS guard against
-  // concurrent claimers, resolved by PostgreSQL row-locking so exactly one wins.
-  // A nested `and=(or,or)` filter here returns an EMPTY representation on a
-  // successful PATCH (PostgREST only echoes rows still matching the filter after
-  // the update, and setting lease_expires_at pushes the row out of the lease-free
-  // clause), so the claim looked like it failed and the lease was orphaned. Flat
-  // params echo the updated row correctly (same shape claimQueuedRunForExecution
-  // relies on). Expired leases are reset to null by clearExpiredRoutineLeases
-  // before this runs; the due-check already happened in dueRoutineCandidates.
-  const [claimed] = await patchRows<ExecutorRoutineRow>(
-    "user_routines",
+  // Membership and the routine lease are one database transaction. The RPC
+  // locks entitlement -> routine, pauses stale active rows when membership is
+  // inactive, and returns no claim. A Worker must never infer authority from a
+  // row that happened to remain active after a delayed billing webhook.
+  const [claimed] = await rpcRows<ExecutorRoutineRow>(
+    "claim_member_routine_execution",
     {
-      id: `eq.${routine.id}`,
-      status: "eq.active",
-      lease_id: "is.null",
-      select: ROUTINE_SELECT,
-    },
-    {
-      lease_id: leaseId,
-      lease_expires_at: iso(addMs(now, leaseMs)),
-      updated_at: iso(now),
+      p_routine_id: routine.id,
+      p_lease_id: leaseId,
+      p_now: iso(now),
+      p_lease_expires_at: iso(addMs(now, leaseMs)),
     },
     "Failed to claim routine",
   );
@@ -1223,25 +1231,17 @@ async function claimQueuedRunForExecution(
     return null;
   }
 
-  const [claimed] = await patchRows<ExecutorRunRow>(
-    "routine_runs",
+  // The database rechecks active Pro membership immediately before queued ->
+  // running. Inactive membership atomically skips the run and pauses a stale
+  // active routine, so no actor token can be minted from webhook-lag state.
+  const [claimed] = await rpcRows<ExecutorRunRow>(
+    "claim_member_routine_run_execution",
     {
-      id: `eq.${runId}`,
-      status: "eq.queued",
-      attempt_count: `eq.${run.attempt_count}`,
-      select: RUN_SELECT,
-    },
-    {
-      status: "running",
-      // Backfill legacy queued rows atomically with the claim. New runs already
-      // carry a trace, but no actor token may be minted from an incomplete
-      // routine/run/trace tuple.
-      trace_id: run.trace_id || crypto.randomUUID(),
-      started_at: run.started_at ?? iso(now),
-      lease_id: crypto.randomUUID(),
-      lease_expires_at: iso(addMs(now, leaseMs)),
-      attempt_count: run.attempt_count + 1,
-      next_attempt_at: null,
+      p_run_id: runId,
+      p_lease_id: crypto.randomUUID(),
+      p_trace_id: run.trace_id || crypto.randomUUID(),
+      p_now: iso(now),
+      p_lease_expires_at: iso(addMs(now, leaseMs)),
     },
     "Failed to claim queued routine run",
   );

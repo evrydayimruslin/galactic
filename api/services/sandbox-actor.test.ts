@@ -396,7 +396,11 @@ Deno.test("sandbox actor: a token signed with WORKER_SECRET cannot be forged", a
     );
     return b64url(
       new Uint8Array(
-        await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload)),
+        await crypto.subtle.sign(
+          "HMAC",
+          key,
+          new TextEncoder().encode(payload),
+        ),
       ),
     );
   };
@@ -420,9 +424,10 @@ Deno.test("sandbox actor: a token signed with WORKER_SECRET cannot be forged", a
       exp: nowSec + 300,
     };
     const body = b64url(new TextEncoder().encode(JSON.stringify(claims)));
-    const forged = `${SANDBOX_ACTOR_TOKEN_PREFIX}${body}.${
-      await sign(body, TEST_ENV.WORKER_SECRET)
-    }`;
+    const forged = `${SANDBOX_ACTOR_TOKEN_PREFIX}${body}.${await sign(
+      body,
+      TEST_ENV.WORKER_SECRET,
+    )}`;
     assertEquals(
       await verifySandboxActorToken(forged, Date.UTC(2026, 5, 11, 12, 0, 0)),
       null,

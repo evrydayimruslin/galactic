@@ -246,23 +246,13 @@ export async function recoverRoutineHealthOperatorItem(
 }
 
 export function accountUsageConditions(
-  status: Pick<AccountCapacityStatus, "burst" | "weekly">,
+  status: Pick<AccountCapacityStatus, "weekly">,
   affectedAgentsInput: readonly OperatorIssueAgentReference[],
   observedAt: string,
 ): OperatorIssueCompilerInput[] {
   const affectedAgents = stableAgents(affectedAgentsInput);
   if (affectedAgents.length === 0) return [];
   const conditions: OperatorIssueCompilerInput[] = [];
-  if (status.burst.state === "waiting") {
-    conditions.push({
-      condition: "account_usage_exhausted",
-      affectedAgents,
-      period: "five_hour",
-      resetsAt: status.burst.resetsAt,
-      detectedAt: observedAt,
-      sourceOrdinal: 0,
-    });
-  }
   if (status.weekly.state === "waiting") {
     conditions.push({
       condition: "account_usage_exhausted",
@@ -270,7 +260,7 @@ export function accountUsageConditions(
       period: "weekly",
       resetsAt: status.weekly.resetsAt,
       detectedAt: observedAt,
-      sourceOrdinal: 1,
+      sourceOrdinal: 0,
     });
   }
   return conditions;
@@ -279,7 +269,7 @@ export function accountUsageConditions(
 export async function reconcileAccountUsageOperatorItems(
   input: {
     userId: string;
-    status: Pick<AccountCapacityStatus, "burst" | "weekly">;
+    status: Pick<AccountCapacityStatus, "weekly">;
     affectedAgents: readonly OperatorIssueAgentReference[];
     observedAt: string;
   },

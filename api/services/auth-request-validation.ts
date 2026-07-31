@@ -68,6 +68,50 @@ export interface PageShareExchangePayload {
   shareToken: string;
 }
 
+interface PasswordAuthPayload {
+  email: string;
+  mode: "sign_in" | "sign_up";
+  nextPath: string;
+  password: string;
+}
+
+interface MagicLinkAuthPayload {
+  email: string;
+  nextPath: string;
+}
+
+interface MagicLinkVerifyPayload {
+  tokenHash: string;
+}
+
+function normalizeAuthEmail(value: unknown): string {
+  const email = normalizeRequiredString(value, "email", {
+    maxLength: 254,
+  });
+  if (
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email) ||
+    email.includes("\r") ||
+    email.includes("\n")
+  ) {
+    throw new RequestValidationError("Enter a valid email address");
+  }
+  return email;
+}
+
+function normalizeLaunchNextPath(value: unknown): string {
+  const nextPath = normalizeOptionalString(value, "next", {
+    maxLength: 2048,
+  }) || "/account";
+  if (
+    !nextPath.startsWith("/") ||
+    nextPath.startsWith("//") ||
+    nextPath.includes("\\")
+  ) {
+    throw new RequestValidationError("next must be a local path");
+  }
+  return nextPath;
+}
+
 function assertValidRedirectUri(uri: string, field: string, oauthErrorCode?: string): string {
   let parsed: URL;
   try {
@@ -192,6 +236,70 @@ export async function validatePageShareExchangeRequest(
       return slug;
     })(),
     shareToken: normalizeRequiredString(body.share_token, "share_token", {
+      maxLength: MAX_TOKEN_LENGTH,
+    }),
+  };
+}
+
+export async function validatePasswordAuthRequest(
+  request: Request,
+): Promise<PasswordAuthPayload> {
+  const body = await readJsonObject(request, {
+    allowedKeys: ["email", "mode", "next", "password"],
+  });
+
+  const email = normalizeAuthEmail(body.email);
+
+  const mode = normalizeRequiredString(body.mode, "mode");
+  if (mode !== "sign_in" && mode !== "sign_up") {
+    throw new RequestValidationError(
+      'mode must be either "sign_in" or "sign_up"',
+    );
+  }
+
+  const password = normalizeOptionalString(body.password, "password", {
+    maxLength: 1024,
+    trim: false,
+  });
+  if (!password) {
+    throw new RequestValidationError("Missing password");
+  }
+  if (mode === "sign_up" && password.length < 8) {
+    throw new RequestValidationError(
+      "Password must be at least 8 characters",
+    );
+  }
+
+  const nextPath = normalizeLaunchNextPath(body.next);
+
+  return {
+    email,
+    mode,
+    nextPath,
+    password,
+  };
+}
+
+export async function validateMagicLinkAuthRequest(
+  request: Request,
+): Promise<MagicLinkAuthPayload> {
+  const body = await readJsonObject(request, {
+    allowedKeys: ["email", "next"],
+  });
+  return {
+    email: normalizeAuthEmail(body.email),
+    nextPath: normalizeLaunchNextPath(body.next),
+  };
+}
+
+export async function validateMagicLinkVerifyRequest(
+  request: Request,
+): Promise<MagicLinkVerifyPayload> {
+  const body = await readJsonObject(request, {
+    allowedKeys: ["token_hash"],
+  });
+  return {
+    tokenHash: normalizeRequiredString(body.token_hash, "token_hash", {
       maxLength: MAX_TOKEN_LENGTH,
     }),
   };

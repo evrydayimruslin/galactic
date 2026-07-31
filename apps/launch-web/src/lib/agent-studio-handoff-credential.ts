@@ -3,21 +3,19 @@ import type {
   AgentStudioHandoffCredentialResult,
 } from "../components/agent-studio/agent-studio-handoff-model";
 import {
+  AGENT_STUDIO_HANDOFF_TTL_SECONDS,
   isAgentStudioHandoffBearerToken,
   isAgentStudioHandoffPlatformMcpUrl,
   isAgentStudioHandoffUuid,
 } from "../components/agent-studio/agent-studio-handoff-model";
-import {
-  launchApi,
-  type LaunchApiClient,
-} from "./api";
+import { launchApi, type LaunchApiClient } from "./api";
 
 type HandoffClient = Pick<LaunchApiClient, "createHandoff">;
 
 const DEFAULT_HANDOFF_CLIENT: HandoffClient = {
   createHandoff: launchApi.createHandoff.bind(launchApi),
 };
-const HANDOFF_TTL_MS = 1_800_000;
+const HANDOFF_TTL_MS = AGENT_STUDIO_HANDOFF_TTL_SECONDS * 1_000;
 const HANDOFF_TIMESTAMP_TOLERANCE_MS = 30_000;
 
 /**
@@ -25,34 +23,32 @@ const HANDOFF_TIMESTAMP_TOLERANCE_MS = 30_000;
  *
  * The adapter deliberately fails closed when the server returns a broader,
  * longer-lived, or differently-targeted credential than the handoff UI asked
- * for. New-Agent handoffs stay disabled until AS-BE-002 can bind a credential
- * to exactly one created Agent.
+ * for. A New-Agent handoff is accepted only when Galactic reserves one exact
+ * Agent UUID and binds the credential to that UUID.
  */
 export async function createStudioHandoffCredential(
   request: AgentStudioHandoffCredentialRequest,
   client: HandoffClient = DEFAULT_HANDOFF_CLIENT,
 ): Promise<AgentStudioHandoffCredentialResult> {
-  if (request.requestedTtlSeconds !== 1_800) {
+  if (
+    request.requestedTtlSeconds !== AGENT_STUDIO_HANDOFF_TTL_SECONDS
+  ) {
     return {
-      message: "Galactic only issues 30-minute Studio handoff credentials.",
+      message: "Galactic only issues 60-minute Studio handoff credentials.",
       status: "unavailable",
     };
   }
-  if (request.intent === "agent") {
-    return {
-      message:
-        "New-Agent handoffs are waiting for durable single-create binding. No broader key was issued.",
-      status: "unavailable",
-    };
-  }
+  const targetsExistingAgent = request.intent === "interface" ||
+    request.intent === "function" ||
+    request.intent === "routine";
   if (
     request.description !== request.description.trim() ||
     (request.intent !== "connect" && !request.description) ||
     request.description.length > 4_000 ||
-    (request.intent === "connect"
-      ? request.targetAgentId !== null
-      : !request.targetAgentId ||
-        !isAgentStudioHandoffUuid(request.targetAgentId))
+    (targetsExistingAgent
+      ? !request.targetAgentId ||
+        !isAgentStudioHandoffUuid(request.targetAgentId)
+      : request.targetAgentId !== null)
   ) {
     return {
       message:
@@ -140,6 +136,31 @@ export async function createStudioHandoffCredential(
         expiresAt: response.credential.expiresAt,
         platformMcpUrl: response.platformMcpUrl,
         scope: { kind: "workspace" },
+        sessionId: response.handoff.id,
+        status: "issued",
+      };
+    }
+
+    if (request.intent === "agent") {
+      const target = response.handoff.target;
+      if (
+        target.kind !== "new_agent" ||
+        target.maxAgents !== 1 ||
+        !isAgentStudioHandoffUuid(target.reservedAgentId) ||
+        response.credential.appIds?.length !== 1 ||
+        response.credential.appIds[0] !== target.reservedAgentId
+      ) {
+        return {
+          message:
+            "Galactic did not return a single-create credential for one reserved Agent. No prompt was copied.",
+          status: "unavailable",
+        };
+      }
+      return {
+        bearerToken: response.credential.plaintextToken,
+        expiresAt: response.credential.expiresAt,
+        platformMcpUrl: response.platformMcpUrl,
+        scope: { kind: "create-agent", maxAgents: 1 },
         sessionId: response.handoff.id,
         status: "issued",
       };

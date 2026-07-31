@@ -28,6 +28,8 @@ import {
   executedBundleVerifyMode,
   handleExecutedBundleVerdict,
   loadLiveExecutedBundle,
+  loadReleaseExecutedBundle,
+  loadVersionedExecutedBundle,
   verifyExecutedBundle,
 } from "../services/executed-bundle.ts";
 import {
@@ -35,7 +37,14 @@ import {
   normalizeOperatorDiagnostic,
   operatorCompatibilityError,
 } from "../services/operator-diagnostics.ts";
-
+import {
+  isUlTestBlockedEffect,
+  isUlTestObservedEffect,
+  MAX_UL_TEST_OBSERVED_EFFECTS,
+  type UlTestObservedEffect,
+} from "../services/ul-test-runtime.ts";
+import type { GalacticStableEffectId } from "../services/galactic-agent-document.ts";
+import { GALACTIC_SANDBOX_TEMPLATE_VERSION } from "./runtime-contract.ts";
 // ============================================
 // WARM-ISOLATE REUSE (Worker Loader get())
 // ============================================
@@ -58,9 +67,26 @@ async function sha256HexLocal(input: string): Promise<string> {
 // isolate's generated content can never collide with a still-cached old isolate
 // under the same key. (bundleHash covers app.js; this covers everything the
 // runtime generates around it.)
-const SANDBOX_TEMPLATE_VERSION = "2026-07-27.compute-rpc-structured-output.v16";
-
 const CAPACITY_TAIL_MARKER = "GALACTIC_CAPACITY_EXECUTION_V1 ";
+
+function hasDeclaredEffect(
+  config: Pick<RuntimeConfig, "declaredEffects">,
+  effect: GalacticStableEffectId,
+): boolean {
+  // null/undefined is the compatibility mode for manifest-only releases.
+  return config.declaredEffects == null ||
+    config.declaredEffects.includes(effect);
+}
+
+function exposeEffectInSandbox(
+  config: Pick<RuntimeConfig, "declaredEffects" | "testMode">,
+  effect: GalacticStableEffectId,
+): boolean {
+  // gx.test intentionally exposes recorder-backed capabilities even when the
+  // function omitted them. That is how conformance observes and rejects an
+  // undeclared attempt without ever reaching a live service.
+  return config.testMode === true || hasDeclaredEffect(config, effect);
+}
 
 export function resolveRpcBindingMetering(
   config: Pick<RuntimeConfig, "cloudOperationMetering">,
@@ -121,6 +147,7 @@ export async function deriveIsolateReuseKey(
     | "user"
     | "envVars"
     | "permissions"
+    | "declaredEffects"
     | "testMode"
     | "credentials"
     | "appCallDependencies"
@@ -153,10 +180,13 @@ export async function deriveIsolateReuseKey(
   const bundleHash = await sha256HexLocal(esmCode);
   const stateFingerprint = await sha256HexLocal(JSON.stringify({
     // Version of the runtime-generated setup/wrapper template + loadConfig shape.
-    tpl: SANDBOX_TEMPLATE_VERSION,
+    tpl: GALACTIC_SANDBOX_TEMPLATE_VERSION,
     user: config.user ?? null,
     env: config.envVars ?? {},
     perms: [...(config.permissions ?? [])].sort(),
+    effects: config.declaredEffects == null
+      ? null
+      : [...config.declaredEffects].sort(),
     // Changes AI/embed/notify from production RPC bindings to host-only stubs.
     testMode: config.testMode === true,
     // Credential VALUES are included: a rotation changes the fingerprint and
@@ -207,6 +237,58 @@ function structuredOutputErrorCode(value: unknown): string | undefined {
     : undefined;
 }
 
+interface DynamicTestRuntimeSession {
+  dup(): DynamicTestRuntimeSession;
+  recordObservedEffect?(effect: UlTestObservedEffect): Promise<void>;
+  sealAndSnapshot(): Promise<{
+    blockedEffects: string[];
+    observedEffects?: string[];
+  }>;
+  close(): Promise<void>;
+  [Symbol.dispose](): void;
+}
+
+interface DynamicTestRuntimeSessionFactory {
+  create(): Promise<DynamicTestRuntimeSession>;
+}
+
+interface DynamicTestRuntimeSnapshot {
+  blockedEffects: string[];
+  observedEffects: UlTestObservedEffect[];
+}
+
+const EMPTY_TEST_RUNTIME_SNAPSHOT: DynamicTestRuntimeSnapshot = {
+  blockedEffects: [],
+  observedEffects: [],
+};
+
+function gxTestContainmentError(blockedEffects: string[]) {
+  return blockedEffects.length > 0
+    ? {
+      type: "GxTestEffectBlockedError",
+      message: `gx.test blocked external effects without fixtures: ${
+        blockedEffects.join(", ")
+      }`,
+      code: "GX_TEST_EFFECT_BLOCKED",
+    } as const
+    : undefined;
+}
+
+function normalizeTestRuntimeSnapshot(value: {
+  blockedEffects?: unknown;
+  observedEffects?: unknown;
+}): DynamicTestRuntimeSnapshot {
+  const blockedEffects = Array.isArray(value.blockedEffects)
+    ? [...new Set(value.blockedEffects.filter(isUlTestBlockedEffect))].sort()
+    : [];
+  const observedEffects = Array.isArray(value.observedEffects)
+    ? [...new Set(value.observedEffects.filter(isUlTestObservedEffect))]
+      .sort()
+      .slice(0, MAX_UL_TEST_OBSERVED_EFFECTS)
+    : [];
+  return { blockedEffects, observedEffects };
+}
+
 interface DynamicWorkerEntrypointExports {
   DatabaseBinding(
     input: {
@@ -214,6 +296,8 @@ interface DynamicWorkerEntrypointExports {
         databaseId: string;
         appId: string;
         userId: string;
+        allowRead: boolean;
+        allowWrite: boolean;
         operationMetering?: RuntimeConfig["cloudOperationMetering"];
         operationBillingConfig?: RuntimeConfig["cloudOperationBillingConfig"];
         requireExecCtx?: boolean;
@@ -226,6 +310,7 @@ interface DynamicWorkerEntrypointExports {
         appId: string;
         userId: string;
         fixtures: NonNullable<RuntimeConfig["d1Fixtures"]>;
+        session: DynamicTestRuntimeSession;
       };
     },
   ): unknown;
@@ -234,6 +319,9 @@ interface DynamicWorkerEntrypointExports {
       props: {
         appId: string;
         userId: string;
+        allowRead: boolean;
+        allowWrite: boolean;
+        allowDelete: boolean;
         operationMetering?: RuntimeConfig["cloudOperationMetering"];
         operationBillingConfig?: RuntimeConfig["cloudOperationBillingConfig"];
         requireExecCtx?: boolean;
@@ -245,6 +333,8 @@ interface DynamicWorkerEntrypointExports {
       props: {
         userId: string;
         appId?: string | null;
+        allowRead: boolean;
+        allowWrite: boolean;
         operationMetering?: RuntimeConfig["cloudOperationMetering"];
         operationBillingConfig?: RuntimeConfig["cloudOperationBillingConfig"];
         requireExecCtx?: boolean;
@@ -269,10 +359,58 @@ interface DynamicWorkerEntrypointExports {
       };
     },
   ): unknown;
-  TestAIBinding(input: { props: Record<string, never> }): unknown;
-  TestEmbedBinding(input: { props: Record<string, never> }): unknown;
-  TestNotifyBinding(input: { props: Record<string, never> }): unknown;
-  TestComputeBinding(input: { props: Record<string, never> }): unknown;
+  TestRuntimeSessionFactory(
+    input: { props: Record<string, never> },
+  ): DynamicTestRuntimeSessionFactory;
+  TestAIBinding(
+    input: { props: { session: DynamicTestRuntimeSession } },
+  ): unknown;
+  TestAppDataBinding(
+    input: { props: { session: DynamicTestRuntimeSession } },
+  ): unknown;
+  TestMemoryBinding(
+    input: { props: { session: DynamicTestRuntimeSession } },
+  ): unknown;
+  TestRunsBinding(
+    input: { props: { session: DynamicTestRuntimeSession } },
+  ): unknown;
+  TestEmbedBinding(
+    input: { props: { session: DynamicTestRuntimeSession } },
+  ): unknown;
+  TestNotifyBinding(
+    input: { props: { session: DynamicTestRuntimeSession } },
+  ): unknown;
+  TestOutboundBinding(
+    input: {
+      props: {
+        session: DynamicTestRuntimeSession;
+        fixtures: NonNullable<RuntimeConfig["httpFixtures"]>;
+        allowedDestinations: string[];
+      };
+    },
+  ): unknown;
+  TestCredentialBinding(
+    input: {
+      props: {
+        session: DynamicTestRuntimeSession;
+        fixtures: NonNullable<RuntimeConfig["httpFixtures"]>;
+        allowedDestinations: string[];
+        credentialDestinations: Record<string, string>;
+      };
+    },
+  ): unknown;
+  TestNetworkBinding(
+    input: { props: { session: DynamicTestRuntimeSession } },
+  ): unknown;
+  TestEventsBinding(
+    input: { props: { session: DynamicTestRuntimeSession } },
+  ): unknown;
+  TestAppCallBinding(
+    input: { props: { session: DynamicTestRuntimeSession } },
+  ): unknown;
+  TestComputeBinding(
+    input: { props: { session: DynamicTestRuntimeSession } },
+  ): unknown;
   ComputeBinding(input: {
     props: {
       userId: string;
@@ -323,19 +461,19 @@ interface DynamicWorkerEntrypointExports {
     props: {
       userId: string;
       appId: string;
+      allowImap: boolean;
+      allowSmtp: boolean;
+      strictCredentialRoles: boolean;
+      allowedDestinations: string[];
       credentials: Record<string, ResolvedCredential>;
     };
   }): unknown;
-  EventsBinding(input: {
-    props: {
-      callerContextToken: string;
-      requireExecCtx?: boolean;
-    };
-  }): unknown;
+  EventsBinding(input: { props: Record<string, never> }): unknown;
   OutboundBinding(input: {
     props: {
       appId: string;
       userId: string;
+      allowHttp: boolean;
       allowedDestinations: string[];
     };
   }): unknown;
@@ -360,6 +498,7 @@ export async function executeInDynamicSandbox(
   args: unknown[],
 ): Promise<ExecutionResult> {
   const startTime = Date.now();
+  const testMode = config.testMode === true;
   const knownSecrets = collectRuntimeDiagnosticSecrets(config);
   const loader = globalThis.__env?.LOADER;
   // Per-execution context handle (registered before the loader fetch, resolved
@@ -373,8 +512,26 @@ export async function executeInDynamicSandbox(
   let reuseKeyHash: string | null = null;
   let dynamicWorkerIdentityCreated = false;
   let dynamicWorkerInvoked = false;
+  // Declared outside the main try so failure diagnostics can redact it even
+  // when execution exits after the token was minted.
+  let sandboxAuthToken: string | null = "";
+  let testRuntimeSession: DynamicTestRuntimeSession | null = null;
+  let testRuntimeSnapshotPromise: Promise<DynamicTestRuntimeSnapshot> | null =
+    null;
+  const snapshotTestRuntimeSession = (): Promise<
+    DynamicTestRuntimeSnapshot
+  > => {
+    if (!testMode || !testRuntimeSession) {
+      return Promise.resolve(EMPTY_TEST_RUNTIME_SNAPSHOT);
+    }
+    if (!testRuntimeSnapshotPromise) {
+      testRuntimeSnapshotPromise = testRuntimeSession.sealAndSnapshot()
+        .then(normalizeTestRuntimeSnapshot);
+    }
+    return testRuntimeSnapshotPromise;
+  };
 
-  if (config.capacityReceiptId) {
+  if (config.capacityReceiptId && !testMode) {
     // The producer trace covers the entire admitted API invocation, including
     // bundle reads and validation that can fail before a Dynamic Worker starts.
     // Logging at the boundary keeps those real CPU milliseconds attributable;
@@ -395,6 +552,7 @@ export async function executeInDynamicSandbox(
       logs: [],
       durationMs: Date.now() - startTime,
       aiCostLight: 0,
+      ...(testMode ? { observedEffects: [] } : {}),
       error: {
         type: "RuntimeError",
         message: "Dynamic Worker LOADER binding not available",
@@ -417,8 +575,12 @@ export async function executeInDynamicSandbox(
 
   try {
     // 1. Get ESM bundle from KV
-    const codeCacheKey = `esm:${config.appId}:latest`;
-    if (config.cloudOperationMetering) {
+    const codeCacheKey = config.immutableReleaseDigest
+      ? `esm:${config.appId}:release:${config.immutableReleaseDigest}`
+      : config.immutableBundleVersion
+      ? `esm:${config.appId}:${config.immutableBundleVersion}`
+      : `esm:${config.appId}:latest`;
+    if (config.cloudOperationMetering && !testMode) {
       await debitCloudOperation({
         ...config.cloudOperationMetering,
         resource: "kv_operation",
@@ -433,9 +595,17 @@ export async function executeInDynamicSandbox(
     }
     // Fetch the live bundle + its signed attestation atomically (one read), so
     // the bytes that run are exactly the bytes that get verified.
-    const { code: esmCode, attestation } = await loadLiveExecutedBundle(
-      config.appId,
-    );
+    const { code: esmCode, attestation } = config.immutableReleaseDigest
+      ? await loadReleaseExecutedBundle(
+        config.appId,
+        config.immutableReleaseDigest,
+      )
+      : config.immutableBundleVersion
+      ? await loadVersionedExecutedBundle(
+        config.appId,
+        config.immutableBundleVersion,
+      )
+      : await loadLiveExecutedBundle(config.appId);
     if (!esmCode) {
       // No ESM bundle — app hasn't been rebuilt. Can't execute without it.
       return {
@@ -444,16 +614,27 @@ export async function executeInDynamicSandbox(
         logs: [],
         durationMs: Date.now() - startTime,
         aiCostLight: 0,
+        ...(testMode ? { observedEffects: [] } : {}),
         error: {
           type: "RuntimeError",
-          message:
-            `No ESM bundle found for app ${config.appId}. Run rebuild first.`,
+          message: config.immutableReleaseDigest ||
+              config.immutableBundleVersion
+            ? `No immutable ESM bundle found for app ${config.appId} release ${
+              config.immutableReleaseDigest ??
+                config.immutableBundleVersion
+            }.`
+            : `No ESM bundle found for app ${config.appId}. Run rebuild first.`,
         },
         diagnostic: normalizeOperatorDiagnostic({
           error: {
             type: "RuntimeError",
-            message:
-              `No ESM bundle found for app ${config.appId}. Run rebuild first.`,
+            message: config.immutableReleaseDigest ||
+                config.immutableBundleVersion
+              ? `No immutable ESM bundle found for app ${config.appId} release ${
+                config.immutableReleaseDigest ??
+                  config.immutableBundleVersion
+              }.`
+              : `No ESM bundle found for app ${config.appId}. Run rebuild first.`,
           },
           provenance: "platform",
           platform: {
@@ -473,19 +654,23 @@ export async function executeInDynamicSandbox(
     // observe (default) only warns. Legacy (no attestation) + infra/secret errors
     // never block.
     const bundleVerifyMode = executedBundleVerifyMode();
-    if (bundleVerifyMode !== "off" || config.routineContext) {
+    if (
+      bundleVerifyMode !== "off" || config.routineContext ||
+      config.immutableReleaseDigest
+    ) {
       const verdict = await verifyExecutedBundle({
         appId: config.appId,
         esmCode,
         attestation,
         expectedVersion: config.expectedVersion,
+        expectedReleaseDigest: config.immutableReleaseDigest,
       });
       if (
         handleExecutedBundleVerdict(
           config.appId,
           verdict,
           bundleVerifyMode,
-          Boolean(config.routineContext),
+          Boolean(config.routineContext || config.immutableReleaseDigest),
         )
       ) {
         return {
@@ -494,6 +679,7 @@ export async function executeInDynamicSandbox(
           logs: [],
           durationMs: Date.now() - startTime,
           aiCostLight: 0,
+          ...(testMode ? { observedEffects: [] } : {}),
           error: {
             type: "IntegrityError",
             message:
@@ -522,23 +708,106 @@ export async function executeInDynamicSandbox(
     const userJson = config.user ? JSON.stringify(config.user) : "null";
     const envVarsJson = JSON.stringify(config.envVars || {});
     const callBaseUrl = JSON.stringify(
-      config.baseUrl || config.workerBaseUrl || "",
+      testMode ? "" : config.baseUrl || config.workerBaseUrl || "",
     );
     // SECURITY: never inject the caller's raw bearer. App code can read this
     // value (e.g. globalThis.ultralight.call.toString()), so mint a short-lived
     // token scoped to this app's allowed call targets instead. The user's real
     // ul_ key never enters the sandbox.
-    const sandboxAuthToken = await mintSandboxAuthToken({
-      user: config.user,
-      appId: config.appId,
-      executionId: config.executionId,
-      hasBroadCallPermission: config.permissions.includes("app:call"),
-      dependencyAppIds: (config.appCallDependencies || [])
-        .map((dependency) => dependency.app)
-        .filter(Boolean),
-      routineContext: config.routineContext,
-      routineCapabilities: config.routineCapabilityCeiling,
-    });
+    const permits = (permission: string) =>
+      config.permissions.includes(permission);
+    const exposesPermissionEffect = (
+      effect: GalacticStableEffectId,
+      permission: string,
+    ) =>
+      testMode ||
+      (hasDeclaredEffect(config, effect) && permits(permission));
+    const allowsStorageRead = exposesPermissionEffect(
+      "storage.read",
+      "storage:read",
+    );
+    const allowsStorageWrite = exposesPermissionEffect(
+      "storage.write",
+      "storage:write",
+    );
+    const allowsStorageDelete = exposesPermissionEffect(
+      "storage.delete",
+      "storage:delete",
+    );
+    const allowsMemoryRead = exposesPermissionEffect(
+      "memory.read",
+      "memory:read",
+    );
+    const allowsMemoryWrite = exposesPermissionEffect(
+      "memory.write",
+      "memory:write",
+    );
+    const allowsDatabaseRead = exposeEffectInSandbox(
+      config,
+      "database.read",
+    );
+    const allowsDatabaseWrite = exposeEffectInSandbox(
+      config,
+      "database.write",
+    );
+    const allowsRoutineRead = testMode ||
+      (config.flightRecorder === true &&
+        hasDeclaredEffect(config, "routine.read"));
+    const allowsNotify = exposesPermissionEffect(
+      "notification.owner.write",
+      "notify:owner",
+    );
+    const allowsInferenceGenerate = exposesPermissionEffect(
+      "inference.generate",
+      "ai:call",
+    );
+    const allowsInferenceEmbed = exposesPermissionEffect(
+      "inference.embed",
+      "ai:embed",
+    );
+    const allowsCompute = exposesPermissionEffect(
+      "compute.execute",
+      COMPUTE_EXEC_PERMISSION,
+    );
+    const allowsNetworkHttp = exposesPermissionEffect(
+      "network.http",
+      "net:fetch",
+    );
+    const allowsCredentialHttp = exposesPermissionEffect(
+      "credential.http",
+      "net:fetch",
+    );
+    const allowsImap = exposesPermissionEffect(
+      "email.imap.read",
+      "net:connect",
+    );
+    const allowsSmtp = exposesPermissionEffect(
+      "email.smtp.send",
+      "net:connect",
+    );
+    const allowsEventPublish = exposeEffectInSandbox(
+      config,
+      "event.publish",
+    );
+    const hasConfiguredAppCall = permits("app:call") ||
+      (config.appCallDependencies?.length ?? 0) > 0 ||
+      (config.slotBindings?.length ?? 0) > 0;
+    const allowsAgentCall = testMode ||
+      (hasDeclaredEffect(config, "agent.call") && hasConfiguredAppCall);
+    const testHasAppCall = allowsAgentCall;
+    sandboxAuthToken = testMode
+      ? (testHasAppCall ? "gx-test-blocked-app-call" : "")
+      : await mintSandboxAuthToken({
+        user: config.user,
+        appId: config.appId,
+        executionId: config.executionId,
+        hasBroadCallPermission: config.permissions.includes("app:call"),
+        dependencyAppIds: (config.appCallDependencies || [])
+          .map((dependency) => dependency.app)
+          .filter(Boolean),
+        routineContext: config.routineContext,
+        routineCapabilities: config.routineCapabilityCeiling,
+      });
     const slotBindingsJson = JSON.stringify(config.slotBindings || []);
     const callDependenciesJson = JSON.stringify(
       config.appCallDependencies || [],
@@ -548,10 +817,114 @@ export async function executeInDynamicSandbox(
 // Setup module — runs before app.js, sets globalThis.ultralight
 // RPC bindings (__rpcEnv) are set later by wrapper.js fetch() handler.
 // Lazy getters defer RPC calls until function execution time.
-globalThis.__rpcEnv = {};
+let __rpcEnv = {};
+
+// Every promise returned by a host RPC or outbound fetch remains part of the
+// current invocation even when tenant code forgets to await it. The wrapper
+// drains this set before returning its response, so gx.test cannot seal its
+// effect transcript while a fire-and-forget write is still in flight.
+const __galacticPendingEffects = new Set();
+const __galacticPendingAdd = Set.prototype.add.bind(
+  __galacticPendingEffects,
+);
+const __galacticPendingDelete = Set.prototype.delete.bind(
+  __galacticPendingEffects,
+);
+const __galacticPendingValues = Set.prototype.values.bind(
+  __galacticPendingEffects,
+);
+const __galacticPendingSize = Object.getOwnPropertyDescriptor(
+  Set.prototype,
+  'size',
+).get.bind(__galacticPendingEffects);
+const __galacticPromiseResolve = Promise.resolve.bind(Promise);
+const __galacticPromiseAllSettled = Promise.allSettled.bind(Promise);
+const __galacticPromiseThen = Function.call.bind(Promise.prototype.then);
+const __galacticReflectGet = Reflect.get;
+const __galacticReflectApply = Reflect.apply;
+const __galacticArrayFrom = Array.from;
+const __GalacticProxy = Proxy;
+function __trackGalacticEffectPromise(value) {
+  if (!value || typeof value.then !== 'function') return value;
+  const promise = __galacticPromiseResolve(value);
+  __galacticPendingAdd(promise);
+  // Register both outcomes without replacing the promise returned to tenant
+  // code. This suppresses an unhandled-rejection race while preserving normal
+  // await/catch behavior for the caller.
+  __galacticPromiseThen(
+    promise,
+    function() { __galacticPendingDelete(promise); },
+    function() { __galacticPendingDelete(promise); },
+  );
+  return promise;
+}
+
+const __galacticRpcProxyCache = new WeakMap();
+const __galacticRpcProxyGet = WeakMap.prototype.get.bind(
+  __galacticRpcProxyCache,
+);
+const __galacticRpcProxySet = WeakMap.prototype.set.bind(
+  __galacticRpcProxyCache,
+);
+function __trackGalacticRpcValue(value) {
+  if (
+    value === null ||
+    (typeof value !== 'object' && typeof value !== 'function')
+  ) return value;
+  const cached = __galacticRpcProxyGet(value);
+  if (cached) return cached;
+  const proxy = new __GalacticProxy(value, {
+    get(target, property) {
+      const member = __galacticReflectGet(target, property, target);
+      if (typeof member === 'function') {
+        return function(...args) {
+          return __trackGalacticEffectPromise(
+            __galacticReflectApply(member, target, args),
+          );
+        };
+      }
+      return __trackGalacticRpcValue(member);
+    },
+  });
+  __galacticRpcProxySet(value, proxy);
+  return proxy;
+}
+
+export function __setGalacticRpcEnv(env) {
+  __rpcEnv = __trackGalacticRpcValue(env);
+}
+
+export async function __drainGalacticPendingEffects() {
+  let passes = 0;
+  while (__galacticPendingSize() > 0) {
+    passes += 1;
+    if (passes > 64) {
+      throw new Error(
+        'Agent kept scheduling effects after its function returned.',
+      );
+    }
+    const pending = __galacticArrayFrom(__galacticPendingValues());
+    await __galacticPromiseAllSettled(pending);
+    // Let continuations register any effects they start before testing the set
+    // again. The sandbox's outer deadline remains the hard upper time bound.
+    await Promise.resolve();
+  }
+}
+
+// Raw fetch is an effect surface too. Wrap it before app.js evaluates so even
+// a captured or fire-and-forget fetch participates in the invocation drain.
+const __galacticPlatformFetch = globalThis.fetch;
+if (typeof __galacticPlatformFetch === 'function') {
+  globalThis.fetch = function(...args) {
+    return __trackGalacticEffectPromise(
+      __galacticReflectApply(__galacticPlatformFetch, globalThis, args),
+    );
+  };
+}
 
 function __ulAllowsAppCall(targetAppId, functionName) {
-  if (${config.permissions.includes("app:call")}) return true;
+  if (!${allowsAgentCall}) return false;
+  if (${testMode || config.permissions.includes("app:call")}) return true;
   if (typeof targetAppId !== 'string' || typeof functionName !== 'string') return false;
   var target = targetAppId.trim();
   var fnName = functionName.trim();
@@ -606,7 +979,7 @@ function __unwrapComputeRpc(envelope) {
 // through the parent-isolate RPC binding. The body receives no user bearer,
 // platform key, control-plane credential, lease token, or billing receipt.
 function __galacticCompute(request) {
-  var e = globalThis.__rpcEnv;
+  var e = __rpcEnv;
   if (!e || !e.COMPUTE) {
     return Promise.reject(new Error('galactic.compute unavailable: add "compute:exec" to manifest permissions and run with an authenticated user context.'));
   }
@@ -614,14 +987,14 @@ function __galacticCompute(request) {
   return e.COMPUTE.call(request || {}, globalThis.__computeCallIndex).then(__unwrapComputeRpc);
 }
 __galacticCompute.get = function(runId) {
-  var e = globalThis.__rpcEnv;
+  var e = __rpcEnv;
   if (!e || !e.COMPUTE) {
     return Promise.reject(new Error('galactic.compute.get unavailable: compute:exec permission and an authenticated user context are required.'));
   }
   return e.COMPUTE.get(runId).then(__unwrapComputeRpc);
 };
 __galacticCompute.cancel = function(runId) {
-  var e = globalThis.__rpcEnv;
+  var e = __rpcEnv;
   if (!e || !e.COMPUTE) {
     return Promise.reject(new Error('galactic.compute.cancel unavailable: compute:exec permission and an authenticated user context are required.'));
   }
@@ -630,12 +1003,17 @@ __galacticCompute.cancel = function(runId) {
 
 globalThis.ultralight = {
   get db() {
-    const e = globalThis.__rpcEnv;
+    const e = __rpcEnv;
     // Raw-SQL methods were removed in favour of the scoped structured API. Fail
     // loud with an actionable message if an old bundle still calls them.
     const __removed = function (name) {
       return function () {
         throw new Error('galactic.db.' + name + '() was removed. galactic.db is now a scoped, structured API — use galactic.db.select/first/insert/update/delete/upsert/count/batch. Raw SQL is no longer supported.');
+      };
+    };
+    const __denied = function (effect) {
+      return function () {
+        throw new Error(effect + ' authority not granted for this function.');
       };
     };
     if (!e.DB) {
@@ -647,15 +1025,47 @@ globalThis.ultralight = {
     }
     return {
       // Reads
-      select: (table, query) => e.DB.select(Object.assign({ table: table }, query || {}), globalThis.__execHandle),
-      first: (table, query) => e.DB.first(Object.assign({ table: table }, query || {}), globalThis.__execHandle),
-      count: (table, query) => e.DB.count(Object.assign({ table: table }, query || {}), globalThis.__execHandle),
+      select: ${
+      allowsDatabaseRead
+        ? "(table, query) => e.DB.select(Object.assign({ table: table }, query || {}), globalThis.__execHandle)"
+        : "__denied('database.read')"
+    },
+      first: ${
+      allowsDatabaseRead
+        ? "(table, query) => e.DB.first(Object.assign({ table: table }, query || {}), globalThis.__execHandle)"
+        : "__denied('database.read')"
+    },
+      count: ${
+      allowsDatabaseRead
+        ? "(table, query) => e.DB.count(Object.assign({ table: table }, query || {}), globalThis.__execHandle)"
+        : "__denied('database.read')"
+    },
       // Writes (user_id is injected host-side; app code never supplies it)
-      insert: (table, values) => e.DB.insert({ table: table, values: values }, globalThis.__execHandle),
-      update: (table, spec) => e.DB.update(Object.assign({ table: table }, spec || {}), globalThis.__execHandle),
-      delete: (table, spec) => e.DB.delete(Object.assign({ table: table }, spec || {}), globalThis.__execHandle),
-      upsert: (table, spec) => e.DB.upsert(Object.assign({ table: table }, spec || {}), globalThis.__execHandle),
-      batch: (ops) => e.DB.batch(ops || [], globalThis.__execHandle),
+      insert: ${
+      allowsDatabaseWrite
+        ? "(table, values) => e.DB.insert({ table: table, values: values }, globalThis.__execHandle)"
+        : "__denied('database.write')"
+    },
+      update: ${
+      allowsDatabaseWrite
+        ? "(table, spec) => e.DB.update(Object.assign({ table: table }, spec || {}), globalThis.__execHandle)"
+        : "__denied('database.write')"
+    },
+      delete: ${
+      allowsDatabaseWrite
+        ? "(table, spec) => e.DB.delete(Object.assign({ table: table }, spec || {}), globalThis.__execHandle)"
+        : "__denied('database.write')"
+    },
+      upsert: ${
+      allowsDatabaseWrite
+        ? "(table, spec) => e.DB.upsert(Object.assign({ table: table }, spec || {}), globalThis.__execHandle)"
+        : "__denied('database.write')"
+    },
+      batch: ${
+      allowsDatabaseWrite
+        ? "(ops) => e.DB.batch(ops || [], globalThis.__execHandle)"
+        : "__denied('database.write')"
+    },
       // Removed raw-SQL surface
       run: __removed('run'), all: __removed('all'), exec: __removed('exec'),
     };
@@ -668,41 +1078,25 @@ globalThis.ultralight = {
         ? `return ${userJson};`
         : 'throw new Error("Authentication required.");'
     } },
-  store(k, v) { if (!${
-      config.permissions.includes("storage:write")
-    }) return Promise.reject(new Error('storage:write permission not granted.')); const e = globalThis.__rpcEnv; return e.DATA ? e.DATA.store(k, v, globalThis.__execHandle) : Promise.reject(new Error('Data not available')); },
-  load(k) { if (!${
-      config.permissions.includes("storage:read")
-    }) return Promise.reject(new Error('storage:read permission not granted.')); const e = globalThis.__rpcEnv; return e.DATA ? e.DATA.load(k, globalThis.__execHandle) : Promise.resolve(null); },
-  remove(k) { if (!${
-      config.permissions.includes("storage:delete")
-    }) return Promise.reject(new Error('storage:delete permission not granted.')); const e = globalThis.__rpcEnv; return e.DATA ? e.DATA.remove(k, globalThis.__execHandle) : Promise.reject(new Error('Data not available')); },
-  list(p) { if (!${
-      config.permissions.includes("storage:read")
-    }) return Promise.reject(new Error('storage:read permission not granted.')); const e = globalThis.__rpcEnv; return e.DATA ? e.DATA.list(p, globalThis.__execHandle) : Promise.resolve([]); },
-  query(p, o) { if (!${
-      config.permissions.includes("storage:read")
-    }) return Promise.reject(new Error('storage:read permission not granted.')); const e = globalThis.__rpcEnv; return e.DATA?.query?.(p, o, globalThis.__execHandle) || Promise.resolve([]); },
-  remember(k, v, o) { if (!${
-      config.permissions.includes("memory:write")
-    }) return Promise.reject(new Error('memory:write permission not granted.')); var s = (o && o.scope === 'user') ? 'user' : 'agent'; const e = globalThis.__rpcEnv; return e.MEMORY ? e.MEMORY.remember(k, v, s, globalThis.__execHandle) : Promise.resolve(); },
-  recall(k, o) { if (!${
-      config.permissions.includes("memory:read")
-    }) return Promise.reject(new Error('memory:read permission not granted.')); var s = (o && o.scope === 'user') ? 'user' : 'agent'; const e = globalThis.__rpcEnv; return e.MEMORY ? e.MEMORY.recall(k, s, globalThis.__execHandle) : Promise.resolve(null); },
+  store(k, v) { if (!${allowsStorageWrite}) return Promise.reject(new Error('storage.write authority not granted for this function.')); const e = __rpcEnv; return e.DATA ? e.DATA.store(k, v, globalThis.__execHandle) : Promise.reject(new Error('Data not available')); },
+  load(k) { if (!${allowsStorageRead}) return Promise.reject(new Error('storage.read authority not granted for this function.')); const e = __rpcEnv; return e.DATA ? e.DATA.load(k, globalThis.__execHandle) : Promise.resolve(null); },
+  remove(k) { if (!${allowsStorageDelete}) return Promise.reject(new Error('storage.delete authority not granted for this function.')); const e = __rpcEnv; return e.DATA ? e.DATA.remove(k, globalThis.__execHandle) : Promise.reject(new Error('Data not available')); },
+  list(p) { if (!${allowsStorageRead}) return Promise.reject(new Error('storage.read authority not granted for this function.')); const e = __rpcEnv; return e.DATA ? e.DATA.list(p, globalThis.__execHandle) : Promise.resolve([]); },
+  query(p, o) { if (!${allowsStorageRead}) return Promise.reject(new Error('storage.read authority not granted for this function.')); const e = __rpcEnv; return e.DATA?.query?.(p, o, globalThis.__execHandle) || Promise.resolve([]); },
+  remember(k, v, o) { if (!${allowsMemoryWrite}) return Promise.reject(new Error('memory.write authority not granted for this function.')); var s = (o && o.scope === 'user') ? 'user' : 'agent'; const e = __rpcEnv; return e.MEMORY ? e.MEMORY.remember(k, v, s, globalThis.__execHandle) : Promise.resolve(); },
+  recall(k, o) { if (!${allowsMemoryRead}) return Promise.reject(new Error('memory.read authority not granted for this function.')); var s = (o && o.scope === 'user') ? 'user' : 'agent'; const e = __rpcEnv; return e.MEMORY ? e.MEMORY.recall(k, s, globalThis.__execHandle) : Promise.resolve(null); },
   // Flight recorder read-back: this agent's recent routine runs (+ recorded
   // steps, incl. captured ai() exchanges) for the CURRENT user. Wired only
   // when the manifest sets "flight_recorder": true.
   runs: {
-    recent(o) { const e = globalThis.__rpcEnv; if (!e.RUNS) return Promise.reject(new Error('galactic.runs unavailable: set "flight_recorder": true in the manifest.')); return e.RUNS.recent((o && o.limit) || 10, globalThis.__execHandle); },
+    recent(o) { if (!${allowsRoutineRead}) return Promise.reject(new Error('routine.read authority not granted for this function.')); const e = __rpcEnv; if (!e.RUNS) return Promise.reject(new Error('galactic.runs unavailable: set "flight_recorder": true in the manifest.')); return e.RUNS.recent((o && o.limit) || 10, globalThis.__execHandle); },
   },
   // Owner notifications: one report to the CURRENT user's inbox bell. Kind,
   // identity, dedupe namespacing, and rate caps are enforced host-side.
-  notify(o) { if (!${
-      config.permissions.includes("notify:owner")
-    }) return Promise.reject(new Error('galactic.notify unavailable: add "notify:owner" to manifest permissions.')); const e = globalThis.__rpcEnv; return e.NOTIFY ? e.NOTIFY.notifyOwner(o || {}, globalThis.__execHandle) : Promise.reject(new Error('Notifications not available')); },
+  notify(o) { if (!${allowsNotify}) return Promise.reject(new Error('notification.owner.write authority not granted for this function.')); const e = __rpcEnv; return e.NOTIFY ? e.NOTIFY.notifyOwner(o || {}, globalThis.__execHandle) : Promise.reject(new Error('Notifications not available')); },
   compute: __galacticCompute,
-  ai(r) { const e = globalThis.__rpcEnv; if (!e.AI) return Promise.reject(new Error('galactic.ai unavailable: ai:call permission not granted or no authenticated user context.')); var __t0 = Date.now(); var __clip = function(v){ try { var s = typeof v === 'string' ? v : JSON.stringify(v); return s && s.length > 2000 ? s.slice(0, 2000) + '…[truncated]' : (s || ''); } catch (_e) { return ''; } }; var __rec = function(resp, errMsg){ try { var f = globalThis.__flight; if (f && f.ai && f.ai.length < 20) f.ai.push({ at: new Date().toISOString(), ms: Date.now() - __t0, model: (resp && resp.model) || (r && r.model) || null, cost_light: (resp && resp.usage && resp.usage.cost_light) || 0, prompt: __clip(r && r.messages), response: errMsg ? ('[error] ' + __clip(errMsg)) : __clip(resp && resp.content) }); } catch (_e) {} }; return e.AI.call(r, globalThis.__execHandle).then(function(resp){ if (resp && resp.error) { __rec(null, resp.error); var err = new Error('galactic.ai failed: ' + resp.error); if (resp.error_code) err.code = resp.error_code; throw err; } try { globalThis.__aiCostLight = (globalThis.__aiCostLight || 0) + ((resp && resp.usage && resp.usage.cost_light) || 0); } catch (_e) {} __rec(resp); return resp; }); },
-  embed(r) { const e = globalThis.__rpcEnv; if (!e.EMBED) return Promise.reject(new Error('galactic.embed unavailable: ai:embed permission not granted or no authenticated user context.')); return e.EMBED.embed(r || {}, globalThis.__execHandle).then(function(resp){ try { globalThis.__aiCostLight = (globalThis.__aiCostLight || 0) + ((resp && resp.usage && resp.usage.cost_light) || 0); } catch (_e) {} return resp; }); },
+  ai(r) { const e = __rpcEnv; if (!e.AI) return Promise.reject(new Error('galactic.ai unavailable: ai:call permission not granted or no authenticated user context.')); var __t0 = Date.now(); var __clip = function(v){ try { var s = typeof v === 'string' ? v : JSON.stringify(v); return s && s.length > 2000 ? s.slice(0, 2000) + '…[truncated]' : (s || ''); } catch (_e) { return ''; } }; var __rec = function(resp, errMsg){ try { var f = globalThis.__flight; if (f && f.ai && f.ai.length < 20) f.ai.push({ at: new Date().toISOString(), ms: Date.now() - __t0, model: (resp && resp.model) || (r && r.model) || null, cost_light: (resp && resp.usage && resp.usage.cost_light) || 0, prompt: __clip(r && r.messages), response: errMsg ? ('[error] ' + __clip(errMsg)) : __clip(resp && resp.content) }); } catch (_e) {} }; return e.AI.call(r, globalThis.__execHandle).then(function(resp){ if (resp && resp.error) { __rec(null, resp.error); var err = new Error('galactic.ai failed: ' + resp.error); if (resp.error_code) err.code = resp.error_code; throw err; } try { globalThis.__aiCostLight = (globalThis.__aiCostLight || 0) + ((resp && resp.usage && resp.usage.cost_light) || 0); } catch (_e) {} __rec(resp); return resp; }); },
+  embed(r) { const e = __rpcEnv; if (!e.EMBED) return Promise.reject(new Error('galactic.embed unavailable: ai:embed permission not granted or no authenticated user context.')); return e.EMBED.embed(r || {}, globalThis.__execHandle).then(function(resp){ try { globalThis.__aiCostLight = (globalThis.__aiCostLight || 0) + ((resp && resp.usage && resp.usage.cost_light) || 0); } catch (_e) {} return resp; }); },
   async call(targetAppId, functionName, callArgs) {
     if (!targetAppId || !functionName) throw new Error('target app id and function name are required');
     if (!__ulAllowsAppCall(targetAppId, functionName)) {
@@ -714,9 +1108,9 @@ globalThis.ultralight = {
     // sandbox cannot forge a valid one, and it only asserts THIS app's targets.
     var authToken = (globalThis.__ulReq && globalThis.__ulReq.authToken) || '';
     var baseUrl = ${callBaseUrl};
-    if (!authToken || !baseUrl) throw new Error('Inter-app calls not available (missing baseUrl or authToken)');
-    var e = globalThis.__rpcEnv;
+    var e = __rpcEnv;
     var useSelf = !!(e && e.SELF);
+    if (!authToken || (!useSelf && !baseUrl)) throw new Error('Inter-app calls not available (missing baseUrl or authToken)');
     var fetchFn = useSelf ? e.SELF.fetch.bind(e.SELF) : fetch;
     var endpoint = useSelf
       ? 'https://internal/mcp/' + encodeURIComponent(targetAppId)
@@ -785,10 +1179,11 @@ globalThis.ultralight = {
   // user + hop unforgeably. The platform worker secret never enters the sandbox.
   // Capped per execution to bound emit storms.
   async emit(topic, payload) {
+    if (!${allowsEventPublish}) throw new Error('event.publish authority not granted for this function.');
     if (${!!config
       .routineContext}) throw new Error('galactic.emit is unavailable during routine execution: deferred event fanout is not yet budget-attributed.');
     if (!topic || typeof topic !== 'string') throw new Error('emit requires a topic string');
-    var e = globalThis.__rpcEnv;
+    var e = __rpcEnv;
     if (!e || !e.EVENTS) throw new Error('emit requires an authenticated user context');
     globalThis.__emitCount = (globalThis.__emitCount || 0) + 1;
     if (globalThis.__emitCount > 50) throw new Error('emit limit reached for this execution');
@@ -817,7 +1212,10 @@ globalThis.ultralight = {
   // parent isolate — app code never receives it — and only reaches the
   // credential's declared destination. Returns the Response.
   async fetch(credentialKey, url, init) {
-    var e = globalThis.__rpcEnv;
+    if (!${allowsCredentialHttp}) {
+      throw new Error('credential.http authority not granted for this function.');
+    }
+    var e = __rpcEnv;
     if (!e || !e.CREDENTIALS) {
       throw new Error('No vaulted credentials are configured for this Agent.');
     }
@@ -825,27 +1223,21 @@ globalThis.ultralight = {
   },
   // net:connect — high-level protocol methods run host-side in the NET RPC
   // binding (cloudflare:sockets). No worker secret is exposed to app code.
-  net: ${
-      config.permissions.includes("net:connect")
-        ? `{
+  net: {
     async imapFetchUnseen(hostKey, port, userKey, passKey, lastUid, businessEmail, processedFlag, limit) {
-      var e = globalThis.__rpcEnv;
+      if (!${allowsImap}) throw new Error('email.imap.read authority not granted for this function.');
+      var e = __rpcEnv;
       if (!e || !e.NET) throw new Error('net:connect not available');
       return await e.NET.imapFetchUnseen(hostKey, port, userKey, passKey, lastUid || 0, businessEmail || '', processedFlag || '$ULProcessed', limit || 20);
     },
     async smtpSend(hostKey, port, userKey, passKey, from, fromName, to, subject, body, inReplyTo) {
-      var e = globalThis.__rpcEnv;
+      if (!${allowsSmtp}) throw new Error('email.smtp.send authority not granted for this function.');
+      var e = __rpcEnv;
       if (!e || !e.NET) throw new Error('net:connect not available');
       return await e.NET.smtpSend(hostKey, port, userKey, passKey, from, fromName || '', to, subject, body, inReplyTo || '');
     },
-    connectTls() { throw new Error('Low-level sockets not available. Use galactic.net.imapFetchUnseen() or .smtpSend().'); },
-  }`
-        : `{
-    imapFetchUnseen() { throw new Error('net:connect permission required.'); },
-    smtpSend() { throw new Error('net:connect permission required.'); },
-    connectTls() { throw new Error('net:connect permission required.'); },
-  }`
-    },
+    connectTls() { throw new Error('Raw TCP sockets are not exposed in this runtime. Use managed email methods or HTTPS fetch.'); },
+  },
 };
 // galactic.* is the canonical namespace; ultralight.* is a permanent alias so
 // every already-deployed bundle keeps working. Same object, two names.
@@ -857,7 +1249,10 @@ globalThis.galactic = globalThis.ultralight;
     // fetch body so the isolate content is identical across this user's calls
     // (the precondition for warm reuse via loader.get()).
     const wrapperModule = `
-import './setup.js';
+import {
+  __drainGalacticPendingEffects,
+  __setGalacticRpcEnv,
+} from './setup.js';
 import * as appModule from './app.js';
 
 export default {
@@ -874,9 +1269,10 @@ export default {
     const __executionDone = new Promise(function(resolve) { __releaseExecution = resolve; });
     globalThis.__galacticExecutionTail = __previousExecution.catch(function() {}).then(function() { return __executionDone; });
     await __previousExecution.catch(function() {});
+    let functionInvoked = false;
     try {
     // Set RPC bindings for lazy getters in ultralight SDK
-    globalThis.__rpcEnv = env;
+    __setGalacticRpcEnv(env);
     // Per-request payload — the ONLY per-execution data, read fresh each fetch so
     // a warm isolate can be reused across this user's calls. functionName + args
     // select what runs; authToken is the scoped inter-app call token; callerCtx
@@ -928,16 +1324,19 @@ export default {
           for (const k of Object.keys(appModule.default)) { if (typeof appModule.default[k] === 'function') available.push(k); }
         }
         return Response.json({
-          success: false, result: null, logs, aiCostLight: globalThis.__aiCostLight || 0, flight: globalThis.__flight,
+          success: false, functionInvoked, result: null, logs, aiCostLight: globalThis.__aiCostLight || 0, flight: globalThis.__flight,
           error: { type: 'FunctionNotFound', message: 'Function "' + fnName + '" not found. Available: ' + [...new Set(available)].join(', ') },
         });
       }
 
+      functionInvoked = true;
       const result = await targetFn(...fnArgs);
-      return Response.json({ success: true, result, logs, aiCostLight: globalThis.__aiCostLight || 0, flight: globalThis.__flight });
+      await __drainGalacticPendingEffects();
+      return Response.json({ success: true, functionInvoked, result, logs, aiCostLight: globalThis.__aiCostLight || 0, flight: globalThis.__flight });
     } catch (err) {
+      await __drainGalacticPendingEffects();
       return Response.json({
-        success: false, result: null, logs, aiCostLight: globalThis.__aiCostLight || 0, flight: globalThis.__flight,
+        success: false, functionInvoked, result: null, logs, aiCostLight: globalThis.__aiCostLight || 0, flight: globalThis.__flight,
         error: { type: err.name || err.constructor?.name || 'Error', message: err.message || String(err), ...(typeof err.code === 'string' ? { code: err.code } : {}), ...(err.galacticDetails ? { details: err.galacticDetails } : {}) },
       });
     }
@@ -951,8 +1350,8 @@ export default {
     // Warm-isolate reuse decision (needed before binding construction: reused
     // isolates get requireExecCtx bindings that refuse any RPC arriving without
     // a resolvable per-call context handle — closing the direct-binding bypass
-    // where app code calls globalThis.__rpcEnv.DB.* itself, skipping the SDK's
-    // handle threading, to get operations metered against a stale baked hold).
+    // where app code calls a raw binding itself, skipping the SDK's handle
+    // threading, to get operations metered against a stale baked hold).
     // Compute-capable Agents intentionally stay on one fresh isolate per
     // invocation. Compute authority is fixed in the binding's trusted ctx.props;
     // reusing an isolate would retain the first invocation's function, execution,
@@ -970,20 +1369,84 @@ export default {
     // 4. Create RPC bindings
     const ctx = globalThis.__ctx as DynamicWorkerExecutionContext;
     const bindings: Record<string, unknown> = {};
+    const hasStorageRead = allowsStorageRead;
+    const hasStorageWrite = allowsStorageWrite;
+    const hasStorageDelete = allowsStorageDelete;
+    const hasMemory = allowsMemoryRead || allowsMemoryWrite;
+    const hasDatabase = allowsDatabaseRead || allowsDatabaseWrite;
+    const hasNetworkBinding = testMode || allowsImap || allowsSmtp;
+    const hasInterAppCall = allowsAgentCall;
+
+    if (testMode) {
+      const requiredTestExports = [
+        "TestRuntimeSessionFactory",
+        "TestOutboundBinding",
+        "TestCredentialBinding",
+        "TestEventsBinding",
+        "TestAppDataBinding",
+        "TestMemoryBinding",
+        "TestRunsBinding",
+        "TestNotifyBinding",
+        "TestAIBinding",
+        "TestEmbedBinding",
+        "TestNetworkBinding",
+        "TestAppCallBinding",
+        "TestComputeBinding",
+        "FixtureDatabaseBinding",
+      ] as const;
+      const availableExports = (ctx?.exports ?? {}) as unknown as Record<
+        string,
+        unknown
+      >;
+      const missingTestExports = requiredTestExports.filter(
+        (name) => typeof availableExports[name] !== "function",
+      );
+      if (missingTestExports.length > 0) {
+        throw new Error(
+          `gx.test runtime is unavailable: missing host exports ${
+            missingTestExports.join(", ")
+          }`,
+        );
+      }
+
+      const factory = ctx!.exports!.TestRuntimeSessionFactory({ props: {} });
+      testRuntimeSession = await factory.create();
+      if (
+        !testRuntimeSession ||
+        typeof testRuntimeSession.dup !== "function" ||
+        typeof testRuntimeSession.sealAndSnapshot !== "function" ||
+        typeof testRuntimeSession.close !== "function"
+      ) {
+        throw new Error(
+          "gx.test runtime is unavailable: invalid state session capability",
+        );
+      }
+    }
+
+    const duplicateTestSession = (): DynamicTestRuntimeSession => {
+      if (!testRuntimeSession) {
+        throw new Error("gx.test state session is unavailable");
+      }
+      return testRuntimeSession.dup();
+    };
     // Resolved D1 database id baked into the DB binding props — captured here so
     // the reuse key can fingerprint it (it is lazily provisioned / re-provisioned
     // independently of the bundle). null when no live DB binding is wired.
     let resolvedDbId: string | null = null;
 
-    if (config.d1Fixtures && ctx?.exports?.FixtureDatabaseBinding) {
+    if (testMode && ctx?.exports?.FixtureDatabaseBinding) {
       bindings.DB = ctx.exports.FixtureDatabaseBinding({
         props: {
           appId: config.appId,
           userId: config.userId,
-          fixtures: config.d1Fixtures,
+          // An empty fixture set still installs the padded-room binding. It
+          // records the attempted DB effect, then fails closed with the normal
+          // fixture-miss diagnostic instead of hiding an undeclared attempt.
+          fixtures: config.d1Fixtures ?? { responses: [] },
+          session: duplicateTestSession(),
         },
       });
-    } else if (config.d1DataService) {
+    } else if (!testMode && hasDatabase && config.d1DataService) {
       const { getD1DatabaseId } = await import(
         "../services/d1-provisioning.ts"
       );
@@ -995,6 +1458,8 @@ export default {
             databaseId: dbId,
             appId: config.appId,
             userId: config.userId,
+            allowRead: allowsDatabaseRead,
+            allowWrite: allowsDatabaseWrite,
             operationMetering: bindingOperationMetering,
             operationBillingConfig: config.cloudOperationBillingConfig,
             requireExecCtx: requireBindingExecCtx,
@@ -1003,52 +1468,73 @@ export default {
       }
     }
 
-    const hasStorageRead = config.permissions.includes("storage:read");
-    const hasStorageWrite = config.permissions.includes("storage:write");
-    const hasStorageDelete = config.permissions.includes("storage:delete");
-    if (
-      (hasStorageRead || hasStorageWrite || hasStorageDelete) &&
-      ctx?.exports?.AppDataBinding
-    ) {
-      bindings.DATA = ctx.exports.AppDataBinding({
-        props: {
-          appId: config.appId,
-          userId: config.userId,
-          operationMetering: bindingOperationMetering,
-          operationBillingConfig: config.cloudOperationBillingConfig,
-          requireExecCtx: requireBindingExecCtx,
-        },
-      });
+    if (hasStorageRead || hasStorageWrite || hasStorageDelete) {
+      if (testMode) {
+        if (ctx?.exports?.TestAppDataBinding) {
+          bindings.DATA = ctx.exports.TestAppDataBinding({
+            props: { session: duplicateTestSession() },
+          });
+        }
+      } else if (ctx?.exports?.AppDataBinding) {
+        bindings.DATA = ctx.exports.AppDataBinding({
+          props: {
+            appId: config.appId,
+            userId: config.userId,
+            allowRead: allowsStorageRead,
+            allowWrite: allowsStorageWrite,
+            allowDelete: allowsStorageDelete,
+            operationMetering: bindingOperationMetering,
+            operationBillingConfig: config.cloudOperationBillingConfig,
+            requireExecCtx: requireBindingExecCtx,
+          },
+        });
+      }
     }
 
-    const hasMemory = config.permissions.includes("memory:read") ||
-      config.permissions.includes("memory:write");
-    if (hasMemory && config.memoryService && ctx?.exports?.MemoryBinding) {
-      bindings.MEMORY = ctx.exports.MemoryBinding({
-        props: {
-          userId: config.userId,
-          // Agent-scoped memory by default: each agent gets its own notebook
-          // keyed by appId so remember/recall can't collide across the agents a
-          // user runs. scope:"user" still reaches the shared per-user notebook.
-          appId: config.appId,
-          operationMetering: bindingOperationMetering,
-          operationBillingConfig: config.cloudOperationBillingConfig,
-          requireExecCtx: requireBindingExecCtx,
-        },
-      });
+    if (hasMemory) {
+      if (testMode) {
+        if (ctx?.exports?.TestMemoryBinding) {
+          bindings.MEMORY = ctx.exports.TestMemoryBinding({
+            props: { session: duplicateTestSession() },
+          });
+        }
+      } else if (config.memoryService && ctx?.exports?.MemoryBinding) {
+        bindings.MEMORY = ctx.exports.MemoryBinding({
+          props: {
+            userId: config.userId,
+            // Agent-scoped memory by default: each agent gets its own notebook
+            // keyed by appId so remember/recall can't collide across the agents
+            // a user runs. scope:"user" deliberately reaches shared memory.
+            appId: config.appId,
+            allowRead: allowsMemoryRead,
+            allowWrite: allowsMemoryWrite,
+            operationMetering: bindingOperationMetering,
+            operationBillingConfig: config.cloudOperationBillingConfig,
+            requireExecCtx: requireBindingExecCtx,
+          },
+        });
+      }
     }
 
     // Flight recorder read-back (manifest flight_recorder): the agent can list
     // its own recent routine runs + recorded steps for the CURRENT user. The
     // (appId, userId) scope is baked host-side — sandbox code cannot widen it.
-    if (config.flightRecorder === true && ctx?.exports?.RunsBinding) {
-      bindings.RUNS = ctx.exports.RunsBinding({
-        props: {
-          appId: config.appId,
-          userId: config.userId,
-          requireExecCtx: useGetReuse,
-        },
-      });
+    if (allowsRoutineRead) {
+      if (testMode) {
+        if (ctx?.exports?.TestRunsBinding) {
+          bindings.RUNS = ctx.exports.TestRunsBinding({
+            props: { session: duplicateTestSession() },
+          });
+        }
+      } else if (ctx?.exports?.RunsBinding) {
+        bindings.RUNS = ctx.exports.RunsBinding({
+          props: {
+            appId: config.appId,
+            userId: config.userId,
+            requireExecCtx: useGetReuse,
+          },
+        });
+      }
     }
 
     // gx.test is a host-selected execution mode: declared capabilities remain
@@ -1056,10 +1542,12 @@ export default {
     // with deterministic parent-worker RPC stubs. If a test binding export is
     // missing, fail closed by leaving the capability unavailable; never fall
     // through to its production binding.
-    if (config.permissions.includes("notify:owner")) {
+    if (allowsNotify) {
       if (config.testMode === true) {
         if (ctx?.exports?.TestNotifyBinding) {
-          bindings.NOTIFY = ctx.exports.TestNotifyBinding({ props: {} });
+          bindings.NOTIFY = ctx.exports.TestNotifyBinding({
+            props: { session: duplicateTestSession() },
+          });
         }
       } else if (ctx?.exports?.NotifyBinding) {
         // Owner notifications (manifest notify:owner): self-notification only.
@@ -1073,10 +1561,12 @@ export default {
       }
     }
 
-    if (config.permissions.includes("ai:call")) {
+    if (allowsInferenceGenerate) {
       if (config.testMode === true) {
         if (ctx?.exports?.TestAIBinding) {
-          bindings.AI = ctx.exports.TestAIBinding({ props: {} });
+          bindings.AI = ctx.exports.TestAIBinding({
+            props: { session: duplicateTestSession() },
+          });
         }
       } else if (ctx?.exports?.AIBinding) {
         bindings.AI = ctx.exports.AIBinding({
@@ -1109,10 +1599,12 @@ export default {
       }
     }
 
-    if (config.permissions.includes("ai:embed")) {
+    if (allowsInferenceEmbed) {
       if (config.testMode === true) {
         if (ctx?.exports?.TestEmbedBinding) {
-          bindings.EMBED = ctx.exports.TestEmbedBinding({ props: {} });
+          bindings.EMBED = ctx.exports.TestEmbedBinding({
+            props: { session: duplicateTestSession() },
+          });
         }
       } else if (ctx?.exports?.EmbedBinding) {
         bindings.EMBED = ctx.exports.EmbedBinding({
@@ -1135,20 +1627,25 @@ export default {
     }
 
     // Events (pub/sub emit): host-side RPC binding. The signed caller-context
-    // token (emitter app + user + hop, unforgeable) is passed as a prop and
-    // verified inside the binding — the platform WORKER_SECRET never enters the
-    // sandbox isolate. Only present for authenticated, non-routine executions.
+    // token (emitter app + user + hop, unforgeable) stays in the parent-side
+    // execution registry and is resolved from the opaque handle on every emit;
+    // neither it nor the platform WORKER_SECRET enters the sandbox isolate.
+    // Only present for authenticated, non-routine executions.
     // Event delivery does not yet persist the originating routine/run/trace or
     // reserve downstream fanout, so routine EVENTS would escape hard budgets.
-    if (
-      config.callerContextToken && !config.routineContext &&
+    if (testMode) {
+      if (ctx?.exports?.TestEventsBinding) {
+        bindings.EVENTS = ctx.exports.TestEventsBinding({
+          props: { session: duplicateTestSession() },
+        });
+      }
+    } else if (
+      allowsEventPublish && config.callerContextToken &&
+      !config.routineContext &&
       ctx?.exports?.EventsBinding
     ) {
       bindings.EVENTS = ctx.exports.EventsBinding({
-        props: {
-          callerContextToken: config.callerContextToken,
-          requireExecCtx: useGetReuse,
-        },
+        props: {},
       });
     }
 
@@ -1160,16 +1657,26 @@ export default {
     const allowedDestinations = config.allowedDestinations ?? [];
 
     // NetworkBinding via cloudflare:sockets — no worker secret in app code.
-    if (
-      config.permissions.includes("net:connect") && ctx?.exports?.NetworkBinding
-    ) {
-      bindings.NET = ctx.exports.NetworkBinding({
-        props: {
-          userId: config.userId,
-          appId: config.appId,
-          credentials: config.credentials ?? {},
-        },
-      });
+    if (hasNetworkBinding) {
+      if (testMode) {
+        if (ctx?.exports?.TestNetworkBinding) {
+          bindings.NET = ctx.exports.TestNetworkBinding({
+            props: { session: duplicateTestSession() },
+          });
+        }
+      } else if (ctx?.exports?.NetworkBinding) {
+        bindings.NET = ctx.exports.NetworkBinding({
+          props: {
+            userId: config.userId,
+            appId: config.appId,
+            allowImap: allowsImap,
+            allowSmtp: allowsSmtp,
+            strictCredentialRoles: config.declaredEffects != null,
+            allowedDestinations,
+            credentials: config.credentials ?? {},
+          },
+        });
+      }
     }
 
     // SELF binding: only inter-app calls (ultralight.call) still route through
@@ -1177,17 +1684,29 @@ export default {
     // through the CDN, which blocks it). emit + net.* now use dedicated RPC
     // bindings, so net-only apps no longer receive SELF.
     const env = globalThis.__env;
-    const hasInterAppCall = config.permissions.includes("app:call") ||
-      !!config.appCallDependencies?.length;
-    if (hasInterAppCall && env?.SELF) {
-      bindings.SELF = env.SELF;
+    if (hasInterAppCall) {
+      if (testMode) {
+        if (ctx?.exports?.TestAppCallBinding) {
+          bindings.SELF = ctx.exports.TestAppCallBinding({
+            props: { session: duplicateTestSession() },
+          });
+        }
+      } else if (env?.SELF) {
+        bindings.SELF = env.SELF;
+      }
     }
 
     // 5. Create Dynamic Worker
-    const hasOutboundNetwork = config.permissions.includes("net:connect") ||
-      config.permissions.includes("net:fetch") ||
-      hasInterAppCall ||
-      allowedDestinations.length > 0;
+    const hasOutboundNetwork = config.declaredEffects == null
+      // Preserve manifest-only behavior exactly.
+      ? config.permissions.includes("net:connect") ||
+        config.permissions.includes("net:fetch") ||
+        hasInterAppCall ||
+        allowedDestinations.length > 0
+      // galactic.yaml functions receive raw outbound only for an exact network
+      // effect. Email, credentialed HTTP, events, and Agent calls stay on their
+      // dedicated parent-isolate bindings.
+      : allowsNetworkHttp;
     const loadConfig: Parameters<typeof loader.load>[0] = {
       compatibilityDate: "2026-03-01",
       mainModule: "wrapper.js",
@@ -1207,7 +1726,7 @@ export default {
       // high until the staging smoke verifies what counts (net:fetch apps
       // make direct outbound fetches; batch/async jobs make many SDK calls).
       limits: { cpuMs: 10_000, subRequests: 512 },
-      ...(ctx?.exports?.CapacityDynamicTail
+      ...(!testMode && ctx?.exports?.CapacityDynamicTail
         ? { tails: [ctx.exports.CapacityDynamicTail({ props: {} })] }
         : {}),
     };
@@ -1219,11 +1738,24 @@ export default {
     // falling back to `undefined`, which would restore unrestricted egress.
     // (Inter-app calls via SELF and net.* via the NET binding do NOT use raw
     // fetch, so they are unaffected by this.)
-    if (hasOutboundNetwork && ctx?.exports?.OutboundBinding) {
+    if (testMode) {
+      if (ctx?.exports?.TestOutboundBinding) {
+        loadConfig.globalOutbound = ctx.exports.TestOutboundBinding({
+          props: {
+            session: duplicateTestSession(),
+            fixtures: config.httpFixtures ?? [],
+            allowedDestinations,
+          },
+        });
+      }
+    } else if (hasOutboundNetwork && ctx?.exports?.OutboundBinding) {
       loadConfig.globalOutbound = ctx.exports.OutboundBinding({
         props: {
           appId: config.appId,
           userId: config.userId,
+          allowHttp: config.declaredEffects == null
+            ? hasOutboundNetwork
+            : allowsNetworkHttp,
           allowedDestinations,
         },
       });
@@ -1232,7 +1764,19 @@ export default {
     // parent-side binding attaches a vaulted secret to an outbound request BY
     // KEY (app names it, never sees the value) and forwards via guardedFetch.
     // Added to `bindings` (loadConfig.env) before load below.
-    if (
+    if (testMode) {
+      if (ctx?.exports?.TestCredentialBinding) {
+        bindings.CREDENTIALS = ctx.exports.TestCredentialBinding({
+          props: {
+            session: duplicateTestSession(),
+            fixtures: config.httpFixtures ?? [],
+            allowedDestinations,
+            credentialDestinations: config.testCredentialDestinations ?? {},
+          },
+        });
+      }
+    } else if (
+      allowsCredentialHttp &&
       config.credentials && Object.keys(config.credentials).length > 0 &&
       ctx?.exports?.CredentialBinding
     ) {
@@ -1254,10 +1798,12 @@ export default {
     // in parent-side props for exact Tail CPU attribution; no bearer,
     // provider/platform key, hold, or secret value is cloned into the body or
     // binding props.
-    if (config.permissions.includes(COMPUTE_EXEC_PERMISSION)) {
+    if (allowsCompute) {
       if (config.testMode === true) {
         if (ctx?.exports?.TestComputeBinding) {
-          bindings.COMPUTE = ctx.exports.TestComputeBinding({ props: {} });
+          bindings.COMPUTE = ctx.exports.TestComputeBinding({
+            props: { session: duplicateTestSession() },
+          });
         }
       } else if (config.user && ctx?.exports?.ComputeBinding) {
         bindings.COMPUTE = ctx.exports.ComputeBinding({
@@ -1278,22 +1824,23 @@ export default {
         });
       }
     }
-    // Register this execution's per-call billing context and hand the sandbox
-    // only an opaque handle (never the payer/receipt identity). The bindings
-    // resolve it per-RPC — so under future warm-isolate reuse the context is
-    // the CURRENT call's, not a stale baked one. (See execution-context-registry.)
-    execCtxHandle = registerExecutionContext({
-      capacityReceiptId: config.capacityReceiptId ?? null,
-      capacityAgentId: config.capacityAgentId ?? null,
-      aiExecutionId: config.executionId,
-      appId: config.appId ?? null,
-      functionName: functionName ?? null,
-      cloudOperationMetering: config.cloudOperationMetering,
-      cloudOperationBillingConfig: config.cloudOperationBillingConfig,
-      callerContextToken: config.callerContextToken ?? null,
-      routineContext: config.routineContext ?? null,
-      executionDeadlineAtMs,
-    });
+    // Production bindings resolve the current call's billing/authority context
+    // through an opaque handle. gx.test has no production binding that may
+    // resolve this context, so do not create or expose a handle at all.
+    if (!testMode) {
+      execCtxHandle = registerExecutionContext({
+        capacityReceiptId: config.capacityReceiptId ?? null,
+        capacityAgentId: config.capacityAgentId ?? null,
+        aiExecutionId: config.executionId,
+        appId: config.appId ?? null,
+        functionName: functionName ?? null,
+        cloudOperationMetering: config.cloudOperationMetering,
+        cloudOperationBillingConfig: config.cloudOperationBillingConfig,
+        callerContextToken: config.callerContextToken ?? null,
+        routineContext: config.routineContext ?? null,
+        executionDeadlineAtMs,
+      });
+    }
 
     // 5b. Warm-isolate reuse (Cloudflare Worker Loader get()). Reusing a warm
     // isolate across this user's repeated calls cuts billable Dynamic Worker
@@ -1356,7 +1903,7 @@ export default {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            ...(config.capacityReceiptId
+            ...(!testMode && config.capacityReceiptId
               ? { "x-galactic-capacity-receipt": config.capacityReceiptId }
               : {}),
           },
@@ -1369,7 +1916,7 @@ export default {
             functionName,
             args,
             authToken: sandboxAuthToken || "",
-            callerCtx: config.callerContextToken || "",
+            callerCtx: testMode ? "" : config.callerContextToken || "",
           }),
         }),
         { signal: controller.signal },
@@ -1380,6 +1927,7 @@ export default {
 
     const data = (await response.json()) as {
       success: boolean;
+      functionInvoked?: boolean;
       result: unknown;
       logs: Array<
         {
@@ -1403,6 +1951,13 @@ export default {
         details?: unknown;
       };
     };
+    // Seal the exact invocation-owned session before deciding whether the
+    // result qualifies. A tenant may catch a blocked binding error, but it
+    // cannot erase the session's observed-effect evidence.
+    const testRuntimeSnapshot = await snapshotTestRuntimeSession();
+    const { blockedEffects, observedEffects } = testRuntimeSnapshot;
+    const containmentError = gxTestContainmentError(blockedEffects);
+    const executionError = containmentError ?? data.error;
 
     // Credits actually debited for in-sandbox AI calls this execution, from
     // the binding-side ledger. Drives both the receipt and the cross-Agent
@@ -1426,23 +1981,26 @@ export default {
     // Host-authoritative tally of galactic.db mutations this execution (null =
     // read-only wake). Consumed here the same way as the AI spend ledger.
     const flightDb = consumeDbDiff(config.executionId);
-    const diagnostic = data.error
+    const diagnostic = executionError
       ? normalizeOperatorDiagnostic({
-        error: data.error,
+        error: executionError,
         provenance: "developer",
         knownSecrets: [...knownSecrets, sandboxAuthToken],
       })
       : undefined;
-    const errorCode = structuredOutputErrorCode(data.error?.code);
+    const errorCode = containmentError?.code ??
+      structuredOutputErrorCode(executionError?.code);
 
     return {
-      success: data.success,
-      result: data.result,
+      success: data.success && blockedEffects.length === 0,
+      result: blockedEffects.length > 0 ? null : data.result,
       logs: data.logs || [],
       durationMs: Date.now() - startTime,
       aiCostLight,
       dynamicWorkerIdentityCreated,
       dynamicWorkerInvoked,
+      functionInvoked: data.functionInvoked === true,
+      ...(testMode ? { observedEffects } : {}),
       ...(Array.isArray(data.flight?.ai) && data.flight.ai.length > 0
         ? { flightAi: data.flight.ai }
         : {}),
@@ -1453,7 +2011,7 @@ export default {
           error: {
             ...operatorCompatibilityError(
               diagnostic,
-              data.error?.type,
+              executionError?.type,
               knownSecrets,
             ),
             ...(errorCode ? { code: errorCode } : {}),
@@ -1463,30 +2021,54 @@ export default {
         : {}),
     };
   } catch (err) {
+    let failedTestRuntimeSnapshot = EMPTY_TEST_RUNTIME_SNAPSHOT;
+    if (testMode && testRuntimeSession) {
+      try {
+        failedTestRuntimeSnapshot = await snapshotTestRuntimeSession();
+      } catch (snapshotError) {
+        console.error(
+          "[GX-TEST] Failed to snapshot runtime effect evidence",
+          snapshotError,
+        );
+      }
+    }
     const entrypointResolutionFailed = dynamicWorkerIdentityCreated &&
       !dynamicWorkerInvoked;
     const timedOut = err instanceof DOMException && err.name === "AbortError";
-    const diagnostic = normalizeOperatorDiagnostic({
-      error: err,
-      provenance: "platform",
-      platform: {
-        code: timedOut
-          ? "SANDBOX_TIMEOUT"
-          : entrypointResolutionFailed
-          ? "SANDBOX_ENTRYPOINT_UNAVAILABLE"
-          : "SANDBOX_EXECUTION_FAILED",
-        summary: timedOut
-          ? "The Agent execution timed out."
-          : entrypointResolutionFailed
-          ? "The execution sandbox could not resolve the Agent entrypoint."
-          : "The execution sandbox could not complete the run.",
-        detail: entrypointResolutionFailed && err instanceof Error
-          ? err.message
-          : null,
-        retryable: true,
-      },
-      knownSecrets,
-    });
+    // A blocked external effect is disqualifying even when a later timeout,
+    // loader error, or abort becomes the exception that exits the sandbox.
+    // Prefer the invocation-owned containment latch over the secondary
+    // platform failure so gx.test cannot lose evidence through error ordering.
+    const containmentError = gxTestContainmentError(
+      failedTestRuntimeSnapshot.blockedEffects,
+    );
+    const diagnostic = containmentError
+      ? normalizeOperatorDiagnostic({
+        error: containmentError,
+        provenance: "developer",
+        knownSecrets: [...knownSecrets, sandboxAuthToken],
+      })
+      : normalizeOperatorDiagnostic({
+        error: err,
+        provenance: "platform",
+        platform: {
+          code: timedOut
+            ? "SANDBOX_TIMEOUT"
+            : entrypointResolutionFailed
+            ? "SANDBOX_ENTRYPOINT_UNAVAILABLE"
+            : "SANDBOX_EXECUTION_FAILED",
+          summary: timedOut
+            ? "The Agent execution timed out."
+            : entrypointResolutionFailed
+            ? "The execution sandbox could not resolve the Agent entrypoint."
+            : "The execution sandbox could not complete the run.",
+          detail: entrypointResolutionFailed && err instanceof Error
+            ? err.message
+            : null,
+          retryable: true,
+        },
+        knownSecrets: [...knownSecrets, sandboxAuthToken],
+      });
     return {
       success: false,
       result: null,
@@ -1498,6 +2080,10 @@ export default {
       aiCostLight: consumeAiSpend(config.executionId),
       dynamicWorkerIdentityCreated,
       dynamicWorkerInvoked,
+      functionInvoked: false,
+      ...(testMode
+        ? { observedEffects: failedTestRuntimeSnapshot.observedEffects }
+        : {}),
       // Likewise capture any galactic.db mutations that landed before the
       // failure (also frees the tracker entry so it can't leak).
       ...(() => {
@@ -1507,16 +2093,36 @@ export default {
       // If the loader.get() ran before the failure, CF still billed the load —
       // carry the hash so the floor still dedups on the correct isolate identity.
       ...(reuseKeyHash ? { reuseKeyHash } : {}),
-      error: operatorCompatibilityError(
-        diagnostic,
-        err instanceof Error ? err.name : null,
-        knownSecrets,
-      ),
+      error: {
+        ...operatorCompatibilityError(
+          diagnostic,
+          containmentError?.type ??
+            (err instanceof Error ? err.name : null),
+          [...knownSecrets, sandboxAuthToken],
+        ),
+        ...(containmentError ? { code: containmentError.code } : {}),
+      },
       diagnostic,
     };
   } finally {
     // Always release the handle (success, error, abort) so a later resolve
     // fails closed and the registry never leaks entries.
     deregisterExecutionContext(execCtxHandle);
+    if (testRuntimeSession) {
+      try {
+        await testRuntimeSession.close();
+      } catch (error) {
+        console.error("[GX-TEST] Failed to close runtime state session", error);
+      } finally {
+        try {
+          testRuntimeSession[Symbol.dispose]();
+        } catch (error) {
+          console.error(
+            "[GX-TEST] Failed to dispose runtime state session",
+            error,
+          );
+        }
+      }
+    }
   }
 }

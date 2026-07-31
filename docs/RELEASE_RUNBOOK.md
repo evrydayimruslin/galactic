@@ -316,9 +316,20 @@ Secrets (set per environment via `wrangler secret put`; see
 - `ROUTINE_ACTOR_TOKEN_SECRET` / `WORKER_SECRET` — sign internal actor
   tokens (routine + sandbox executions).
 
-Supabase Auth: confirm the PRODUCTION redirect URLs include the launch-web
-production origin (Auth → URL Configuration) before announcing — staging-only
-redirect lists are the classic silent login breaker.
+Supabase Auth is hosted configuration and is **not** changed by `supabase db
+push`. Before announcing passwordless sign-in in each environment, verify in
+Auth settings that:
+
+- the Site URL is that environment's launch-web origin;
+- the redirect allowlist includes its `/auth/confirm` and `/auth/callback`
+  routes; and
+- the Magic Link template matches `supabase/templates/magic-link.html` and
+  carries `.TokenHash` into `/auth/confirm`.
+
+The explicit confirmation page prevents automated email scanners from
+consuming the one-time token. A stale default template or staging-only redirect
+list silently bypasses or breaks that flow, so exercise one real link after
+every hosted Auth configuration change.
 
 First deploy after provisioning: run the durable-execution smoke
 (`scripts/smoke/durable-exec-smoke.mjs`, see SMOKE_CHECKLISTS.md) BEFORE
@@ -448,7 +459,7 @@ Workers analytics). Developer docs: ultralight-spec/conventions/interfaces.md.
    source ~/.nvm/nvm.sh && nvm use
    ULTRALIGHT_TOKEN=... node scripts/smoke/run-release-smoke.mjs \
      --target production \
-     --url https://api.ultralightagent.com \
+     --url https://api.connectgalactic.com \
      --supabase-url https://uavjzycsltdnwblwutmb.supabase.co \
      --exercise-chat
    ```
@@ -458,8 +469,8 @@ Workers analytics). Developer docs: ultralight-spec/conventions/interfaces.md.
    ULTRALIGHT_TOKEN=... \
    node scripts/smoke/launch-web-pages-smoke.mjs \
      --target production \
-     --pages-url https://ultralightagent.com \
-     --api-url https://api.ultralightagent.com \
+     --pages-url https://connectgalactic.com \
+     --api-url https://api.connectgalactic.com \
      --tool-slug <known-public-tool-slug> \
      --admin-tool-id <owned-production-tool-id> \
      --output-dir "$UL_LAUNCH_EVIDENCE_DIR"
@@ -467,7 +478,7 @@ Workers analytics). Developer docs: ultralight-spec/conventions/interfaces.md.
 
    The Pages probes should return the SPA shell, the API probes should return
    valid launch JSON, and the API CORS probe should allow
-   `https://ultralightagent.com`.
+   `https://connectgalactic.com`.
    The production gate summary should reference the same candidate SHA that
    already passed `Staging Launch Gate`, plus the required production workflow
    run links for the release tag. Record those URLs and the resulting smoke

@@ -146,6 +146,45 @@ manifests refresh every referenced blob before publication.
 Complete contracts, response envelopes, security invariants, and retention
 requirements: [Builder Milestone 1](docs/BUILDER_MILESTONE_1.md).
 
+### `galactic.yaml` and Basic Conformance
+
+New TypeScript Agents use a root `galactic.yaml` as their authored release
+contract. It declares each function's authority, required endpoints and setup
+variables, and 1–16 cases for the `basic` conformance profile. Galactic compiles
+that file into the existing internal runtime manifest; do not author
+`manifest.json` alongside it.
+
+For these releases, `gx.test` builds the exact source and runs every declared
+case in a no-side-effect test environment. The result reports exact case,
+function, and declared-effect coverage. A case may use `fixtures.http` for
+bounded, exact raw or credentialed HTTP responses; Galactic intercepts the
+matching request without exposing a credential or contacting the endpoint.
+Unmatched HTTP and every unsupported external effect fail closed, so
+unexercised authority is reported as untested instead of being presented as
+safe. A successful test binds the source, normalized document, prepared
+executable release, and report to a signed v2 attestation that upload verifies
+again.
+
+The prepared ESM executable must contain every runtime dependency. Only the
+literal `ultralight` platform runtime module may remain as an import after
+preparation; remote URL imports, bare package imports, other unresolved module
+loads, and computed `import()` or `require()` targets are rejected as unbound
+runtime code.
+
+New VersionTrust records use a v2 envelope that authenticates the complete trust
+payload together with its algorithm, signer, signing time, and key hint.
+Trust-sensitive consumers additionally verify the exact app, current version,
+runtime, and current compiled-manifest digest. Historical envelopes may remain
+readable for compatibility, but their unauthenticated signer/time/key header is
+never presented as signed provenance.
+
+Legacy `manifest.json` Agents remain supported. Their older V1 test records
+remain visible as history, but cannot qualify an Agent Home invitation,
+trust-sensitive project projection, or guarded promotion because V1 did not
+cryptographically bind the test proof to the release. The full schema, fixture
+boundary, effect catalog, digest model, and migration rules are in
+[`galactic.yaml` v1alpha1](docs/GALACTIC_YAML_V1ALPHA1.md).
+
 ### Critical Function Pattern
 
 Functions receive a **single args object** (not positional params) — this is how the MCP sandbox passes arguments:
@@ -225,7 +264,7 @@ The platform itself is an MCP server at `POST /mcp/platform`:
 | `gx.project({ app_id, since_revision? })` | Get an owner-only coding capsule or revision delta |
 | `gx.download({ name, description, ... })` | Generate a structured Agent skeleton when `app_id` is omitted |
 | `gx.stage({ files?, base_bundle_id?, delete_paths? })` | Upload source once or stage an incremental content-addressed bundle |
-| `gx.test({ bundle_id, function_name, ... })` | Test staged source without retransmitting files |
+| `gx.test({ bundle_id, function_name?, http_fixtures?, ... })` | Test staged source without retransmitting files |
 | `gx.upload({ bundle_id, test_attestation, ... })` | Deploy the exact tested bundle |
 | `gx.download({ app_id, version? })` | Download source only when its contents are needed |
 
@@ -283,22 +322,21 @@ Full documentation: [`skills.md`](skills.md)
 | ANY | `/http/{appId}/{function}` | Direct HTTP access to declared app functions |
 | GET | `/api/apps/{appId}/http-routes` | Safe catalog of declared direct HTTP routes |
 
-Direct HTTP routes are declared in `manifest.json` under `http.routes`. Public
+For new Agents, direct HTTP routes are declared in `galactic.yaml` under
+`spec.http.routes` (legacy `manifest.json` Agents use `http.routes`). Public
 routes must declare methods, use owner billing, and use app-scoped data:
 
-```json
-{
-  "http": {
-    "routes": {
-      "webhook": {
-        "auth": "public",
-        "methods": ["POST"],
-        "cors": { "origins": ["https://example.com"] },
-        "rate_limit": { "rpm": 60 }
-      }
-    }
-  }
-}
+```yaml
+spec:
+  http:
+    routes:
+      webhook:
+        auth: public
+        methods: [POST]
+        cors:
+          origins: [https://example.com]
+        rate_limit:
+          rpm: 60
 ```
 
 ---

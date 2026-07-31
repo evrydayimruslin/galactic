@@ -79,6 +79,23 @@ describe("connect tutorial routing", () => {
     expect(markup).not.toContain("Preparing your scoped coding-agent prompt");
   });
 
+  it("enables the signed-in New-Agent single-create handoff", () => {
+    const markup = renderToStaticMarkup(createElement(ConnectTutorialPanel, {
+      location: {
+        pathname: "/connect",
+        search: "?intent=agent",
+      },
+      onSignIn: () => undefined,
+      signedIn: true,
+    }));
+
+    expect(markup).toContain("Build a new Agent");
+    expect(markup).toContain("one reserved Agent");
+    expect(markup).toContain("issued when copied");
+    expect(markup).not.toContain("Secure key unavailable");
+    expect(markup).not.toContain("waiting for durable single-create binding");
+  });
+
   it("keeps the signed-out draft flow inside the same Connect tutorial", () => {
     const markup = renderToStaticMarkup(createElement(ConnectTutorialPanel, {
       location: {
@@ -95,5 +112,39 @@ describe("connect tutorial routing", () => {
       "Nothing is copied until you sign in.",
     );
     expect(markup).not.toContain("Copy prompt");
+  });
+
+  it("keeps a signed-out Add-agent plan about one undeployed Agent candidate", () => {
+    const markup = renderToStaticMarkup(createElement(ConnectTutorialPanel, {
+      location: {
+        pathname: "/connect",
+        search: "?intent=agent&source=fleet-card",
+      },
+      onSignIn: () => undefined,
+      signedIn: false,
+    }));
+
+    expect(markup).toContain("Build a new Agent");
+    expect(markup).toContain("one reserved Agent after sign-in");
+    expect(markup).toContain("one new-Agent candidate");
+    expect(markup).toContain("cannot deploy or activate it");
+    expect(markup).toContain("manual Deploy step");
+    expect(markup).not.toContain("Connect your coding agent to Galactic");
+  });
+
+  it("describes signed-in Connect as inspection-only", () => {
+    const markup = renderToStaticMarkup(createElement(ConnectTutorialPanel, {
+      location: {
+        pathname: "/connect",
+        search: "",
+      },
+      onSignIn: () => undefined,
+      signedIn: true,
+    }));
+
+    expect(markup).toContain("builder tools, scaffold, and lint guidance");
+    expect(markup).toContain("inspection only");
+    expect(markup).not.toContain("inspect + stage candidate");
+    expect(markup).not.toContain("your workspace Agents");
   });
 });

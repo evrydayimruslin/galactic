@@ -16,6 +16,7 @@ import {
   RoutineScheduleValidationError,
 } from "./routine-schedule.ts";
 import { resolveRoutineRecoveryIncidents } from "./notification-recovery.ts";
+import { requireActiveProSubscription } from "./pro-subscription.ts";
 
 export type RoutineStatus =
   | "active"
@@ -1024,6 +1025,7 @@ export async function resumeRoutine(
   userId: string,
   routineId: string,
 ): Promise<RoutineSummary> {
+  await requireActiveProSubscription(userId, { enabled: true });
   const routine = await getRoutine(userId, routineId);
   if (!routine) throw new Error(`Routine ${routineId} not found`);
   const validation = validateRoutineActivation(routine);

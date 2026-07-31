@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  AGENT_STUDIO_HANDOFF_COPY,
   agentStudioHandoffMcpServerName,
   buildAgentStudioHandoffPrompt,
+  buildSignedOutHandoffPreview,
   credentialRequestFor,
   descriptionIsReady,
   handoffCredentialNeedsRenewal,
@@ -14,11 +16,20 @@ const target = {
   name: "email-ops",
 };
 const sessionId = "7a8c99b7-2875-4a6a-9490-8f03c99587c1";
-const platformMcpUrl = "https://api.galactic.dev/mcp/platform";
+const platformMcpUrl = "https://api.connectgalactic.com/mcp/platform";
 const bearerToken = "gx_0123456789abcdef0123456789abcdef";
-const expiresAt = "2026-07-27T12:30:00.000Z";
+const expiresAt = "2026-07-27T13:00:00.000Z";
 
 describe("Agent Studio coding-agent handoff model", () => {
+  it("describes the locked 60-minute Connect session", () => {
+    const copy =
+      `${AGENT_STUDIO_HANDOFF_COPY.connect.hint} ${AGENT_STUDIO_HANDOFF_COPY.connect.subhead}`;
+    expect(copy).toContain("60 minutes");
+    expect(copy).toContain("60-minute inspection-only session");
+    expect(copy).not.toContain("30 minutes");
+    expect(copy).not.toContain("30-minute session");
+  });
+
   it("gates structural prompts on a description while keeping Connect optional", () => {
     expect(descriptionIsReady("interface", "   ")).toBe(false);
     expect(descriptionIsReady("function", "Look up a room")).toBe(true);
@@ -27,11 +38,11 @@ describe("Agent Studio coding-agent handoff model", () => {
     expect(descriptionIsReady("connect", "")).toBe(true);
   });
 
-  it("requests an exact Agent UUID and a 30-minute scoped credential", () => {
+  it("requests an exact Agent UUID and a 60-minute scoped credential", () => {
     expect(credentialRequestFor("interface", target)).toEqual({
       description: "",
       intent: "interface",
-      requestedTtlSeconds: 1_800,
+      requestedTtlSeconds: 3_600,
       targetAgentId: target.id,
     });
     expect(() =>
@@ -49,7 +60,7 @@ describe("Agent Studio coding-agent handoff model", () => {
       validateHandoffCredential(
         {
           bearerToken,
-          expiresAt: "2026-07-27T12:30:00.000Z",
+          expiresAt: "2026-07-27T13:00:00.000Z",
           platformMcpUrl,
           scope: {
             agentId: "8e145394-8055-46e0-8361-fe0204cc8123",
@@ -79,14 +90,14 @@ describe("Agent Studio coding-agent handoff model", () => {
   });
 
   it("renews cached credentials before fewer than two safe minutes remain", () => {
-    const expiresAt = "2026-07-27T12:30:00.000Z";
+    const expiresAt = "2026-07-27T13:00:00.000Z";
     expect(handoffCredentialNeedsRenewal(
       { expiresAt },
-      Date.parse("2026-07-27T12:27:59.999Z"),
+      Date.parse("2026-07-27T12:57:59.999Z"),
     )).toBe(false);
     expect(handoffCredentialNeedsRenewal(
       { expiresAt },
-      Date.parse("2026-07-27T12:28:00.000Z"),
+      Date.parse("2026-07-27T12:58:00.000Z"),
     )).toBe(true);
     expect(handoffCredentialNeedsRenewal(
       { expiresAt: "not-a-date" },
@@ -98,7 +109,7 @@ describe("Agent Studio coding-agent handoff model", () => {
     const request = credentialRequestFor("interface", target);
     const baseCredential = {
       bearerToken,
-      expiresAt: "2026-07-27T12:30:00.000Z",
+      expiresAt: "2026-07-27T13:00:00.000Z",
       platformMcpUrl,
       scope: { agentId: target.id, kind: "agent" as const },
       sessionId,
@@ -115,7 +126,18 @@ describe("Agent Studio coding-agent handoff model", () => {
       validateHandoffCredential(
         {
           ...baseCredential,
-          platformMcpUrl: "https://api.galactic.dev/mcp/platform?leak=true",
+          platformMcpUrl:
+            "https://api.connectgalactic.com/mcp/platform?leak=true",
+        },
+        request,
+        Date.parse("2026-07-27T12:00:00.000Z"),
+      )
+    ).toThrow(/MCP endpoint/);
+    expect(() =>
+      validateHandoffCredential(
+        {
+          ...baseCredential,
+          platformMcpUrl: "https://evil.example/mcp/platform",
         },
         request,
         Date.parse("2026-07-27T12:00:00.000Z"),
@@ -151,6 +173,8 @@ describe("Agent Studio coding-agent handoff model", () => {
     expect(prompt).toContain("gx.stage({ files })");
     expect(prompt).toContain("gx.test({ bundle_id })");
     expect(prompt).toContain("gx.upload");
+    expect(prompt).toContain("submit the exact tested bundle as a candidate");
+    expect(prompt).toContain("Nothing is deployed by this handoff");
     expect(prompt).toContain("A queue of drafts I can approve.");
     expect(prompt).toContain(`Bearer ${bearerToken}`);
     expect(prompt).toContain(
@@ -182,11 +206,38 @@ describe("Agent Studio coding-agent handoff model", () => {
     const second = buildAgentStudioHandoffPrompt(options);
 
     expect(first).toBe(second);
-    expect(first.match(new RegExp(
-      agentStudioHandoffMcpServerName(sessionId),
-      "g",
-    ))).toHaveLength(2);
+    expect(first.match(
+      new RegExp(
+        agentStudioHandoffMcpServerName(sessionId),
+        "g",
+      ),
+    )).toHaveLength(2);
     expect(first).not.toContain("MCP entry expire");
+    expect(first).toContain('gx.discover({ scope: "tools" })');
+    expect(first).toContain("inspection-only");
+    expect(first).not.toContain('gx.discover({ scope: "library" })');
+    expect(first).not.toContain("gx.stage");
+    expect(first).not.toContain("gx.test");
+    expect(first).not.toContain("gx.upload");
+  });
+
+  it("keeps a signed-out Connect preview inspection-only", () => {
+    const preview = buildSignedOutHandoffPreview(
+      "",
+      platformMcpUrl,
+      "connect",
+    );
+
+    expect(preview).toContain(
+      "Inspect the builder tools, scaffold, and lint guidance",
+    );
+    expect(preview).toContain("Do not enumerate Agents or account data");
+    expect(preview).not.toContain(
+      "List the Agents this temporary session can see",
+    );
+    expect(preview).not.toContain("gx.stage");
+    expect(preview).not.toContain("gx.test");
+    expect(preview).not.toContain("gx.upload");
   });
 
   it("keeps an unfinished required description visibly open in the prompt", () => {

@@ -85,6 +85,7 @@ export interface Env {
   BASE_URL: string;
   LAUNCH_WEB_BASE_URL: string;
   SUBSCRIPTION_CAPACITY_ENABLED: string;
+  PRO_SUBSCRIPTION_REQUIRED: string;
   AGENT_CAPACITY_ENABLED: string;
   /** legacy | shadow | canonical; invalid/unset values fail back to legacy. */
   OPERATOR_ATTENTION_READ_MODE: string;

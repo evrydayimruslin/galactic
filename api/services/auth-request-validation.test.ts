@@ -2,16 +2,122 @@ import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals
 import { assertRejects } from "https://deno.land/std@0.210.0/assert/assert_rejects.ts";
 import {
   validateEmbedBridgeExchangeRequest,
+  validateMagicLinkAuthRequest,
+  validateMagicLinkVerifyRequest,
   validatePageShareExchangeRequest,
   RequestValidationError,
   validateAuthorizeQuery,
   validateDynamicClientRegistrationRequest,
   validateOAuthRevocationRequest,
   validateOAuthTokenExchangeRequest,
+  validatePasswordAuthRequest,
   validateRefreshRequest,
   validateSessionBootstrapRequest,
   validateSignoutRequest,
 } from "./auth-request-validation.ts";
+
+Deno.test("auth request validation: magic-link auth accepts only local continuations", async () => {
+  const payload = await validateMagicLinkAuthRequest(
+    new Request("https://example.com/auth/launch/magic-link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: "person@example.com",
+        next: "/agents?welcome=1",
+      }),
+    }),
+  );
+  assertEquals(payload, {
+    email: "person@example.com",
+    nextPath: "/agents?welcome=1",
+  });
+
+  await assertRejects(
+    () =>
+      validateMagicLinkAuthRequest(
+        new Request("https://example.com/auth/launch/magic-link", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: "person@example.com",
+            next: "https://attacker.example/steal",
+          }),
+        }),
+      ),
+    RequestValidationError,
+    "next must be a local path",
+  );
+});
+
+Deno.test("auth request validation: magic-link verification requires a token hash", async () => {
+  assertEquals(
+    await validateMagicLinkVerifyRequest(
+      new Request("https://example.com/auth/launch/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token_hash: "one-time-token-hash" }),
+      }),
+    ),
+    { tokenHash: "one-time-token-hash" },
+  );
+});
+
+Deno.test("auth request validation: password auth validates mode, email, password, and next path", async () => {
+  const payload = await validatePasswordAuthRequest(
+    new Request("https://example.com/auth/launch/password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: "person@example.com",
+        mode: "sign_up",
+        next: "/agents?welcome=1",
+        password: "correct horse battery staple",
+      }),
+    }),
+  );
+
+  assertEquals(payload, {
+    email: "person@example.com",
+    mode: "sign_up",
+    nextPath: "/agents?welcome=1",
+    password: "correct horse battery staple",
+  });
+
+  await assertRejects(
+    () =>
+      validatePasswordAuthRequest(
+        new Request("https://example.com/auth/launch/password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: "not-an-email",
+            mode: "sign_in",
+            password: "password",
+          }),
+        }),
+      ),
+    RequestValidationError,
+    "Enter a valid email address",
+  );
+
+  await assertRejects(
+    () =>
+      validatePasswordAuthRequest(
+        new Request("https://example.com/auth/launch/password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: "person@example.com",
+            mode: "sign_up",
+            next: "https://attacker.example/steal",
+            password: "valid-password",
+          }),
+        }),
+      ),
+    RequestValidationError,
+    "next must be a local path",
+  );
+});
 
 Deno.test("auth request validation: session bootstrap requires at least one token", async () => {
   await assertRejects(

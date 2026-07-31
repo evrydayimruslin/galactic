@@ -13,6 +13,24 @@ interface CapturedComputeRuntime {
   testBindings: number;
 }
 
+class ComputeTestSession {
+  dup(): ComputeTestSession {
+    return this;
+  }
+
+  sealAndSnapshot(): Promise<{ blockedEffects: string[] }> {
+    return Promise.resolve({ blockedEffects: [] });
+  }
+
+  close(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  [Symbol.dispose](): void {
+    // Local harness owns no remote capability graph.
+  }
+}
+
 function installHarness(): {
   captured: CapturedComputeRuntime;
   restore(): void;
@@ -61,6 +79,51 @@ function installHarness(): {
   } as any;
   globalThis.__ctx = {
     exports: {
+      TestRuntimeSessionFactory: () => ({
+        create: () => Promise.resolve(new ComputeTestSession()),
+      }),
+      FixtureDatabaseBinding: () => ({}),
+      TestOutboundBinding: () => ({
+        fetch: () => Promise.reject(new Error("gx.test outbound blocked")),
+        connect: () => Promise.reject(new Error("gx.test connect blocked")),
+      }),
+      TestCredentialBinding: () => ({
+        authenticatedFetch: () =>
+          Promise.reject(new Error("gx.test credentials blocked")),
+      }),
+      TestEventsBinding: () => ({
+        emit: () => Promise.reject(new Error("gx.test event blocked")),
+      }),
+      TestAppDataBinding: () => ({
+        store: () => Promise.resolve(),
+        load: () => Promise.resolve(null),
+        remove: () => Promise.resolve(),
+        list: () => Promise.resolve([]),
+      }),
+      TestMemoryBinding: () => ({
+        remember: () => Promise.resolve(),
+        recall: () => Promise.resolve(null),
+      }),
+      TestRunsBinding: () => ({
+        recent: () => Promise.resolve({ runs: [] }),
+      }),
+      TestNotifyBinding: () => ({
+        notifyOwner: () => Promise.resolve({ created: false }),
+      }),
+      TestAIBinding: () => ({
+        call: () => Promise.resolve({ content: "" }),
+      }),
+      TestEmbedBinding: () => ({
+        embed: () => Promise.resolve({ embedding: [], usage: {} }),
+      }),
+      TestNetworkBinding: () => ({
+        imapFetchUnseen: () =>
+          Promise.reject(new Error("gx.test IMAP blocked")),
+        smtpSend: () => Promise.reject(new Error("gx.test SMTP blocked")),
+      }),
+      TestAppCallBinding: () => ({
+        fetch: () => Promise.reject(new Error("gx.test Agent call blocked")),
+      }),
       // deno-lint-ignore no-explicit-any
       ComputeBinding: (input: any) => {
         captured.productionBindings += 1;

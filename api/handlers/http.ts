@@ -42,6 +42,7 @@ import {
 } from "../services/execution-settlement.ts";
 import {
   ACCOUNT_CAPACITY_ADMISSION_EXPOSURE_LIGHT,
+  ACCOUNT_CAPACITY_EXECUTION_RESOURCE_CEILING_LIGHT,
   accountCapacityErrorDetails,
   accountCapacityErrorMessage,
   releaseAccountCapacity,
@@ -61,8 +62,8 @@ import {
   fetchAppEntryCode,
   resolveAppRuntimeEnvVars,
   resolveAppSupabaseConfig,
+  resolveFunctionStrictManifestPermissions,
   resolveRuntimeAppCallDependencies,
-  resolveStrictManifestPermissions,
   SupabaseConfigMigrationRequiredError,
 } from "../services/app-runtime-resources.ts";
 import { buildGpuStatusDiagnostics } from "../services/gpu/status.ts";
@@ -74,6 +75,10 @@ import {
   type RequestCallerContext,
   resolveRequestCallerContext,
 } from "../services/request-caller-context.ts";
+import {
+  isProSubscriptionError,
+  requireActiveProSubscription,
+} from "../services/pro-subscription.ts";
 import {
   type ResolvedHttpRoutePolicy,
   resolveHttpRoutePolicy,
@@ -103,6 +108,10 @@ import {
 import { getEnv } from "../lib/env.ts";
 import { mintCallerContextToken } from "../services/agent-caller-context.ts";
 import { classifyRuntimeExecution } from "../services/execution-classification.ts";
+import {
+  AppDeploymentExecutionError,
+  assertAppDeploymentRunnable,
+} from "../services/app-deployment-lifecycle.ts";
 
 let memoryService: MemoryServiceImpl | null | undefined;
 
@@ -169,7 +178,9 @@ export async function handleHttpEndpoint(
   let activeRouteCorsPolicy: RouteCorsPolicyInput = {};
   let capacityReservation: { id: string; userId: string } | null = null;
   let tenantExecutionAttempted = false;
-  const capacityResourceMeter = createCapacityResourceMeter();
+  const capacityResourceMeter = createCapacityResourceMeter({
+    maxLight: ACCOUNT_CAPACITY_EXECUTION_RESOURCE_CEILING_LIGHT,
+  });
 
   function finalize(response: Response): Response {
     applyRouteCorsHeaders(response.headers, request, activeRouteCorsPolicy);
@@ -200,6 +211,57 @@ export async function handleHttpEndpoint(
       return finalize(json({ error: "App not found" }, 404));
     }
 
+    const routePolicy = resolveHttpRoutePolicy(app, functionName);
+    let caller: RequestCallerContext | null = null;
+    let deferredCallerMembershipUserId: string | null = null;
+
+    // Private deployment state is itself private. Authenticate and authorize
+    // the exact owner/function before returning a lifecycle response so a
+    // stale handoff, anonymous caller, non-owner, or out-of-scope owner token
+    // cannot probe a reserved Agent UUID. Public Agents intentionally retain
+    // their lifecycle response without requiring authentication.
+    if (app.visibility === "private") {
+      try {
+        const authOptions = resolveHttpCallerAuthOptions(routePolicy);
+        caller = await resolveRequestCallerContext(request, {
+          authSourcePolicy: "bearer_or_cookie",
+          allowAnonymous: authOptions.allowAnonymous,
+          invalidAuthPolicy: authOptions.invalidAuthPolicy,
+          loadUserApiKey: false,
+          enforceActiveProSubscription: false,
+        });
+      } catch {
+        return finalize(json({ error: "App not found" }, 404));
+      }
+
+      if (
+        caller.authState !== "authenticated" ||
+        caller.userId !== app.owner_id ||
+        !callerCanUseHttpExecutionRoute(caller) ||
+        !callerHasAppAccess(caller, [app.id, app.slug, appId]) ||
+        !callerHasFunctionAccess(caller, [functionName]) ||
+        !callerHasRequiredScope(caller, "apps:call")
+      ) {
+        return finalize(json({ error: "App not found" }, 404));
+      }
+      deferredCallerMembershipUserId = caller.userId;
+    }
+
+    try {
+      assertAppDeploymentRunnable(app);
+    } catch (err) {
+      if (err instanceof AppDeploymentExecutionError) {
+        return finalize(
+          json({
+            error: err.message,
+            type: err.code,
+            deployment_state: err.deploymentState,
+          }, err.status),
+        );
+      }
+      throw err;
+    }
+
     const identityHash = await createHttpRateLimitIdentityHash(request);
     auditBase = {
       appId: app.id,
@@ -210,7 +272,6 @@ export async function handleHttpEndpoint(
       userAgent: request.headers.get("user-agent"),
       origin: request.headers.get("origin"),
     };
-    const routePolicy = resolveHttpRoutePolicy(app, functionName);
     activeRouteCorsPolicy = routePolicyToCorsInput(routePolicy);
 
     // Check if HTTP endpoints are enabled for this app
@@ -274,22 +335,30 @@ export async function handleHttpEndpoint(
       );
     }
 
-    let caller: RequestCallerContext;
-    try {
-      const authOptions = resolveHttpCallerAuthOptions(routePolicy);
-      caller = await resolveRequestCallerContext(request, {
-        authSourcePolicy: "bearer_or_cookie",
-        allowAnonymous: authOptions.allowAnonymous,
-        invalidAuthPolicy: authOptions.invalidAuthPolicy,
-        loadUserApiKey: false,
-      });
-    } catch (err) {
-      return finalize(
-        json({
-          error: err instanceof Error ? err.message : "Authentication required",
-          type: "AUTH_REQUIRED",
-        }, 401),
-      );
+    if (!caller) {
+      try {
+        const authOptions = resolveHttpCallerAuthOptions(routePolicy);
+        caller = await resolveRequestCallerContext(request, {
+          authSourcePolicy: "bearer_or_cookie",
+          allowAnonymous: authOptions.allowAnonymous,
+          invalidAuthPolicy: authOptions.invalidAuthPolicy,
+          loadUserApiKey: false,
+        });
+      } catch (err) {
+        if (isProSubscriptionError(err)) {
+          return finalize(
+            json({ error: err.message, type: err.code }, err.status),
+          );
+        }
+        return finalize(
+          json({
+            error: err instanceof Error
+              ? err.message
+              : "Authentication required",
+            type: "AUTH_REQUIRED",
+          }, 401),
+        );
+      }
     }
     if (!callerCanUseHttpExecutionRoute(caller)) {
       return finalize(
@@ -308,6 +377,30 @@ export async function handleHttpEndpoint(
       app,
       caller,
     );
+    const membershipUserIds = new Set<string>();
+    if (deferredCallerMembershipUserId) {
+      membershipUserIds.add(deferredCallerMembershipUserId);
+    }
+    if (
+      caller.authState === "anonymous" ||
+      caller.userId !== httpRuntime.payerUserId
+    ) {
+      membershipUserIds.add(httpRuntime.payerUserId);
+    }
+    for (const membershipUserId of membershipUserIds) {
+      try {
+        await requireActiveProSubscription(membershipUserId, {
+          enabled: true,
+        });
+      } catch (err) {
+        if (isProSubscriptionError(err)) {
+          return finalize(
+            json({ error: err.message, type: err.code }, err.status),
+          );
+        }
+        throw err;
+      }
+    }
 
     if (httpRuntime.enforceTokenScopes) {
       if (!callerHasAppAccess(caller, [app.id, app.slug, appId])) {
@@ -630,7 +723,10 @@ export async function handleHttpEndpoint(
     // App permissions authorize AI bindings. Upload-derived function metadata
     // independently controls whether this particular HTTP function needs the
     // longer inference execution window.
-    const httpPermissions = resolveStrictManifestPermissions(app).permissions;
+    const {
+      permissions: httpPermissions,
+      declaredEffects,
+    } = resolveFunctionStrictManifestPermissions(app, functionName);
     const canUseModel = httpPermissions.includes("ai:call") ||
       httpPermissions.includes("ai:embed");
     const executionClassification = classifyRuntimeExecution({
@@ -843,11 +939,15 @@ export async function handleHttpEndpoint(
         userId: httpRuntime.sandboxUserId,
         ownerId: app.owner_id,
         expectedVersion: app.current_version || undefined,
+        immutableReleaseDigest: app.deployment_state === "ready"
+          ? app.active_release_digest || undefined
+          : undefined,
         executionId,
         capacityReceiptId: capacityReservation ? receiptId : undefined,
         capacityAgentId: app.id,
         code,
         permissions: httpPermissions,
+        declaredEffects,
         // Read-back only on the HTTP surface: runs.recent works for the
         // authenticated caller; nothing is recorded here (no routine context).
         flightRecorder:

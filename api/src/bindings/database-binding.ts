@@ -25,13 +25,13 @@ import {
   debitD1Usage,
 } from "../../services/cloud-usage.ts";
 import {
-  type BuiltQuery,
   buildCount,
   buildDelete,
   buildInsert,
   buildSelect,
   buildUpdate,
   buildUpsert,
+  type BuiltQuery,
   type CountOp,
   type DeleteOp,
   type InsertOp,
@@ -39,6 +39,7 @@ import {
   type UpdateOp,
   type UpsertOp,
 } from "./scoped-query.ts";
+import { assertBindingEffectAuthority } from "./function-authority.ts";
 
 export type ScopedBatchOp =
   | ({ op: "insert" } & InsertOp)
@@ -54,6 +55,8 @@ interface DatabaseBindingProps {
   databaseId: string;
   appId: string;
   userId: string;
+  allowRead?: boolean;
+  allowWrite?: boolean;
   operationMetering?: CloudOperationMeteringContext | null;
   operationBillingConfig?:
     | Pick<
@@ -92,9 +95,9 @@ export class DatabaseBinding
   // (Cloudflare WorkerEntrypoint contract), so this is call-scoped. Set at each
   // public method entry; meterD1Result resolves the CURRENT metering context
   // from it, so a warm-reused isolate never meters against a stale baked hold.
-  private execCtxHandle?: string;
+  #execCtxHandle?: string;
 
-  private meteringContext() {
+  #meteringContext() {
     // Handle threaded (even if it resolves to null) → resolve-or-FAIL-CLOSED:
     // never fall back to props, which are frozen at load and go STALE under a
     // warm get() reuse. A set-but-unresolvable handle means the execution
@@ -102,8 +105,8 @@ export class DatabaseBinding
     // threaded (undefined: legacy/direct-call path) → props fallback preserves
     // pre-registry behavior. This is a no-op under load() (props == resolved)
     // and the safety linchpin under get() reuse.
-    if (this.execCtxHandle !== undefined) {
-      const resolved = resolveExecutionContext(this.execCtxHandle);
+    if (this.#execCtxHandle !== undefined) {
+      const resolved = resolveExecutionContext(this.#execCtxHandle);
       return {
         metering: resolved?.cloudOperationMetering ?? null,
         billingConfig: resolved?.cloudOperationBillingConfig ?? null,
@@ -118,22 +121,22 @@ export class DatabaseBinding
   // execution (resolved from the same handle metering uses). Host-authoritative
   // — the count is not app-reportable. A no-op on the legacy no-handle path
   // (props carries no executionId) and when nothing resolves.
-  private recordDiff(
+  #recordDiff(
     op: DbMutationOp,
     table: string,
     meta: D1QueryResult["meta"] | undefined,
   ): void {
-    if (this.execCtxHandle === undefined) return;
+    if (this.#execCtxHandle === undefined) return;
     const executionId =
-      resolveExecutionContext(this.execCtxHandle)?.aiExecutionId ?? null;
+      resolveExecutionContext(this.#execCtxHandle)?.aiExecutionId ?? null;
     recordDbMutation(executionId, op, table, meta?.changes);
   }
 
-  private async meterD1Result(
+  async #meterD1Result(
     sql: string,
     meta: D1QueryResult["meta"] | undefined,
   ): Promise<void> {
-    const { metering, billingConfig } = this.meteringContext();
+    const { metering, billingConfig } = this.#meteringContext();
     if (!metering || !meta) {
       return;
     }
@@ -157,7 +160,7 @@ export class DatabaseBinding
    * Credentials (CF_ACCOUNT_ID, CF_API_TOKEN) are read from the parent Worker's env,
    * never exposed to the Dynamic Worker.
    */
-  private async queryD1(
+  async #queryD1(
     sql: string,
     params: unknown[] = [],
   ): Promise<D1QueryResult> {
@@ -211,7 +214,7 @@ export class DatabaseBinding
       },
     };
 
-    await this.meterD1Result(sql, result.meta);
+    await this.#meterD1Result(sql, result.meta);
     return result;
   }
 
@@ -219,11 +222,11 @@ export class DatabaseBinding
   // Every method builds SQL host-side via scoped-query.ts, injecting the caller's
   // user_id from ctx.props. Raw SQL never crosses this boundary.
 
-  private get scopeUserId(): string {
+  get #scopeUserId(): string {
     return this.ctx.props.userId;
   }
 
-  private shapeMeta(meta: D1QueryResult["meta"] | undefined) {
+  #shapeMeta(meta: D1QueryResult["meta"] | undefined) {
     return {
       changes: meta?.changes ?? 0,
       last_row_id: meta?.last_row_id ?? 0,
@@ -233,85 +236,101 @@ export class DatabaseBinding
     };
   }
 
-  private async runBuilt(built: BuiltQuery): Promise<D1QueryResult> {
-    return await this.queryD1(built.sql, built.params);
+  async #runBuilt(built: BuiltQuery): Promise<D1QueryResult> {
+    return await this.#queryD1(built.sql, built.params);
   }
 
-  async select(op: SelectOp, execCtxHandle?: string): Promise<Record<string, unknown>[]> {
-    if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
-    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
-    const r = await this.runBuilt(buildSelect(op, this.scopeUserId));
+  async select(
+    op: SelectOp,
+    execCtxHandle?: string,
+  ): Promise<Record<string, unknown>[]> {
+    assertBindingEffectAuthority(this.ctx.props.allowRead, "database.read");
+    if (execCtxHandle !== undefined) this.#execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.#execCtxHandle, this.ctx.props.requireExecCtx);
+    const r = await this.#runBuilt(buildSelect(op, this.#scopeUserId));
     return r.results ?? [];
   }
 
-  async first(op: SelectOp, execCtxHandle?: string): Promise<Record<string, unknown> | null> {
-    if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
-    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
-    const r = await this.runBuilt(
-      buildSelect({ ...op, limit: 1 }, this.scopeUserId),
+  async first(
+    op: SelectOp,
+    execCtxHandle?: string,
+  ): Promise<Record<string, unknown> | null> {
+    assertBindingEffectAuthority(this.ctx.props.allowRead, "database.read");
+    if (execCtxHandle !== undefined) this.#execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.#execCtxHandle, this.ctx.props.requireExecCtx);
+    const r = await this.#runBuilt(
+      buildSelect({ ...op, limit: 1 }, this.#scopeUserId),
     );
     return r.results?.[0] ?? null;
   }
 
   async count(op: CountOp, execCtxHandle?: string): Promise<number> {
-    if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
-    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
-    const r = await this.runBuilt(buildCount(op, this.scopeUserId));
+    assertBindingEffectAuthority(this.ctx.props.allowRead, "database.read");
+    if (execCtxHandle !== undefined) this.#execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.#execCtxHandle, this.ctx.props.requireExecCtx);
+    const r = await this.#runBuilt(buildCount(op, this.#scopeUserId));
     const row = r.results?.[0] as { count?: number } | undefined;
     return Number(row?.count ?? 0);
   }
 
   async insert(op: InsertOp, execCtxHandle?: string) {
-    if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
-    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
-    const r = await this.runBuilt(buildInsert(op, this.scopeUserId));
-    this.recordDiff("insert", op.table, r.meta);
+    assertBindingEffectAuthority(this.ctx.props.allowWrite, "database.write");
+    if (execCtxHandle !== undefined) this.#execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.#execCtxHandle, this.ctx.props.requireExecCtx);
+    const r = await this.#runBuilt(buildInsert(op, this.#scopeUserId));
+    this.#recordDiff("insert", op.table, r.meta);
     return {
       success: r.success,
       id: r.meta?.last_row_id ?? 0,
-      meta: this.shapeMeta(r.meta),
+      meta: this.#shapeMeta(r.meta),
     };
   }
 
   async update(op: UpdateOp, execCtxHandle?: string) {
-    if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
-    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
-    const r = await this.runBuilt(buildUpdate(op, this.scopeUserId));
-    this.recordDiff("update", op.table, r.meta);
-    return { success: r.success, meta: this.shapeMeta(r.meta) };
+    assertBindingEffectAuthority(this.ctx.props.allowWrite, "database.write");
+    if (execCtxHandle !== undefined) this.#execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.#execCtxHandle, this.ctx.props.requireExecCtx);
+    const r = await this.#runBuilt(buildUpdate(op, this.#scopeUserId));
+    this.#recordDiff("update", op.table, r.meta);
+    return { success: r.success, meta: this.#shapeMeta(r.meta) };
   }
 
   async delete(op: DeleteOp, execCtxHandle?: string) {
-    if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
-    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
-    const r = await this.runBuilt(buildDelete(op, this.scopeUserId));
-    this.recordDiff("delete", op.table, r.meta);
-    return { success: r.success, meta: this.shapeMeta(r.meta) };
+    assertBindingEffectAuthority(this.ctx.props.allowWrite, "database.write");
+    if (execCtxHandle !== undefined) this.#execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.#execCtxHandle, this.ctx.props.requireExecCtx);
+    const r = await this.#runBuilt(buildDelete(op, this.#scopeUserId));
+    this.#recordDiff("delete", op.table, r.meta);
+    return { success: r.success, meta: this.#shapeMeta(r.meta) };
   }
 
   async upsert(op: UpsertOp, execCtxHandle?: string) {
-    if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
-    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
-    const r = await this.runBuilt(buildUpsert(op, this.scopeUserId));
-    this.recordDiff("upsert", op.table, r.meta);
-    return { success: r.success, meta: this.shapeMeta(r.meta) };
+    assertBindingEffectAuthority(this.ctx.props.allowWrite, "database.write");
+    if (execCtxHandle !== undefined) this.#execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.#execCtxHandle, this.ctx.props.requireExecCtx);
+    const r = await this.#runBuilt(buildUpsert(op, this.#scopeUserId));
+    this.#recordDiff("upsert", op.table, r.meta);
+    return { success: r.success, meta: this.#shapeMeta(r.meta) };
   }
 
   async batch(ops: ScopedBatchOp[], execCtxHandle?: string) {
-    if (execCtxHandle !== undefined) this.execCtxHandle = execCtxHandle;
-    assertExecutionContext(this.execCtxHandle, this.ctx.props.requireExecCtx);
+    assertBindingEffectAuthority(this.ctx.props.allowWrite, "database.write");
+    if (execCtxHandle !== undefined) this.#execCtxHandle = execCtxHandle;
+    assertExecutionContext(this.#execCtxHandle, this.ctx.props.requireExecCtx);
     if (!Array.isArray(ops)) {
-      throw new Error("galactic.db.batch expects an array of write operations.");
+      throw new Error(
+        "galactic.db.batch expects an array of write operations.",
+      );
     }
     // Sequential, non-transactional — the D1 REST API has no batch transaction.
     const results = [];
     for (const op of ops) {
-      results.push(await this.dispatchWrite(op));
+      results.push(await this.#dispatchWrite(op));
     }
     return results;
   }
 
-  private async dispatchWrite(op: ScopedBatchOp) {
+  async #dispatchWrite(op: ScopedBatchOp) {
     switch (op?.op) {
       case "insert":
         return await this.insert(op);
@@ -324,7 +343,9 @@ export class DatabaseBinding
       default:
         throw new Error(
           `galactic.db.batch: each operation needs op: "insert" | "update" | ` +
-            `"delete" | "upsert" (got ${JSON.stringify((op as { op?: unknown })?.op)}).`,
+            `"delete" | "upsert" (got ${
+              JSON.stringify((op as { op?: unknown })?.op)
+            }).`,
         );
     }
   }

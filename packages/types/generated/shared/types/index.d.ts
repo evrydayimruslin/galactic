@@ -1,4 +1,5 @@
 import type { ManifestComputeConfig } from "../contracts/compute.ts";
+import type { EnvCredential } from "../contracts/env.ts";
 export { isAgenticInterfaceSpec, validateAgenticInterfaceSpec, } from "../contracts/agentic-interface.ts";
 export type * from "../contracts/agentic-interface.ts";
 export type * from "../contracts/command-turn.ts";
@@ -61,7 +62,7 @@ export interface VersionMetadata {
     bundle_id?: string;
     test_attestation?: VersionTestAttestationMetadata;
 }
-export interface VersionTestAttestationMetadata {
+export interface VersionTestAttestationMetadataV1 {
     schema_version: 1;
     attestation_id: string;
     mode: "deno_execution" | "gpu_validation";
@@ -70,8 +71,55 @@ export interface VersionTestAttestationMetadata {
     token_expires_at: string;
     verified_at: string;
 }
+/**
+ * Compact, owner-safe conformance evidence for one exact tested release.
+ *
+ * Counts intentionally replace raw case IDs, inputs, and effect targets so
+ * durable version metadata cannot become a second test-log or secrets store.
+ */
+export interface VersionTestQualificationMetadata {
+    profile: "basic";
+    document_digest: string;
+    release_digest: string;
+    report_digest: string;
+    compiler_revision: string;
+    runtime_revision: string;
+    policy_revision: string;
+    cases: {
+        declared: number;
+        required: number;
+        passed: number;
+        optional_failed: number;
+    };
+    functions: {
+        declared: number;
+        exercised: number;
+    };
+    effects: {
+        declared: number;
+        exercised: number;
+        untested: number;
+    };
+}
+export interface VersionTestAttestationMetadataV2 {
+    schema_version: 2;
+    attestation_id: string;
+    mode: "deno_execution" | "gpu_validation";
+    source_hash: string;
+    tested_at: string;
+    token_expires_at: string;
+    verified_at: string;
+    qualification: VersionTestQualificationMetadata;
+}
+export type VersionTestAttestationMetadata = VersionTestAttestationMetadataV1 | VersionTestAttestationMetadataV2;
 export interface VersionTrustSignature {
     algorithm: "HMAC-SHA256";
+    /**
+     * Version 2 signs this entire signature header (algorithm, signer, signing
+     * time, and key hint) together with the VersionTrust payload. Historical
+     * records omit the marker and retain their legacy payload-only signature.
+     */
+    envelope_version?: 2;
     signer: string;
     signed_at: string;
     signature: string;
@@ -86,6 +134,16 @@ export interface VersionTrustMetadata {
     description_hash?: string;
     artifact_hash: string;
     artifact_hashes: Record<string, string>;
+    /** SHA-256 of the exact retained ESM executable, when this runtime has one. */
+    executable_hash?: string;
+    /**
+     * V2 only: SHA-256 of the canonical, non-replayable qualification metadata
+     * stored beside this version. When present it is covered by `signature`,
+     * binding the qualification evidence to this exact signed version record.
+     * Legacy V1 test evidence intentionally omits this field and is therefore not
+     * cryptographically bound by VersionTrust.
+     */
+    test_attestation_digest?: string;
     storage_key?: string;
     permissions: string[];
     entrypoints: string[];
@@ -115,6 +173,12 @@ export interface App {
      *  state machine on ToolDetailView. */
     is_installed?: boolean;
     visibility: "private" | "unlisted" | "public";
+    /** Durable deployment lifecycle. Runtime execution fails closed if omitted. */
+    deployment_state?: "legacy" | "materializing" | "setup_required" | "ready" | "disabled";
+    /** Monotonic canonical release lineage for membership deployments. */
+    release_generation?: number;
+    /** Content-addressed executable release selected by a ready Agent. */
+    active_release_digest?: string | null;
     /** True for agents that were already public when the Stripe Connect publish
      *  gate shipped (backfilled once). Exempt agents keep publishing publicly
      *  without Connect; new public agents are not exempt. */
@@ -240,6 +304,8 @@ export interface EnvSchemaEntry {
     input?: "text" | "password" | "email" | "number" | "url" | "textarea";
     placeholder?: string;
     help?: string;
+    group?: string;
+    credential?: EnvCredential;
 }
 export declare const ENV_VAR_LIMITS: EnvVarLimits;
 /**
@@ -922,7 +988,7 @@ export declare const WORKER_MS_PER_CLOUD_UNIT = 250;
  *
  * Cloudflare's paid Workers rate is $0.30 / million requests. At the canonical
  * 100 Light / USD exchange rate that is 0.00003 Light per request. Unlike the
- * five-hour/weekly plan ceilings, this is a resource fact rather than an
+ * weekly plan ceiling, this is a resource fact rather than an
  * admission estimate: one admitted execution records the requests it actually
  * caused and never charges a hypothetical timeout.
  */
@@ -1096,7 +1162,7 @@ export declare const TIER_LIMITS: {
 };
 /** @deprecated No tiers — always returns true for backward compatibility. */
 export declare function isProTier(_tier: Tier | string): boolean;
-export declare const ALLOWED_EXTENSIONS: readonly [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".jsonc", ".css", ".scss", ".less", ".html", ".htm", ".xml", ".svg", ".md", ".mdx", ".txt", ".csv", ".sql", ".yaml", ".yml", ".toml", ".ini", ".conf", ".env", ".env.example", ".env.local", ".sh", ".bash", ".py", ".rb", ".go", ".rs", ".java", ".kt", ".c", ".cpp", ".h", ".hpp", ".wasm", ".graphql", ".gql", ".prisma", ".lock", ".gitignore", ".dockerignore", ".dockerfile", ".editorconfig"];
+export declare const ALLOWED_EXTENSIONS: readonly [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".jsonc", ".css", ".scss", ".less", ".html", ".htm", ".xml", ".svg", ".md", ".mdx", ".txt", ".csv", ".sql", ".yaml", ".yml", ".toml", ".ini", ".conf", ".env.example", ".sh", ".bash", ".py", ".rb", ".go", ".rs", ".java", ".kt", ".c", ".cpp", ".h", ".hpp", ".wasm", ".graphql", ".gql", ".prisma", ".lock", ".gitignore", ".dockerignore", ".dockerfile", ".editorconfig"];
 export declare const MAX_UPLOAD_SIZE_BYTES: number;
 export declare const MAX_FILES_PER_UPLOAD = 50;
 export interface UserContext {

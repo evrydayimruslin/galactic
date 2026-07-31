@@ -34,11 +34,12 @@ import {
   resolveAppRuntimeEnvVars,
   resolveAppSupabaseConfig,
   resolveFunctionExecutionPolicy,
+  resolveFunctionStrictManifestPermissions,
   resolveRuntimeAppCallDependencies,
-  resolveStrictManifestPermissions,
   SupabaseConfigMigrationRequiredError,
 } from "../services/app-runtime-resources.ts";
 import { getManifestAllowedDestinations } from "../services/trust.ts";
+import { parseAppManifest } from "../services/app-settings.ts";
 import { buildGpuStatusDiagnostics } from "../services/gpu/status.ts";
 import {
   callerCanUseLegacyExecutionRoute,
@@ -51,6 +52,7 @@ import {
   type RequestCallerContext,
   resolveRequestCallerContext,
 } from "../services/request-caller-context.ts";
+import { isProSubscriptionError } from "../services/pro-subscription.ts";
 import { routineTraceContextFromCaller } from "../services/routine-trace.ts";
 import {
   createRuntimeOperationMeteringContext,
@@ -61,6 +63,7 @@ import {
 } from "../services/execution-settlement.ts";
 import {
   ACCOUNT_CAPACITY_ADMISSION_EXPOSURE_LIGHT,
+  ACCOUNT_CAPACITY_EXECUTION_RESOURCE_CEILING_LIGHT,
   accountCapacityErrorDetails,
   accountCapacityErrorMessage,
   releaseAccountCapacity,
@@ -84,6 +87,10 @@ import {
 } from "../services/caller-function-permissions.ts";
 import { mintCallerContextToken } from "../services/agent-caller-context.ts";
 import { classifyRuntimeExecution } from "../services/execution-classification.ts";
+import {
+  AppDeploymentExecutionError,
+  assertAppDeploymentRunnable,
+} from "../services/app-deployment-lifecycle.ts";
 
 function toLogEntries(lines: string[]): LogEntry[] {
   return lines.map((message) => ({
@@ -134,7 +141,9 @@ export async function handleRun(
 ): Promise<Response> {
   let capacityReservation: { id: string; userId: string } | null = null;
   let tenantExecutionAttempted = false;
-  const capacityResourceMeter = createCapacityResourceMeter();
+  const capacityResourceMeter = createCapacityResourceMeter({
+    maxLight: ACCOUNT_CAPACITY_EXECUTION_RESOURCE_CEILING_LIGHT,
+  });
   try {
     const body: RunRequest = await request.json();
     const { function: functionName, args = [] } = body;
@@ -150,6 +159,7 @@ export async function handleRun(
         allowAnonymous: false,
       });
     } catch (authErr) {
+      const subscriptionError = isProSubscriptionError(authErr);
       return json(
         {
           success: false,
@@ -157,13 +167,13 @@ export async function handleRun(
           logs: [],
           duration_ms: 0,
           error: {
-            type: "AUTH_REQUIRED",
+            type: subscriptionError ? authErr.code : "AUTH_REQUIRED",
             message: authErr instanceof Error
               ? authErr.message
               : "Authentication required",
           },
         } as RunResponse,
-        401,
+        subscriptionError ? authErr.status : 401,
       );
     }
     if (!callerCanUseLegacyExecutionRoute(caller)) {
@@ -254,6 +264,30 @@ export async function handleRun(
           permission.httpStatus,
         );
       }
+    }
+
+    try {
+      assertAppDeploymentRunnable(app);
+    } catch (err) {
+      if (err instanceof AppDeploymentExecutionError) {
+        return json(
+          {
+            success: false,
+            result: null,
+            logs: [],
+            duration_ms: 0,
+            error: {
+              type: err.code,
+              message: err.message,
+              details: {
+                deployment_state: err.deploymentState,
+              },
+            },
+          } as RunResponse,
+          err.status,
+        );
+      }
+      throw err;
     }
 
     // The reserved _async argument is platform routing, never function input —
@@ -497,7 +531,10 @@ export async function handleRun(
     }
 
     // ── Deno Sandbox Path ──
-    const permissions = resolveStrictManifestPermissions(app).permissions;
+    const {
+      permissions,
+      declaredEffects,
+    } = resolveFunctionStrictManifestPermissions(app, functionName);
     const canUseAi = permissions.includes("ai:call") ||
       permissions.includes("ai:embed");
     const executionClassification = classifyRuntimeExecution({
@@ -692,11 +729,17 @@ export async function handleRun(
         userId,
         ownerId: app.owner_id,
         expectedVersion: app.current_version || undefined,
+        immutableReleaseDigest: app.deployment_state === "ready"
+          ? app.active_release_digest || undefined
+          : undefined,
         executionId,
         capacityReceiptId: capacityReservation ? receiptId : undefined,
         capacityAgentId: app.id,
         code,
         permissions,
+        declaredEffects,
+        flightRecorder:
+          parseAppManifest(app.manifest)?.flight_recorder === true,
         allowedDestinations: getManifestAllowedDestinations(app.manifest),
         userApiKey: runtimeAI.userApiKey,
         aiUnavailableReason: runtimeAI.unavailableReason,

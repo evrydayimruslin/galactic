@@ -2,12 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { AgentWiringView } from "../../../../shared/contracts/agent-grants.ts";
 import type {
-  LaunchAgentFunctionsResponse,
   LaunchAgentCapacityResponse,
+  LaunchAgentFunctionsResponse,
   LaunchAgentHomeResponse,
   LaunchAgentRoutinesResponse,
   LaunchApiKeyListResponse,
   LaunchByokSummaryResponse,
+  LaunchCandidateListResponse,
   LaunchCallerFunctionPermissionsResponse,
   LaunchFleetResponse,
   LaunchInferenceOptionsResponse,
@@ -20,9 +21,9 @@ import type {
   LaunchWalletDetailResponse,
 } from "../../../../shared/contracts/launch.ts";
 import {
-  launchApi,
   type LaunchAgentAdminResponse,
   type LaunchAgentResponse,
+  launchApi,
   type LaunchPlatformPrimitivesResponse,
   type LaunchWalletResponse,
 } from "./api";
@@ -48,6 +49,8 @@ export interface LaunchRouteLiveData {
   feeLeaderboard?: LaunchLeaderboardResponse;
   library?: LaunchLibraryResponse;
   fleet?: LaunchFleetResponse;
+  candidates?: LaunchCandidateListResponse;
+  candidatesError?: string;
   agent?: LaunchAgentResponse;
   agentFunctions?: LaunchAgentFunctionsResponse;
   agentCapacity?: LaunchAgentCapacityResponse;
@@ -201,7 +204,9 @@ export function useLaunchRouteLiveData(
     let accumulated = cached ?? {};
     setState((current) =>
       routeChanged
-        ? (cached ? { data: cached, status: "ready" } : { data: {}, status: "loading" })
+        ? (cached
+          ? { data: cached, status: "ready" }
+          : { data: {}, status: "loading" })
         : {
           data: current.data,
           status: current.status === "idle" ? "loading" : current.status,
@@ -340,8 +345,19 @@ async function loadRouteData(
   switch (route.definition.key) {
     case "home": {
       if (hasLaunchAuthToken()) {
-        const fleet = await launchApi.fleet();
-        return { fleet };
+        const [fleet, candidateResult] = await Promise.all([
+          launchApi.fleet(),
+          attempted(
+            () => launchApi.candidates(),
+            "Built Agents could not be loaded.",
+          ),
+        ]);
+        return {
+          candidates: candidateResult.value,
+          candidatesError: candidateResult.error,
+          fleet,
+          subscription: candidateResult.value?.subscription,
+        };
       }
       const [status, install, primitives] = await Promise.all([
         optional(() => launchApi.status()),
@@ -361,7 +377,9 @@ async function loadRouteData(
         optional(() =>
           launchApi.leaderboard("agent_fee_credit", { period: "30d", limit: 5 })
         ),
-        optional(() => launchApi.leaderboard("fee_credit", { period: "30d", limit: 5 })),
+        optional(() =>
+          launchApi.leaderboard("fee_credit", { period: "30d", limit: 5 })
+        ),
       ]);
       return { agentFeeLeaderboard, feeLeaderboard, store };
     }
@@ -457,6 +475,7 @@ async function loadRouteData(
       return { fleet };
     }
     case "authCallback":
+    case "authConfirm":
       return {};
     case "terms":
     case "privacy":
@@ -474,9 +493,16 @@ function loadAgentHomeRouteData(
   // so an owner never sees a misleading "no routine" state; public
   // compatibility pages ignore the result. Crucially, this promise is not
   // awaited by the core route load, so a hung aggregate cannot hide Pause.
-  return attempted(() => launchApi.agentHome(id)).then((result) => ({
+  return Promise.all([
+    attempted(
+      () => launchApi.agentHome(id),
+      "Agent Home could not be loaded.",
+    ),
+    optional(() => launchApi.subscription()),
+  ]).then(([result, subscription]) => ({
     agentHome: result.value,
     agentHomeError: result.error,
+    subscription,
   }));
 }
 
@@ -496,9 +522,7 @@ async function attempted<T>(
     return { value: await load() };
   } catch (err) {
     return {
-      error: err instanceof Error && err.message
-        ? err.message
-        : fallback,
+      error: err instanceof Error && err.message ? err.message : fallback,
     };
   }
 }

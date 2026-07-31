@@ -92,6 +92,44 @@ function queuedRunRow(overrides: Record<string, unknown> = {}) {
   });
 }
 
+function memberClaimResponse(
+  table: string,
+  body: Record<string, unknown>,
+  options: {
+    routine?: Record<string, unknown> | null;
+    run?: Record<string, unknown> | null;
+  } = {},
+): Response | null {
+  if (table === "claim_member_routine_execution") {
+    if (options.routine === null) return jsonResponse([]);
+    return jsonResponse([{
+      ...routineRow(),
+      ...(options.routine ?? {}),
+      lease_id: body.p_lease_id,
+      lease_expires_at: body.p_lease_expires_at,
+      updated_at: body.p_now,
+    }]);
+  }
+  if (table === "claim_member_routine_run_execution") {
+    if (options.run === null) return jsonResponse([]);
+    const source = {
+      ...queuedRunRow(),
+      ...(options.run ?? {}),
+    };
+    return jsonResponse([{
+      ...source,
+      status: "running",
+      trace_id: source.trace_id || body.p_trace_id,
+      started_at: source.started_at || body.p_now,
+      lease_id: body.p_lease_id,
+      lease_expires_at: body.p_lease_expires_at,
+      attempt_count: Number(source.attempt_count || 0) + 1,
+      next_attempt_at: null,
+    }]);
+  }
+  return null;
+}
+
 // True for the reaper's stale-run probe/write: it is the only routine_runs query
 // that filters on lease_expires_at (activeRunCount / queuedRunCandidates /
 // getRunById never do).
@@ -186,6 +224,11 @@ Deno.test("routine executor: claims due routines and invokes composer MCP", asyn
     const method = init?.method || "GET";
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     dbCalls.push({ table, method, body, url: url.toString() });
+    const claim = memberClaimResponse(
+      table,
+      (body ?? {}) as Record<string, unknown>,
+    );
+    if (claim) return claim;
 
     if (table === "user_routines" && method === "GET") {
       if (url.searchParams.get("status") === "eq.active") {
@@ -255,19 +298,18 @@ Deno.test("routine executor: claims due routines and invokes composer MCP", asyn
       "https://api.example.test/mcp/composer-app-1#composer-app-1",
     );
     assert(mcpCalls[0].auth?.startsWith("Bearer gxr_v1_"));
-    // The claim is a FLAT-filter CAS: status=active AND lease_id IS NULL. A
-    // nested and=(or,or) filter returns an empty PATCH representation (the update
-    // pushes the row out of the filter), which silently orphaned the lease.
-    const claimPatch = dbCalls.find((call) =>
-      call.table === "user_routines" &&
-      call.method === "PATCH" &&
-      (call.body as Record<string, unknown>).lease_id
+    const claimRpc = dbCalls.find((call) =>
+      call.table === "claim_member_routine_execution" &&
+      call.method === "POST"
     );
-    const claimParams = new URL(claimPatch?.url || "https://supabase.example")
-      .searchParams;
-    assertEquals(claimParams.get("lease_id"), "is.null");
-    assertEquals(claimParams.get("status"), "eq.active");
-    assertEquals(claimParams.get("and"), null); // no nested filter
+    const claimBody = claimRpc?.body as Record<string, unknown>;
+    assertEquals(claimBody.p_routine_id, "routine-1");
+    assertEquals(claimBody.p_now, NOW.toISOString());
+    assertEquals(
+      claimBody.p_lease_expires_at,
+      "2026-05-17T12:10:00.000Z",
+    );
+    assert(typeof claimBody.p_lease_id === "string");
     // Expired leases are cleared before claiming so a crashed routine unwedges.
     const clearExpiredPatch = dbCalls.find((call) =>
       call.table === "user_routines" &&
@@ -328,6 +370,12 @@ Deno.test("routine executor: exhausted capacity coalesces a scheduled wake witho
     const method = init?.method || "GET";
     const body = init?.body ? JSON.parse(String(init.body)) : {};
     calls.push({ table, method, body });
+    const claim = memberClaimResponse(table, body, {
+      routine: routineRow({
+        metadata: { launch_managed: true, launch_role: "secondary" },
+      }),
+    });
+    if (claim) return claim;
 
     if (table === "reserve_account_capacity_v3") {
       return jsonResponse([{
@@ -434,6 +482,11 @@ Deno.test("routine executor: a post-success bookkeeping failure does NOT re-run 
     const table = url.pathname.split("/").pop() || "";
     const method = init?.method || "GET";
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    const claim = memberClaimResponse(
+      table,
+      (body ?? {}) as Record<string, unknown>,
+    );
+    if (claim) return claim;
 
     if (table === "user_routines" && method === "GET") {
       if (url.searchParams.get("status") === "eq.active") {
@@ -517,6 +570,7 @@ Deno.test("routine executor: retries failed queued runs with backoff", async () 
   const restoreEnv = installEnv();
   const originalFetch = globalThis.fetch;
   const runPatches: Array<{ body: Record<string, unknown>; url: string }> = [];
+  const runClaimBodies: Array<Record<string, unknown>> = [];
   let queuedCandidatesFilter: string | null = null;
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -524,6 +578,17 @@ Deno.test("routine executor: retries failed queued runs with backoff", async () 
     const table = url.pathname.split("/").pop() || "";
     const method = init?.method || "GET";
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    if (table === "claim_member_routine_run_execution") {
+      runClaimBodies.push(body as Record<string, unknown>);
+    }
+    const claim = memberClaimResponse(
+      table,
+      (body ?? {}) as Record<string, unknown>,
+      {
+        run: queuedRunRow({ trigger: "manual", attempt_count: 1 }),
+      },
+    );
+    if (claim) return claim;
 
     if (table === "user_routines" && method === "GET") {
       if (url.searchParams.get("status") === "eq.active") {
@@ -600,15 +665,9 @@ Deno.test("routine executor: retries failed queued runs with backoff", async () 
       ),
       "queued candidates must be filtered by next_attempt_at",
     );
-    // The claim is the at-most-once guard: CAS gated on the row still queued.
-    const claimPatch = runPatches.find((patch) =>
-      patch.body.status === "running"
-    );
-    assertEquals(
-      new URL(claimPatch?.url || "https://supabase.example").searchParams
-        .get("status"),
-      "eq.queued",
-    );
+    assertEquals(runClaimBodies.length, 1);
+    assertEquals(runClaimBodies[0].p_run_id, "run-1");
+    assertEquals(runClaimBodies[0].p_now, NOW.toISOString());
 
     const retryPatch = runPatches.find((patch) =>
       patch.body.status === "queued"
@@ -667,6 +726,12 @@ Deno.test("routine executor: manual runs cannot bypass an exhausted daily budget
     const table = url.pathname.split("/").pop() || "";
     const method = init?.method || "GET";
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    const claim = memberClaimResponse(
+      table,
+      (body ?? {}) as Record<string, unknown>,
+      { routine: budgeted(), run: queuedRunRow({ trigger: "manual" }) },
+    );
+    if (claim) return claim;
 
     if (table === "user_routines" && method === "GET") {
       return jsonResponse([budgeted()]);
@@ -758,6 +823,15 @@ Deno.test("routine executor: auto-pauses the routine after consecutive failed at
     const table = url.pathname.split("/").pop() || "";
     const method = init?.method || "GET";
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    const claim = memberClaimResponse(
+      table,
+      (body ?? {}) as Record<string, unknown>,
+      {
+        routine: failing(),
+        run: queuedRunRow({ trigger: "manual", attempt_count: 2 }),
+      },
+    );
+    if (claim) return claim;
 
     if (
       table === "create_user_notification_episode" &&
@@ -861,6 +935,12 @@ Deno.test("routine executor: auto-pauses when a run exceeds max_light_per_run an
     const table = url.pathname.split("/").pop() || "";
     const method = init?.method || "GET";
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    const claim = memberClaimResponse(
+      table,
+      (body ?? {}) as Record<string, unknown>,
+      { routine: capped(), run: queuedRunRow({ total_light: 25 }) },
+    );
+    if (claim) return claim;
 
     if (table === "user_routines" && method === "GET") {
       return jsonResponse([capped()]);
@@ -940,6 +1020,11 @@ Deno.test("routine executor: a hung handler invocation times out into a retry (n
     const table = url.pathname.split("/").pop() || "";
     const method = init?.method || "GET";
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    const claim = memberClaimResponse(
+      table,
+      (body ?? {}) as Record<string, unknown>,
+    );
+    if (claim) return claim;
     if (table === "user_routines" && method === "GET") {
       return jsonResponse([routineRow({ budget_policy: {} })]);
     }
@@ -1016,6 +1101,11 @@ Deno.test("routine executor: dispatches claimed runs to the queue instead of run
     const table = url.pathname.split("/").pop() || "";
     const method = init?.method || "GET";
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    const claim = memberClaimResponse(
+      table,
+      (body ?? {}) as Record<string, unknown>,
+    );
+    if (claim) return claim;
     if (table === "user_routines" && method === "GET") {
       return jsonResponse([routineRow()]);
     }
@@ -1084,12 +1174,22 @@ Deno.test("processQueuedRoutineRun: claims the queued run and executes the handl
   let invokedTraceId: string | null = null;
   let capacityAttribution: Record<string, unknown> | undefined;
   const runPatches: Array<Record<string, unknown>> = [];
+  const runClaimBodies: Array<Record<string, unknown>> = [];
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input.toString());
     const table = url.pathname.split("/").pop() || "";
     const method = init?.method || "GET";
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    if (table === "claim_member_routine_run_execution") {
+      runClaimBodies.push(body as Record<string, unknown>);
+    }
+    const claim = memberClaimResponse(
+      table,
+      (body ?? {}) as Record<string, unknown>,
+      { run: queuedRunRow({ trace_id: null }) },
+    );
+    if (claim) return claim;
     // getRunById loads the enqueued run; it is still "queued" until claimed here.
     if (table === "routine_runs" && method === "GET") {
       return jsonResponse([queuedRunRow({ trace_id: null })]);
@@ -1136,8 +1236,12 @@ Deno.test("processQueuedRoutineRun: claims the queued run and executes the handl
     );
 
     assertEquals(handlerInvoked, true);
-    assertEquals(claimStatusFilter, "eq.queued"); // at-most-once: claim only a queued row
-    const claim = runPatches.find((patch) => patch.status === "running");
+    assertEquals(claimStatusFilter, null);
+    assertEquals(runClaimBodies.length, 1);
+    assertEquals(runClaimBodies[0].p_run_id, "run-1");
+    const claim = {
+      trace_id: runClaimBodies[0].p_trace_id,
+    };
     assert(
       typeof claim?.trace_id === "string" && claim.trace_id.length > 0,
       "claim backfills a legacy null trace before execution",
@@ -1183,6 +1287,10 @@ Deno.test("processQueuedRoutineRun: authorized Run once executes while paused, r
     const body = init?.body
       ? JSON.parse(String(init.body)) as Record<string, unknown>
       : {};
+    const claim = memberClaimResponse(table, body, {
+      run: queuedRunRow(specialRun),
+    });
+    if (claim) return claim;
     if (table === "routine_runs" && method === "GET") {
       return jsonResponse([queuedRunRow(specialRun)]);
     }
@@ -1302,6 +1410,7 @@ Deno.test("processQueuedRoutineRun: stale or tampered operator remediation fails
   const originalFetch = globalThis.fetch;
   let handlerInvoked = false;
   const runPatches: Array<Record<string, unknown>> = [];
+  let runClaimAttempts = 0;
   const specialRun = {
     metadata: { source: "operator_item.run_once" },
     agent_home_action_request_id: "99999999-9999-4999-8999-999999999999",
@@ -1316,6 +1425,13 @@ Deno.test("processQueuedRoutineRun: stale or tampered operator remediation fails
     const body = init?.body
       ? JSON.parse(String(init.body)) as Record<string, unknown>
       : {};
+    if (table === "claim_member_routine_run_execution") {
+      runClaimAttempts += 1;
+    }
+    const claim = memberClaimResponse(table, body, {
+      run: queuedRunRow(specialRun),
+    });
+    if (claim) return claim;
     if (table === "routine_runs" && method === "GET") {
       return jsonResponse([queuedRunRow(specialRun)]);
     }
@@ -1377,6 +1493,8 @@ Deno.test("processQueuedRoutineRun: concurrency admission coalesces and retries 
     const body = init?.body
       ? JSON.parse(String(init.body)) as Record<string, unknown>
       : {};
+    const claim = memberClaimResponse(table, body);
+    if (claim) return claim;
     if (table === "routine_runs" && method === "GET") {
       return jsonResponse([queuedRunRow()]);
     }
@@ -1472,6 +1590,8 @@ Deno.test("processQueuedRoutineRun: tenant capacity-shaped errors cannot imperso
     const body = init?.body
       ? JSON.parse(String(init.body)) as Record<string, unknown>
       : {};
+    const claim = memberClaimResponse(table, body);
+    if (claim) return claim;
     if (table === "routine_runs" && method === "GET") {
       return jsonResponse([queuedRunRow()]);
     }
@@ -1550,6 +1670,7 @@ Deno.test("processQueuedRoutineRun: never executes a queued run after the routin
   const originalFetch = globalThis.fetch;
   let handlerInvoked = false;
   const runPatches: Array<Record<string, unknown>> = [];
+  let runClaimAttempts = 0;
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input.toString());
@@ -1558,6 +1679,11 @@ Deno.test("processQueuedRoutineRun: never executes a queued run after the routin
     const body = init?.body
       ? JSON.parse(String(init.body)) as Record<string, unknown>
       : {};
+    if (table === "claim_member_routine_run_execution") {
+      runClaimAttempts += 1;
+    }
+    const claim = memberClaimResponse(table, body, { run: null });
+    if (claim) return claim;
     if (table === "routine_runs" && method === "GET") {
       return jsonResponse([queuedRunRow()]);
     }
@@ -1585,11 +1711,8 @@ Deno.test("processQueuedRoutineRun: never executes a queued run after the routin
     );
 
     assertEquals(handlerInvoked, false);
-    assert(
-      runPatches.some((patch) =>
-        patch.status === "skipped" && patch.summary === "Routine is error"
-      ),
-    );
+    assertEquals(runClaimAttempts, 1);
+    assertEquals(runPatches.length, 0);
   } finally {
     globalThis.fetch = originalFetch;
     restoreEnv();
@@ -1643,7 +1766,7 @@ Deno.test("processQueuedRoutineRun: a database concurrency denial never invokes 
     if (table === "routine_runs" && method === "GET") {
       return jsonResponse([queuedRunRow()]);
     }
-    if (table === "routine_runs" && method === "PATCH") {
+    if (table === "claim_member_routine_run_execution") {
       claimAttempted = true;
       return jsonResponse({
         code: "P0001",
@@ -1702,6 +1825,8 @@ Deno.test("processQueuedRoutineRun: an unmarked legacy launch routine is quarant
     const body = init?.body
       ? JSON.parse(String(init.body)) as Record<string, unknown>
       : {};
+    const claim = memberClaimResponse(table, body, { run: queuedRunRow() });
+    if (claim) return claim;
     if (table === "routine_runs" && method === "GET") {
       return jsonResponse([queuedRunRow()]);
     }

@@ -22,6 +22,7 @@ import {
   createUlTestAiResponse,
   createUlTestNotifyResponse,
 } from "../services/ul-test-runtime.ts";
+import { compileGalacticAgentYaml } from "../services/galactic-agent-document.ts";
 
 type ScaffoldResult = {
   files: Array<{ path: string; content: string }>;
@@ -43,12 +44,20 @@ function file(result: ScaffoldResult, path: string): string {
   return found!.content;
 }
 
-Deno.test("full-time scaffold: opt-in — the generic scaffold is unchanged without the flag", () => {
+Deno.test("full-time scaffold: opt-in — the generic scaffold remains non-looping", async () => {
   const generic = scaffold(false);
   const index = file(generic, "index.ts");
-  assert(index.includes("scaffoldResponse"), "generic scaffold keeps placeholders");
-  assert(!index.includes("galactic.runs.recent"), "no loop code unless requested");
-  const manifest = JSON.parse(file(generic, "manifest.json"));
+  assert(
+    index.includes("scaffoldResponse"),
+    "generic scaffold keeps placeholders",
+  );
+  assert(
+    !index.includes("galactic.runs.recent"),
+    "no loop code unless requested",
+  );
+  const manifest = (await compileGalacticAgentYaml(
+    file(generic, "galactic.yaml"),
+  )).compiledManifest;
   assertEquals(manifest.flight_recorder, undefined);
   assertEquals(manifest.routines, undefined);
 });
@@ -57,8 +66,8 @@ Deno.test("full-time scaffold: emits the complete file set", () => {
   const paths = scaffold(true).files.map((f) => f.path).sort();
   assertEquals(paths, [
     ".ultralightrc.json",
+    "galactic.yaml",
     "index.ts",
-    "manifest.json",
     "migrations/001_journal.sql",
   ]);
 });
@@ -73,22 +82,35 @@ Deno.test("full-time scaffold: tick() implements the whole loop, for real", () =
   assert(index.includes("wake.intent"), "reads args._routine.intent");
   assert(index.includes("galactic.env.GOAL"), "env-var goal fallback");
   // Review: own journal + platform flight-recorder read-back.
-  assert(index.includes('galactic.db.select("journal"'), "re-reads the journal");
+  assert(
+    index.includes('galactic.db.select("journal"'),
+    "re-reads the journal",
+  );
   assert(index.includes("galactic.runs.recent"), "reads recorded run truth");
   // Reason + record.
   assert(index.includes("galactic.ai("), "reasons with ai()");
   assert(index.includes('galactic.db.insert("journal"'), "journals every wake");
-  assert(index.includes("galactic.notify("), "reports anomalies and milestones");
+  assert(
+    index.includes("galactic.notify("),
+    "reports anomalies and milestones",
+  );
   // The failure path journals, reports, and then throws. A broken wake remains
   // visible while the durable executor truthfully retries/trips its breaker.
   assert(index.includes('outcome = "error"'), "journals reasoning failures");
   assert(index.includes("throw failure"), "surfaces failure to the executor");
   // Extension points are marked for the developer.
-  assertEquals(index.split("EXTENSION POINT").length, 3, "two extension points");
+  assertEquals(
+    index.split("EXTENSION POINT").length,
+    3,
+    "two extension points",
+  );
 });
 
-Deno.test("full-time scaffold: manifest passes the real validator with routine template + flight recorder", () => {
-  const manifest = JSON.parse(file(scaffold(true), "manifest.json"));
+Deno.test("full-time scaffold: galactic.yaml compiles with routine + flight recorder", async () => {
+  const compiled = await compileGalacticAgentYaml(
+    file(scaffold(true), "galactic.yaml"),
+  );
+  const manifest = compiled.compiledManifest;
 
   assertEquals(manifest.flight_recorder, true);
   assertEquals(manifest.permissions, ["ai:call", "notify:owner"]);
@@ -133,28 +155,44 @@ Deno.test("full-time scaffold: manifest passes the real validator with routine t
     "generated manifest must pass the real validator",
   );
   assertEquals(result.valid, true);
+  assertEquals(compiled.cases.map((testCase) => testCase.id), [
+    "tick-basic",
+    "status-basic",
+  ]);
 });
 
-Deno.test("full-time scaffold: gx.test derives only declared runtime authority", () => {
+Deno.test("full-time scaffold: gx.test derives only declared runtime authority", async () => {
   const generated = scaffold(true);
   assert(
     !file(generated, "index.ts").includes("fetch("),
     "comments do not imply undeclared net:fetch authority",
   );
-  assertEquals(resolveUlTestRuntimeManifest(generated.files), {
-    permissions: ["ai:call", "notify:owner"],
-    allowedDestinations: [],
-  });
+  const compiled = await compileGalacticAgentYaml(
+    file(generated, "galactic.yaml"),
+  );
+  assertEquals(
+    resolveUlTestRuntimeManifest(generated.files, compiled.compiledManifest),
+    {
+      permissions: ["ai:call", "notify:owner"],
+      allowedDestinations: [],
+      credentialDestinations: {},
+    },
+  );
   assertEquals(
     resolveUlTestRuntimeManifest([
       { path: "manifest.json", content: "{not valid json" },
     ]),
-    { permissions: [], allowedDestinations: [] },
+    {
+      permissions: [],
+      allowedDestinations: [],
+      credentialDestinations: {},
+    },
     "malformed manifests stay default-deny",
   );
   assertEquals(resolveUlTestRuntimeManifest([]), {
     permissions: [],
     allowedDestinations: [],
+    credentialDestinations: {},
   });
 });
 
@@ -164,7 +202,10 @@ Deno.test("full-time scaffold: journal migration follows the per-user D1 convent
   assert(sql.includes("user_id TEXT NOT NULL"), "user_id column (scoped D1)");
   assert(sql.includes("created_at"), "created_at column");
   assert(sql.includes("updated_at"), "updated_at column");
-  assert(sql.includes("planned_actions"), "separates plans from completed actions");
+  assert(
+    sql.includes("planned_actions"),
+    "separates plans from completed actions",
+  );
   // `trigger` is a SQLite keyword — the column must be wake_trigger.
   assert(sql.includes("wake_trigger"), "avoids the reserved column name");
   assert(sql.includes("idx_journal_user"), "user index");
@@ -174,10 +215,8 @@ Deno.test("full-time scaffold: next steps teach the activation path", () => {
   const result = scaffold(true);
   const steps = result.next_steps.join("\n");
   assert(steps.includes("gx.test"), "test a wake first");
-  assert(steps.includes("_routine"), "shows how to simulate a wake");
-  assert(steps.includes("d1_fixtures"), "stubs journal D1 before deploy");
-  assert(steps.includes('method: "select"'), "stubs journal reads");
-  assert(steps.includes('method: "insert"'), "stubs journal writes");
+  assert(steps.includes("padded-room"), "explains contained rehearsal");
+  assert(steps.includes("galactic.yaml"), "points to declared test cases");
   assert(steps.includes("gx.upload"), "deploy");
   assert(
     steps.includes("test_attestation: tested.test_attestation"),

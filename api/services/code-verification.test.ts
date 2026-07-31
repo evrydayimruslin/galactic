@@ -13,7 +13,12 @@ import {
   matchFilesAgainstHashes,
   readVersionSourceFiles,
 } from "./code-verification.ts";
-import { buildVersionTrustMetadata, sha256Hex } from "./trust.ts";
+import {
+  buildVersionTrustMetadata,
+  canonicalJson,
+  sha256Hex,
+  signWithTrustSecret,
+} from "./trust.ts";
 import {
   __resetVerdictCacheForTest,
   putLiveExecutedBundle,
@@ -174,6 +179,26 @@ Deno.test("readVersionSourceFiles: drops generated bundles, keeps source incl. m
   }
 });
 
+Deno.test("readVersionSourceFiles: galactic.yaml hides the derived runtime manifest", async () => {
+  const env = installEnv({
+    "apps/app_yaml/1.0.0/_source_index.ts": "export const run = () => 1;",
+    "apps/app_yaml/1.0.0/index.ts": "var run=()=>1;",
+    "apps/app_yaml/1.0.0/index.esm.js": "export const run=()=>1;",
+    "apps/app_yaml/1.0.0/galactic.yaml":
+      "apiVersion: agents.connectgalactic.com/v1alpha1\nkind: Agent\n",
+    "apps/app_yaml/1.0.0/manifest.json": '{"name":"server-compiled"}',
+  });
+  try {
+    const files = await readVersionSourceFiles("app_yaml", "1.0.0");
+    assertEquals(files.map((file) => file.path).sort(), [
+      "galactic.yaml",
+      "index.ts",
+    ]);
+  } finally {
+    env.restore();
+  }
+});
+
 Deno.test("readVersionSourceFiles: returns wasm as byte-exact base64 and verifies raw bytes", async () => {
   const wasmBytes = new Uint8Array([0, 97, 255, 128]);
   const env = installEnv({
@@ -238,6 +263,7 @@ Deno.test("verdict: open-code app with matching source => verified + files_match
         { name: "_source_index.ts", content: source },
         { name: "index.ts", content: bundle },
       ],
+      executable: bundle,
     });
     await putLiveExecutedBundle({
       appId: "app_x",
@@ -380,7 +406,7 @@ Deno.test("verdict: open-code app whose source can't be read => filesMatch null 
 Deno.test("verdict: a gx.set rollback verifies the LIVE version, not DB current_version", async () => {
   const env = installEnv();
   try {
-    const mkTrust = (version: string) =>
+    const mkTrust = (version: string, executable: string) =>
       buildVersionTrustMetadata({
         appId: "app_r",
         version,
@@ -393,9 +419,10 @@ Deno.test("verdict: a gx.set rollback verifies the LIVE version, not DB current_
           functions: {},
         },
         files: [{ name: "index.ts", content: "v" + version }],
+        executable,
       });
-    const trust1 = await mkTrust("1.0.0");
-    const trust2 = await mkTrust("2.0.0");
+    const trust1 = await mkTrust("1.0.0", "BUNDLE_1");
+    const trust2 = await mkTrust("2.0.0", "BUNDLE_2");
     // Live KV is pinned to the OLD (validly-signed) 1.0.0 — a rollback — while the
     // DB current_version has advanced to 2.0.0.
     await putLiveExecutedBundle({
@@ -432,6 +459,190 @@ Deno.test("verdict: a gx.set rollback verifies the LIVE version, not DB current_
     assertEquals(verdict.version, "1.0.0");
     assertEquals(verdict.integrity.executed_bundle_status, "ok");
     assertEquals(verdict.verified, true);
+  } finally {
+    env.restore();
+  }
+});
+
+Deno.test("verdict: a freshly attested live bundle must still match signed executable bytes", async () => {
+  const env = installEnv();
+  try {
+    const manifest = {
+      name: "qualified",
+      version: "1.0.0",
+      type: "mcp" as const,
+      entry: { functions: "index.ts" },
+      functions: {},
+    };
+    const trust = await buildVersionTrustMetadata({
+      appId: "app_q",
+      version: "1.0.0",
+      runtime: "deno",
+      manifest,
+      files: [{ name: "index.ts", content: "source" }],
+      executable: "export const exact = true;",
+    });
+    // The sidecar is valid for these live bytes, but the bytes are not the
+    // executable signed into VersionTrust.
+    await putLiveExecutedBundle({
+      appId: "app_q",
+      version: "1.0.0",
+      esmCode: "export const replaced = true;",
+    });
+
+    const verdict = await buildVerificationVerdict({
+      id: "app_q",
+      name: "qualified",
+      current_version: "1.0.0",
+      runtime: "deno",
+      manifest: JSON.stringify(manifest),
+      version_metadata: [{
+        version: "1.0.0",
+        size_bytes: 1,
+        created_at: "t",
+        trust,
+      }],
+      visibility: "private",
+      download_access: "owner",
+      env_schema: {},
+      // deno-lint-ignore no-explicit-any
+    } as any);
+
+    assertEquals(verdict.integrity.executed_bundle_ok, true);
+    assertEquals(verdict.integrity.executed_artifact_match, false);
+    assertEquals(verdict.verified, false);
+  } finally {
+    env.restore();
+  }
+});
+
+Deno.test("verdict: signed trust must bind the live app, version, and runtime", async () => {
+  const env = installEnv();
+  try {
+    const executable = "export const exact = true;";
+    await putLiveExecutedBundle({
+      appId: "app_subject",
+      version: "1.0.0",
+      esmCode: executable,
+    });
+    const baseInput = {
+      manifest: {
+        name: "subject",
+        version: "1.0.0",
+        type: "mcp" as const,
+        entry: { functions: "index.ts" },
+        functions: {},
+      },
+      files: [{ name: "index.ts", content: "source" }],
+      executable,
+    };
+    const mismatchedTrust = [
+      await buildVersionTrustMetadata({
+        ...baseInput,
+        appId: "another_app",
+        version: "1.0.0",
+        runtime: "deno",
+      }),
+      await buildVersionTrustMetadata({
+        ...baseInput,
+        appId: "app_subject",
+        version: "2.0.0",
+        runtime: "deno",
+      }),
+      await buildVersionTrustMetadata({
+        ...baseInput,
+        appId: "app_subject",
+        version: "1.0.0",
+        runtime: "python",
+      }),
+    ];
+
+    for (const trust of mismatchedTrust) {
+      const verdict = await buildVerificationVerdict({
+        id: "app_subject",
+        name: "subject",
+        current_version: "1.0.0",
+        runtime: "deno",
+        manifest: JSON.stringify(baseInput.manifest),
+        version_metadata: [{
+          version: "1.0.0",
+          size_bytes: 1,
+          created_at: "t",
+          trust,
+        }],
+        visibility: "private",
+        download_access: "owner",
+        env_schema: {},
+        // deno-lint-ignore no-explicit-any
+      } as any);
+
+      assertEquals(verdict.integrity.published_signature_valid, false);
+      assertEquals(verdict.verified, false);
+    }
+  } finally {
+    env.restore();
+  }
+});
+
+Deno.test("verdict: legacy trust without a signed executable is historical-only", async () => {
+  const env = installEnv();
+  try {
+    const executable = "export const legacy = true;";
+    const generatedTrust = await buildVersionTrustMetadata({
+      appId: "app_legacy_bytes",
+      version: "1.0.0",
+      runtime: "deno",
+      manifest: {
+        name: "legacy",
+        version: "1.0.0",
+        type: "mcp",
+        entry: { functions: "index.ts" },
+        functions: {},
+      },
+      files: [{ name: "index.ts", content: executable }],
+      // Deliberately omit executable: this models historical VersionTrust.
+    });
+    const { signature: _v2Signature, ...legacyUnsigned } = generatedTrust;
+    const trust = {
+      ...legacyUnsigned,
+      signature: {
+        algorithm: "HMAC-SHA256" as const,
+        // These legacy header fields were not signed and must never surface.
+        signer: "forged-signer",
+        signed_at: "2099-01-01T00:00:00.000Z",
+        signature: await signWithTrustSecret(canonicalJson(legacyUnsigned)),
+        key_hint: "forged-key",
+      },
+    };
+    await putLiveExecutedBundle({
+      appId: "app_legacy_bytes",
+      version: "1.0.0",
+      esmCode: executable,
+    });
+
+    const verdict = await buildVerificationVerdict({
+      id: "app_legacy_bytes",
+      name: "legacy",
+      current_version: "1.0.0",
+      runtime: "deno",
+      manifest: null,
+      version_metadata: [{
+        version: "1.0.0",
+        size_bytes: 1,
+        created_at: "t",
+        trust,
+      }],
+      visibility: "private",
+      download_access: "owner",
+      env_schema: {},
+      // deno-lint-ignore no-explicit-any
+    } as any);
+
+    assertEquals(verdict.integrity.executed_artifact_match, null);
+    assertEquals(verdict.integrity.published_signature_valid, true);
+    assertEquals(verdict.integrity.signer, null);
+    assertEquals(verdict.integrity.signed_at, null);
+    assertEquals(verdict.verified, false);
   } finally {
     env.restore();
   }

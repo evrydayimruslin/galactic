@@ -6,11 +6,12 @@ import {
   type LaunchAgentHomeHealth,
   type LaunchAgentHomeLifecycleState,
   type LaunchAgentHomeRelease,
+  type LaunchAgentHomeReleaseVersion,
   type LaunchAgentHomeRequirement,
   type LaunchAgentHomeResponse,
-  type LaunchCapacityResponse,
   type LaunchAgentRoutineBlocker,
   type LaunchAgentRoutineOverview,
+  type LaunchCapacityResponse,
   type LaunchFunctionSummary,
   type LaunchNetworkDisclosure,
 } from "../../shared/contracts/launch.ts";
@@ -87,6 +88,12 @@ export interface AgentHomeBuildInput {
   callsByRun: ReadonlyMap<string, number>;
   capacity?: LaunchCapacityResponse | null;
   byokConfigured?: boolean;
+  deploymentState?:
+    | "legacy"
+    | "materializing"
+    | "setup_required"
+    | "ready"
+    | "disabled";
   release: AgentHomeReleaseInput;
 }
 
@@ -102,10 +109,11 @@ function callTarget(
   appRef: string,
   functionName: string,
 ): { valid: boolean; targetAppId: string | null } {
-  return input.callTargets.get(agentHomeCallTargetKey(appRef, functionName)) || {
-    valid: false,
-    targetAppId: null,
-  };
+  return input.callTargets.get(agentHomeCallTargetKey(appRef, functionName)) ||
+    {
+      valid: false,
+      targetAppId: null,
+    };
 }
 
 function finiteNonNegative(value: unknown): number {
@@ -170,7 +178,12 @@ function resolveRoutineGrant(
 function lifecycleState(
   routine: LaunchAgentRoutineOverview | null,
   blockers: LaunchAgentRoutineBlocker[],
+  deploymentState: AgentHomeBuildInput["deploymentState"],
 ): LaunchAgentHomeLifecycleState {
+  if (deploymentState === "disabled") return "disabled";
+  if (deploymentState === "materializing") return "needs_setup";
+  if (deploymentState === "setup_required") return "needs_setup";
+  if (deploymentState === "ready" && !routine) return "ready";
   if (!routine) return "needs_setup";
   if (routine.status === "active") return "active";
   if (routine.status === "disabled") return "disabled";
@@ -194,7 +207,9 @@ function healthState(
   routine: LaunchAgentRoutineOverview | null,
 ): LaunchAgentHomeHealth {
   if (!routine || routine.recentRuns.length === 0) return "unknown";
-  if (routine.status === "error" || routine.autoPauseReason || routine.errorReason) {
+  if (
+    routine.status === "error" || routine.autoPauseReason || routine.errorReason
+  ) {
     return "failing";
   }
   const terminal = routine.recentRuns.filter((run) =>
@@ -262,7 +277,9 @@ function permissionAuthority(
   };
 }
 
-function functionAuthority(fn: LaunchFunctionSummary): LaunchAgentHomeAuthorityItem {
+function functionAuthority(
+  fn: LaunchFunctionSummary,
+): LaunchAgentHomeAuthorityItem {
   const readOnly = fn.annotations?.readOnlyHint === true;
   const badges: LaunchAgentHomeAuthorityItem["badges"] = [
     readOnly ? "Read" : "Write",
@@ -287,7 +304,9 @@ function functionAuthority(fn: LaunchFunctionSummary): LaunchAgentHomeAuthorityI
   };
 }
 
-function authorityItems(input: AgentHomeBuildInput): LaunchAgentHomeAuthorityItem[] {
+function authorityItems(
+  input: AgentHomeBuildInput,
+): LaunchAgentHomeAuthorityItem[] {
   const permissions = Array.isArray(input.manifest?.permissions)
     ? input.manifest!.permissions!.filter((value): value is string =>
       typeof value === "string" && value.trim().length > 0
@@ -299,7 +318,8 @@ function authorityItems(input: AgentHomeBuildInput): LaunchAgentHomeAuthorityIte
       permissionAuthority(permission, new Set(input.effectivePermissions))
     ),
   ];
-  const hasNetworkPermission = input.effectivePermissions.includes("net:fetch") ||
+  const hasNetworkPermission =
+    input.effectivePermissions.includes("net:fetch") ||
     input.effectivePermissions.includes("net:connect");
   for (const destination of input.disclosure.destinations) {
     items.push({
@@ -389,7 +409,8 @@ function authorityItems(input: AgentHomeBuildInput): LaunchAgentHomeAuthorityIte
         kind: "agent_call",
         direction: "outbound",
         label: `${dependency.app}.${functionName}`,
-        target: target.targetAppId || matchingGrant?.targetApp.id || dependency.app,
+        target: target.targetAppId || matchingGrant?.targetApp.id ||
+          dependency.app,
         access: dependency.access,
         source: "manifest",
         requested: true,
@@ -411,26 +432,36 @@ function authorityItems(input: AgentHomeBuildInput): LaunchAgentHomeAuthorityIte
       // downstream function while representing different approval paths. In
       // particular, an active broad grant must never erase a pending routine
       // capability (and therefore its owner-approval action) from Agent Home.
-      ? `${item.kind}:${item.source}:${item.actionId || ""}:${item.target || ""}:${item.label}:${item.access}`
+      ? `${item.kind}:${item.source}:${item.actionId || ""}:${
+        item.target || ""
+      }:${item.label}:${item.access}`
       : item.id;
     const existing = deduped.get(key);
-    if (!existing || (!existing.effective && item.effective)) deduped.set(key, item);
+    if (!existing || (!existing.effective && item.effective)) {
+      deduped.set(key, item);
+    }
   }
-  return [...deduped.values()].sort((left, right) => left.id.localeCompare(right.id));
+  return [...deduped.values()].sort((left, right) =>
+    left.id.localeCompare(right.id)
+  );
 }
 
 function setupRequirements(
   input: AgentHomeBuildInput,
 ): LaunchAgentHomeRequirement[] {
+  const recurringRoutineRequired = input.deploymentState !== "setup_required" &&
+    input.deploymentState !== "ready";
   const requirements: LaunchAgentHomeRequirement[] = [{
     id: "routine:primary",
     actionId: null,
     kind: "routine",
     label: "Primary routine",
-    description: "One paused routine proposal defines this Agent's ongoing job.",
-    required: true,
+    description: recurringRoutineRequired
+      ? "One paused routine proposal defines this Agent's ongoing job."
+      : "Optional. Add a routine if this callable Agent should run on a schedule.",
+    required: recurringRoutineRequired,
     configured: input.routine !== null,
-    blocking: input.routine === null,
+    blocking: recurringRoutineRequired && input.routine === null,
     secret: false,
     settingKey: null,
     settingScope: null,
@@ -442,16 +473,18 @@ function setupRequirements(
     updatedAt: null,
     actions: [],
   }];
-  const reportingConfigured = input.effectivePermissions.includes("notify:owner");
+  const reportingConfigured = input.effectivePermissions.includes(
+    "notify:owner",
+  );
   requirements.push({
     id: "reporting:galactic_inbox",
     actionId: null,
     kind: "capability",
     label: "Galactic inbox reporting",
     description: "The Agent can report milestones and anomalies to its owner.",
-    required: true,
+    required: input.routine !== null,
     configured: reportingConfigured,
-    blocking: !reportingConfigured,
+    blocking: input.routine !== null && !reportingConfigured,
     secret: false,
     settingKey: null,
     settingScope: null,
@@ -572,7 +605,8 @@ function setupRequirements(
       actionId: candidate.version,
       kind: "release",
       label: `Review version ${candidate.version}`,
-      description: "This tested version requests authority beyond the live version.",
+      description:
+        "This tested version requests authority beyond the live version.",
       required: false,
       configured: false,
       blocking: false,
@@ -610,12 +644,39 @@ function versionSummary(
   sourceFingerprint: string | null;
   uploadedAt: string | null;
   testedAt: string | null;
+  qualification?: LaunchAgentHomeReleaseVersion["qualification"];
 } {
+  const qualification = metadata?.test_attestation?.schema_version === 2
+    ? metadata.test_attestation.qualification
+    : null;
   return {
     version,
     sourceFingerprint: metadata?.source_hash || null,
     uploadedAt: metadata?.created_at || null,
     testedAt: metadata?.test_attestation?.tested_at || null,
+    qualification: qualification
+      ? {
+        profile: "basic" as const,
+        status: "passed" as const,
+        summary:
+          `Galactic basic test passed · all ${qualification.cases.required} required case${
+            qualification.cases.required === 1 ? "" : "s"
+          } passed${
+            qualification.cases.optional_failed > 0
+              ? ` · ${qualification.cases.optional_failed} optional failed`
+              : ""
+          } · ${qualification.functions.exercised} of ${qualification.functions.declared} functions exercised`,
+        releaseDigest: qualification.release_digest,
+        cases: {
+          declared: qualification.cases.declared,
+          required: qualification.cases.required,
+          passed: qualification.cases.passed,
+          optionalFailed: qualification.cases.optional_failed,
+        },
+        functions: { ...qualification.functions },
+        effects: { ...qualification.effects },
+      }
+      : null,
   };
 }
 
@@ -636,7 +697,9 @@ export function versionWasUploadedAfterLive(
 }
 
 function buildRelease(input: AgentHomeReleaseInput): LaunchAgentHomeRelease {
-  const metadata = Array.isArray(input.versionMetadata) ? input.versionMetadata : [];
+  const metadata = Array.isArray(input.versionMetadata)
+    ? input.versionMetadata
+    : [];
   const candidates = [...new Set(input.versions)].filter((version) => {
     if (!version || version === input.currentVersion) return false;
     const entry = metadataForVersion(metadata, version);
@@ -654,8 +717,12 @@ function buildRelease(input: AgentHomeReleaseInput): LaunchAgentHomeRelease {
       version,
     );
   }).sort((left, right) => {
-    const leftAt = Date.parse(metadataForVersion(metadata, left)?.created_at || "");
-    const rightAt = Date.parse(metadataForVersion(metadata, right)?.created_at || "");
+    const leftAt = Date.parse(
+      metadataForVersion(metadata, left)?.created_at || "",
+    );
+    const rightAt = Date.parse(
+      metadataForVersion(metadata, right)?.created_at || "",
+    );
     return (Number.isFinite(rightAt) ? rightAt : 0) -
       (Number.isFinite(leftAt) ? leftAt : 0);
   });
@@ -701,7 +768,9 @@ export function buildAgentHomeResponse(
   const blockers: LaunchAgentRoutineBlocker[] = [
     ...(input.routine?.blockers || []),
     ...requirements.filter((item) => item.blocking).map((item) => ({
-      code: item.kind === "setting" ? "missing_required_setting" : "routine_required",
+      code: item.kind === "setting"
+        ? "missing_required_setting"
+        : "routine_required",
       message: item.kind === "setting"
         ? `${item.label} must be configured before activation.`
         : item.description || `${item.label} is required.`,
@@ -727,26 +796,33 @@ export function buildAgentHomeResponse(
       message: "A verified live release is required before activation.",
     });
   }
-  const budget: LaunchAgentHomeBudget | null = input.routine && input.budgetUsage
-    ? {
-      unit: "work_units",
-      ceilings: {
-        perRun: input.routine.budgets.maxLightPerRun,
-        daily: input.routine.budgets.maxLightPerDay,
-        monthly: input.routine.budgets.maxLightPerMonth,
-        callsPerRun: input.routine.budgets.maxCallsPerRun,
-      },
-      usage: {
-        lastRun: finiteNonNegative(input.budgetUsage.lastRun),
-        lastRunCalls: Math.floor(finiteNonNegative(input.budgetUsage.lastRunCalls)),
-        daily: finiteNonNegative(input.budgetUsage.daily),
-        monthly: finiteNonNegative(input.budgetUsage.monthly),
-        dayStartedAt: input.budgetUsage.dayStartedAt,
-        monthStartedAt: input.budgetUsage.monthStartedAt,
-      },
-    }
-    : null;
-  const lifecycle = lifecycleState(input.routine, blockers);
+  const budget: LaunchAgentHomeBudget | null =
+    input.routine && input.budgetUsage
+      ? {
+        unit: "work_units",
+        ceilings: {
+          perRun: input.routine.budgets.maxLightPerRun,
+          daily: input.routine.budgets.maxLightPerDay,
+          monthly: input.routine.budgets.maxLightPerMonth,
+          callsPerRun: input.routine.budgets.maxCallsPerRun,
+        },
+        usage: {
+          lastRun: finiteNonNegative(input.budgetUsage.lastRun),
+          lastRunCalls: Math.floor(
+            finiteNonNegative(input.budgetUsage.lastRunCalls),
+          ),
+          daily: finiteNonNegative(input.budgetUsage.daily),
+          monthly: finiteNonNegative(input.budgetUsage.monthly),
+          dayStartedAt: input.budgetUsage.dayStartedAt,
+          monthStartedAt: input.budgetUsage.monthStartedAt,
+        },
+      }
+      : null;
+  const lifecycle = lifecycleState(
+    input.routine,
+    blockers,
+    input.deploymentState,
+  );
   const canOperate = lifecycle === "active" && blockers.length === 0;
   const derivedHealth = healthState(input.routine);
   const health = input.release.integrity === "unverified" &&
@@ -808,10 +884,18 @@ export function buildAgentHomeResponse(
       canEditIdentity: true,
       canEditRoutine: input.routine !== null,
       canManageSettings: input.settings.length > 0,
-      canApproveCapabilities: input.routine?.actions.canApproveCapabilities || false,
-      canActivate: input.routine !== null &&
-        (input.routine.status === "paused" || input.routine.status === "error") &&
-        blockers.length === 0,
+      canApproveCapabilities: input.routine?.actions.canApproveCapabilities ||
+        false,
+      canActivate: blockers.length === 0 &&
+        (
+          input.deploymentState === "setup_required"
+            ? input.routine === null ||
+              input.routine.status === "paused" ||
+              input.routine.status === "error"
+            : input.routine !== null &&
+              (input.routine.status === "paused" ||
+                input.routine.status === "error")
+        ),
       canPause: input.routine?.actions.canPause || false,
       canRunNow: canOperate && (input.routine?.actions.canRunNow || false),
       canPromoteCandidate: release.candidate?.canPromote || false,

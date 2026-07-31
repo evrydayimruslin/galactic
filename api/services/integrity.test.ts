@@ -26,3 +26,39 @@ Deno.test("safety scan rejects the filesystem-based Compute smoke echo command",
     "dangerous-file-system",
   ]);
 });
+
+Deno.test("safety scan never returns credential fragments", () => {
+  const secret = "ghp_" + "z".repeat(36);
+  const result = runSafetyScan([{
+    name: "index.ts",
+    content: `export const token = "${secret}";`,
+  }]);
+
+  assertEquals(result.passed, false);
+  assertEquals(result.issues[0]?.rule, "secret-github-token");
+  assertEquals(result.issues[0]?.file, "index.ts");
+  assertEquals(result.issues[0]?.match, undefined);
+  assertEquals(JSON.stringify(result).includes(secret), false);
+});
+
+Deno.test("safety scan catches quoted structured secrets but permits placeholders", () => {
+  const secret = "GOCSPX-" + "q".repeat(32);
+  const rejected = runSafetyScan([{
+    name: "oauth.json",
+    content: JSON.stringify({ client_secret: secret }),
+  }]);
+  assertEquals(rejected.passed, false);
+  assertEquals(rejected.issues[0]?.rule, "secret-structured-credential");
+  assertEquals(rejected.issues[0]?.match, undefined);
+  assertEquals(JSON.stringify(rejected).includes(secret), false);
+
+  const accepted = runSafetyScan([{
+    name: "oauth.example.json",
+    content: JSON.stringify({
+      api_key: "your-api-key-here",
+      client_secret: "replace-me",
+      private_key: "example-placeholder",
+    }),
+  }]);
+  assertEquals(accepted.passed, true);
+});

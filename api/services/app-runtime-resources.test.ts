@@ -10,6 +10,7 @@ import {
   resolveAppD1StorageDisclosure,
   resolveAppRuntimeEnvVars,
   resolveAppSupabaseConfig,
+  resolveFunctionStrictManifestPermissions,
   resolveManifestPermissions,
   resolveRuntimeAppCallDependencies,
   resolveStrictManifestPermissions,
@@ -134,8 +135,16 @@ Deno.test("app runtime resources: secret/config split — secrets vaulted, per-u
   // ALL per-user values are resolvable host-side by key (net.* + CredentialBinding);
   // the SECRET (USER_TOKEN) exists ONLY here — never in envVars above.
   assertEquals(result.credentials, {
-    USER_TOKEN: { value: "user:enc-user-token", credential: undefined },
-    APP_REGION: { value: "user:enc-user-override", credential: undefined },
+    USER_TOKEN: {
+      value: "user:enc-user-token",
+      credential: undefined,
+      vaulted: true,
+    },
+    APP_REGION: {
+      value: "user:enc-user-override",
+      credential: undefined,
+      vaulted: false,
+    },
   });
   assertEquals(result.missingRequiredSecrets, []);
 });
@@ -241,7 +250,7 @@ Deno.test("app runtime resources: universal credentials stay parent-side and are
 
   assertEquals(result.envVars, { REGION: "plain:enc-region" });
   assertEquals(result.credentials, {
-    ARCHIVE_TOKEN: { value: "plain:enc-token", credential },
+    ARCHIVE_TOKEN: { value: "plain:enc-token", credential, vaulted: true },
   });
   assertEquals(result.missingRequiredSecrets, []);
 });
@@ -264,7 +273,12 @@ Deno.test("app runtime resources: undecryptable required universal settings fail
       fetchFn: async () => new Response(JSON.stringify([]), { status: 200 }),
       supabaseUrl: "https://supabase.example",
       supabaseServiceRoleKey: "service-role",
-      logger: { error: () => undefined },
+      logger: {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+      },
     },
   );
 
@@ -310,7 +324,11 @@ Deno.test("app runtime resources: undeclared dormant secret rows never enter run
 
   assertEquals(decrypted, ["active"]);
   assertEquals(result.credentials, {
-    ACTIVE_TOKEN: { value: "plain:active", credential: undefined },
+    ACTIVE_TOKEN: {
+      value: "plain:active",
+      credential: undefined,
+      vaulted: true,
+    },
   });
   assertEquals(result.envVars, {});
   assertEquals(result.missingRequiredSecrets, []);
@@ -560,6 +578,180 @@ Deno.test("app runtime resources: strict manifest permissions only grant declare
     "compute:exec",
   ]);
   assertEquals(resolution.ignoredPermissions, ["compute:*", "unknown:scope"]);
+});
+
+Deno.test("app runtime resources: function authority safely narrows the app permission ceiling", () => {
+  const app = {
+    manifest: JSON.stringify({
+      permissions: [
+        "storage:read",
+        "storage:write",
+        "ai:call",
+        "net:fetch",
+        "app:call",
+      ],
+      functions: {
+        inspect: {
+          description: "Read local state",
+          authority: {
+            level: "read",
+            effects: {
+              "storage.read": "free",
+              "x-example.audit": "ask",
+            },
+          },
+        },
+        publish: {
+          description: "Write and publish",
+          authority: {
+            level: "external_write",
+            effects: {
+              "storage.write": "free",
+              "network.http": "ask",
+              "agent.call": "ask",
+              "event.publish": "ask",
+            },
+          },
+        },
+      },
+    }),
+  };
+
+  assertEquals(resolveFunctionStrictManifestPermissions(app, "inspect"), {
+    permissions: ["storage:read"],
+    manifestBacked: true,
+    ignoredPermissions: [],
+    declaredEffects: ["storage.read"],
+  });
+  assertEquals(resolveFunctionStrictManifestPermissions(app, "publish"), {
+    permissions: ["app:call", "net:fetch", "storage:write"],
+    manifestBacked: true,
+    ignoredPermissions: [],
+    declaredEffects: [
+      "agent.call",
+      "event.publish",
+      "network.http",
+      "storage.write",
+    ],
+  });
+});
+
+Deno.test("app runtime resources: function authority cannot widen top-level permissions", () => {
+  const resolution = resolveFunctionStrictManifestPermissions({
+    manifest: JSON.stringify({
+      permissions: ["storage:read"],
+      functions: {
+        run: {
+          description: "Attempted widening",
+          authority: {
+            level: "external_write",
+            effects: {
+              "storage.read": "free",
+              "network.http": "free",
+              "credential.http": "free",
+              "database.write": "free",
+            },
+          },
+        },
+      },
+    }),
+  }, "run");
+
+  assertEquals(resolution.permissions, ["storage:read"]);
+  assertEquals(resolution.declaredEffects, [
+    "credential.http",
+    "database.write",
+    "network.http",
+    "storage.read",
+  ]);
+});
+
+Deno.test("app runtime resources: opted-in malformed or missing function authority fails closed", () => {
+  const app = {
+    manifest: JSON.stringify({
+      permissions: ["storage:read", "storage:write"],
+      functions: {
+        valid: {
+          description: "Valid",
+          authority: {
+            level: "read",
+            effects: { "storage.read": "free" },
+          },
+        },
+        malformed: {
+          description: "Malformed",
+          authority: {
+            level: "external_write",
+            effects: { "storage.write": "sometimes" },
+          },
+        },
+        missing_level: {
+          description: "Missing level",
+          authority: {
+            effects: { "storage.write": "free" },
+          },
+        },
+        unknown_field: {
+          description: "Unknown field",
+          authority: {
+            level: "external_write",
+            effects: { "storage.write": "free" },
+            typo: true,
+          },
+        },
+        understated: {
+          description: "Human-facing level understates the capability",
+          authority: {
+            level: "read",
+            effects: { "network.http": "free" },
+          },
+        },
+      },
+    }),
+  };
+
+  assertEquals(
+    resolveFunctionStrictManifestPermissions(app, "malformed")
+      .declaredEffects,
+    [],
+  );
+  assertEquals(
+    resolveFunctionStrictManifestPermissions(app, "malformed").permissions,
+    [],
+  );
+  assertEquals(
+    resolveFunctionStrictManifestPermissions(app, "missing").declaredEffects,
+    [],
+  );
+  assertEquals(
+    resolveFunctionStrictManifestPermissions(app, "missing_level")
+      .declaredEffects,
+    [],
+  );
+  assertEquals(
+    resolveFunctionStrictManifestPermissions(app, "unknown_field")
+      .declaredEffects,
+    [],
+  );
+  assertEquals(
+    resolveFunctionStrictManifestPermissions(app, "understated")
+      .declaredEffects,
+    [],
+  );
+});
+
+Deno.test("app runtime resources: manifest-only apps retain app-level runtime behavior", () => {
+  const resolution = resolveFunctionStrictManifestPermissions({
+    manifest: JSON.stringify({
+      permissions: ["storage:read", "ai:call"],
+      functions: {
+        run: { description: "Legacy function" },
+      },
+    }),
+  }, "run");
+
+  assertEquals(resolution.permissions, ["storage:read", "ai:call"]);
+  assertEquals(resolution.declaredEffects, null);
 });
 
 Deno.test("app runtime resources: widget dependencies become read-only app call grants", () => {

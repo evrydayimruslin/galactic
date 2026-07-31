@@ -25,6 +25,8 @@ on:
       - 'scripts/release/verify-api-compute-deploy-state.test.mjs'
       - 'scripts/release/write-api-compute-disabled-config.mjs'
       - 'scripts/release/write-api-compute-disabled-config.test.mjs'
+      - 'scripts/smoke/gx-test-containment-smoke.mjs'
+      - 'scripts/smoke/gx-test-containment-smoke.test.mjs'
       - '.github/workflows/api-deploy.yml'
   workflow_dispatch:
     inputs:
@@ -96,7 +98,8 @@ jobs:
             scripts/release/parse-cloudflare-worker-version-inventory.test.mjs \
             scripts/release/verify-api-compute-bootstrap-history.test.mjs \
             scripts/release/verify-api-compute-deploy-state.test.mjs \
-            scripts/release/write-api-compute-disabled-config.test.mjs
+            scripts/release/write-api-compute-disabled-config.test.mjs \
+            scripts/smoke/gx-test-containment-smoke.test.mjs
 
       - name: Wrangler Dry Run (Compute disabled)
         run: |
@@ -406,12 +409,23 @@ jobs:
               bootstrap staging "$status" "$version" "api-$GITHUB_SHA"
           fi
 
+      - name: Verify staging gx.test containment
+        id: verify_gx_test_containment
+        env:
+          ULTRALIGHT_TOKEN: ${{ secrets.ULTRALIGHT_TOKEN_STAGING }}
+        run: |
+          set -euo pipefail
+          node ../scripts/smoke/gx-test-containment-smoke.mjs \
+            --url https://ultralight-api-staging.rgn4jz429m.workers.dev \
+            --output "$RUNNER_TEMP/gx-test-containment.json"
+
       - name: Restore prior staging API after an ambiguous deployment
         if: >-
           ${{ always() && steps.compute_target.outputs.mode == 'bound' &&
               steps.deploy_worker.outputs.attempted == 'true' &&
               (steps.deploy_worker.outcome != 'success' ||
-               steps.verify_deploy.outcome != 'success') }}
+               steps.verify_deploy.outcome != 'success' ||
+               steps.verify_gx_test_containment.outcome != 'success') }}
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

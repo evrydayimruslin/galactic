@@ -31,33 +31,37 @@ import {
   AgentFoundationPage,
   HomeFoundationPage,
   LibraryFoundationPage,
-  StoreFoundationPage,
   PrivacyPage,
+  StoreFoundationPage,
   TermsPage,
 } from "./pages/foundation-pages";
-import { LaunchShell } from "./components/launch-chrome";
+import { LaunchShell, Wordmark } from "./components/launch-chrome";
 import {
   NebulaFleetApp,
   NebulaSessionRestoringShell,
 } from "./components/nebula-fleet";
+import { PreAuthFleetHome } from "./components/pre-auth-fleet";
 import { AgentStudioApp } from "./components/agent-studio/agent-studio";
 import {
   SignInModalProvider,
   useSignInModal,
 } from "./components/sign-in-modal";
 import { ConnectTutorialPanel } from "./components/connect-tutorial";
+import { AuthFunnelApp } from "./components/auth-funnel";
 import { parseConnectTutorialContext } from "./lib/connect-tutorial";
 import {
+  establishLaunchConfirmationSession,
+  establishLaunchMagicLinkSession,
   exchangeLaunchBridgeToken,
   getLaunchAuthToken,
-  isLaunchRefreshAvailable,
   isLaunchAuthSessionStorageChange,
+  isLaunchRefreshAvailable,
   LAUNCH_AUTH_SESSION_CHANGED_EVENT,
   launchAuthSessionIdentity,
   normalizeLocalPath,
   recordLaunchAuthDiagnostic,
   refreshLaunchSession,
-  setLaunchAuthToken,
+  resolveMagicLinkNextPath,
 } from "./lib/auth";
 import { consumeExternalReturnRevalidation } from "./lib/external-navigation";
 
@@ -82,6 +86,7 @@ const routeTitles: Record<LaunchRouteKey, string> = {
   settings: "Profile",
   adminAgent: "Agent admin",
   authCallback: "Signing in",
+  authConfirm: "Confirm sign in",
   terms: "Terms of Service",
   privacy: "Privacy Policy",
 };
@@ -232,17 +237,8 @@ export function App(): ReactElement {
 
   const preAuthHome = !authToken && !sessionRestoring &&
     route.definition.key === "home" && !providerCodeMisrouted;
-  useEffect(() => {
-    if (!preAuthHome) return;
-    navigate("/connect", { replace: true, scroll: "preserve" });
-  }, [navigate, preAuthHome]);
-
-  const experienceRoute = preAuthHome
-    ? resolveLaunchRoute("/connect")
-    : route;
-  const experienceLocation = preAuthHome
-    ? { pathname: "/connect", search: location.search }
-    : location;
+  const authFunnelRoute = route.definition.key === "connect" &&
+    parseConnectTutorialContext(location.search).intent === "agent";
 
   // Keep the top-nav item that LED here highlighted: the last primary/account
   // section the user visited sticks through detail pages (e.g. arriving at an
@@ -259,10 +255,12 @@ export function App(): ReactElement {
 
   const agentSummary = live.data.agent?.agent ?? live.data.agent?.tool;
   const routeDecision = {
-    agentRelationship: sessionRestoring ? undefined : agentSummary?.relationship,
+    agentRelationship: sessionRestoring
+      ? undefined
+      : agentSummary?.relationship,
     authenticated: Boolean(authToken),
     loadStatus: live.status,
-    routeKey: experienceRoute.definition.key,
+    routeKey: route.definition.key,
     sessionRestoring,
   } as const;
   const nebulaRoute = shouldUseNebulaRoute(routeDecision);
@@ -271,50 +269,66 @@ export function App(): ReactElement {
     // Remount the application surface when the authenticated owner changes so
     // component-local alert/search/settings state cannot outlive its account.
     <SignInModalProvider key={authSessionIdentity}>
-      {route.definition.key === "authCallback" && !providerCodeMisrouted
+      {preAuthHome
+        ? <PreAuthFleetHome navigate={navigate} />
+        : authFunnelRoute && !providerCodeMisrouted
+        ? (
+          <AuthFunnelApp
+            location={location}
+            navigate={navigate}
+            signedIn={Boolean(authToken)}
+          />
+        )
+        : route.definition.key === "authConfirm"
+        ? <MagicLinkConfirmationPage location={location} />
+        : route.definition.key === "authCallback" && !providerCodeMisrouted
         ? <AuthCallbackPage location={location} />
         : nebulaRoute && !providerCodeMisrouted
         ? sessionRestoring &&
-            experienceRoute.definition.key !== "connect"
+            route.definition.key !== "connect"
           ? (
             <NebulaSessionRestoringShell
-              agentOpen={experienceRoute.definition.key === "agent"}
+              agentOpen={route.definition.key === "agent"}
             />
           )
           : agentStudioRoute
           ? (
             <AgentStudioApp
-              key={experienceRoute.params.slug}
+              key={route.params.slug}
               live={live}
-              location={experienceLocation}
-              route={experienceRoute}
+              location={location}
+              route={route}
               navigate={navigate}
             />
           )
           : (
             <NebulaFleetApp
               live={live}
-              location={experienceLocation}
-              route={experienceRoute}
+              location={location}
+              route={route}
               navigate={navigate}
             />
           )
-        : <LaunchShell
-        accountRoutes={accountRoutes()}
-        activeRoute={activeSection}
-        navigate={navigate}
-        primaryRoutes={primaryRoutes()}
-        title={routeTitles[route.definition.key]}
-      >
-        {providerCodeMisrouted ? <MisroutedAuthCallbackPage /> : (
-          <RouteSwitch
-            live={live}
-            location={location}
-            route={route}
+        : (
+          <LaunchShell
+            accountRoutes={accountRoutes()}
+            activeRoute={activeSection}
             navigate={navigate}
-          />
+            primaryRoutes={primaryRoutes()}
+            title={routeTitles[route.definition.key]}
+          >
+            {providerCodeMisrouted
+              ? <MisroutedAuthCallbackPage />
+              : (
+                <RouteSwitch
+                  live={live}
+                  location={location}
+                  route={route}
+                  navigate={navigate}
+                />
+              )}
+          </LaunchShell>
         )}
-      </LaunchShell>}
     </SignInModalProvider>
   );
 }
@@ -333,23 +347,24 @@ function RouteSwitch(
           navigate={navigate}
         />
       );
-    case "connect":
-      {
-        const context = parseConnectTutorialContext(location.search);
-        const agent = context.agentSlug
-          ? live.data.fleet?.agents.find((item) =>
-            item.agent.slug === context.agentSlug ||
-            item.agent.id === context.agentSlug
-          )?.agent ?? null
-          : null;
-        return <ConnectTutorialPanel
+    case "connect": {
+      const context = parseConnectTutorialContext(location.search);
+      const agent = context.agentSlug
+        ? live.data.fleet?.agents.find((item) =>
+          item.agent.slug === context.agentSlug ||
+          item.agent.id === context.agentSlug
+        )?.agent ?? null
+        : null;
+      return (
+        <ConnectTutorialPanel
           agent={agent}
           dataReady={live.status === "ready" || live.status === "error"}
           location={location}
           onSignIn={openSignIn}
           signedIn={Boolean(getLaunchAuthToken())}
-        />;
-      }
+        />
+      );
+    }
     case "library":
       return (
         <LibraryFoundationPage
@@ -397,11 +412,96 @@ function RouteSwitch(
       );
     case "authCallback":
       return <AuthCallbackPage location={location} />;
+    case "authConfirm":
+      return <MagicLinkConfirmationPage location={location} />;
     case "terms":
       return <TermsPage />;
     case "privacy":
       return <PrivacyPage />;
   }
+}
+
+export function MagicLinkConfirmationPage(
+  { location }: { location: LocationState },
+): ReactElement {
+  const query = useMemo(
+    () => new URLSearchParams(location.search),
+    [location.search],
+  );
+  const tokenHash = query.get("token_hash");
+  const tokenType = query.get("type");
+  const nextPath = resolveMagicLinkNextPath(query.get("next"));
+  const [verifying, setVerifying] = useState(false);
+  const [error, setError] = useState<string | null>(() =>
+    !tokenHash || (tokenType && tokenType !== "email")
+      ? "This sign-in link is incomplete. Request a new link to continue."
+      : null
+  );
+
+  const confirmSignIn = async () => {
+    if (!tokenHash || verifying) return;
+    setVerifying(true);
+    setError(null);
+    try {
+      await establishLaunchMagicLinkSession(tokenHash);
+      window.location.replace(nextPath);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to confirm this sign-in link.",
+      );
+      setVerifying(false);
+    }
+  };
+
+  return (
+    <main className="auth-confirm-page">
+      <section className="auth-confirm-panel">
+        <Wordmark />
+        <div className="signin-mail-icon" aria-hidden="true">
+          <MailCheckIcon />
+        </div>
+        <div className="auth-confirm-copy">
+          <p className="section-label">Email sign in</p>
+          <h1>Continue to Galactic</h1>
+          <p>
+            Press continue to confirm this email sign-in. This extra click keeps
+            automated email scanners from using your one-time link.
+          </p>
+        </div>
+        {error
+          ? (
+            <p className="signin-error auth-confirm-error" role="alert">
+              {error}
+            </p>
+          )
+          : null}
+        <button
+          className="signin-submit"
+          disabled={verifying || !tokenHash}
+          onClick={confirmSignIn}
+          type="button"
+        >
+          {verifying
+            ? (
+              <>
+                <span className="signin-spinner" aria-hidden="true" />
+                Confirming…
+              </>
+            )
+            : "Continue to Galactic"}
+        </button>
+        {error
+          ? (
+            <a className="auth-confirm-home" href="/">
+              Return to Galactic
+            </a>
+          )
+          : null}
+      </section>
+    </main>
+  );
 }
 
 export function AuthCallbackPage(
@@ -414,21 +514,27 @@ export function AuthCallbackPage(
     const hash = new URLSearchParams(window.location.hash.replace(/^#/u, ""));
     const query = new URLSearchParams(location.search);
     const bridgeToken = hash.get("bridge_token");
+    const accessToken = hash.get("access_token");
+    const refreshToken = hash.get("refresh_token");
     const expiresIn = hash.get("expires_in");
     const nextPath = normalizeLocalPath(query.get("next"));
     const refreshHandoff = query.get("session") === "refresh";
     recordLaunchAuthDiagnostic({
       bridgeTokenPresent: Boolean(bridgeToken),
       expiresIn,
-      message: refreshHandoff ? "http_only_refresh_handoff" : undefined,
+      message: refreshHandoff
+        ? "http_only_refresh_handoff"
+        : accessToken
+        ? "email_confirmation_handoff"
+        : undefined,
       nextPath,
       status: "callback_loaded",
     });
 
-    if (!bridgeToken && !refreshHandoff) {
+    if (!bridgeToken && !refreshHandoff && !accessToken) {
       recordLaunchAuthDiagnostic({
         bridgeTokenPresent: false,
-        message: "The launch callback URL did not contain a bridge token.",
+        message: "The launch callback URL did not contain a session token.",
         nextPath,
         status: "callback_missing_bridge",
       });
@@ -445,10 +551,13 @@ export function AuthCallbackPage(
     });
     const establishSession = bridgeToken
       ? exchangeLaunchBridgeToken(bridgeToken).then((response) => {
-        setLaunchAuthToken(response.access_token, response.expires_in);
         return String(response.expires_in ?? expiresIn ?? "");
       })
-      : refreshLaunchSession().then((token) => {
+      : accessToken
+      ? establishLaunchConfirmationSession(accessToken, refreshToken).then(
+        (response) => String(response.expires_in ?? expiresIn ?? ""),
+      )
+      : refreshLaunchSession({ establishSession: true }).then((token) => {
         if (!token) {
           throw new Error("Unable to establish the launch session.");
         }
@@ -501,6 +610,25 @@ export function AuthCallbackPage(
       error={error}
       heading="Connect AI"
     />
+  );
+}
+
+function MailCheckIcon(): ReactElement {
+  return (
+    <svg
+      fill="none"
+      height={24}
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={1.7}
+      viewBox="0 0 24 24"
+      width={24}
+    >
+      <path d="M4 6h16v12H4z" />
+      <path d="m4 7 8 6 8-6" />
+      <path d="m14.5 16 1.5 1.5 3-3" />
+    </svg>
   );
 }
 

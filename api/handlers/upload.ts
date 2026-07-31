@@ -85,6 +85,13 @@ import {
   sourceFileBytes,
 } from "../services/source-file-content.ts";
 import { withInitialVersionBundleLineage } from "../services/upload-lineage.ts";
+import {
+  isProSubscriptionError,
+  requireActiveProSubscription,
+} from "../services/pro-subscription.ts";
+import {
+  assertQualificationMatchesPreparedRelease,
+} from "../services/galactic-qualified-release.ts";
 
 // Export file type for programmatic uploads
 export interface UploadFile {
@@ -223,9 +230,16 @@ export async function handleUpload(request: Request): Promise<Response> {
         );
       }
       userId = user.id;
+      await requireActiveProSubscription(userId, { enabled: true });
       uploadLogger.info("Upload request authenticated", { user_id: userId });
     } catch (authErr: unknown) {
       uploadLogger.warn("Upload authentication failed", { error: authErr });
+      if (isProSubscriptionError(authErr)) {
+        return json(
+          { error: authErr.message, code: authErr.code },
+          authErr.status,
+        );
+      }
       return error("Authentication required. Please sign in to upload.", 401);
     }
     // Note: FK constraint on apps.owner_id has been removed, so no user record needed
@@ -1415,6 +1429,12 @@ export async function handleDraftUpload(
         app_id: appId,
         error: authErr,
       });
+      if (isProSubscriptionError(authErr)) {
+        return json(
+          { error: authErr.message, code: authErr.code },
+          authErr.status,
+        );
+      }
       return error("Authentication required", 401);
     }
 
@@ -1805,6 +1825,9 @@ export async function handleUploadFiles(
   files: UploadFile[],
   options: UploadOptions = {},
 ): Promise<UploadResponse & { docs_generated?: boolean; docs_error?: string }> {
+  // This helper materializes a live legacy Agent. Candidate staging and
+  // conformance use separate stores and remain available before membership.
+  await requireActiveProSubscription(userId, { enabled: true });
   const validatedOptions = validateProgrammaticUploadOptions(options);
   const requestedVisibility = validatedOptions.visibility || "private";
 
@@ -1883,32 +1906,51 @@ export async function handleUploadFiles(
     description: validatedOptions.description,
   });
 
-  let manifest = pipeline.manifest;
-  const exports = pipeline.exports;
-
-  // Interfaces: stamp hashes and stage content-addressed artifacts. Throws
-  // InterfaceArtifactError (status 400) — programmatic callers surface it
-  // like any other upload validation failure.
-  let interfaceArtifacts: InterfaceArtifactFile[] = [];
-  const interfacePrep = await prepareInterfaceArtifacts({
-    manifest,
-    files: pipeline.filesToUpload,
-  });
-  if (interfacePrep) {
-    manifest = interfacePrep.manifest;
-    interfaceArtifacts = interfacePrep.artifacts;
-    // Replace the pipeline's manifest.json with the stamped manifest so the
-    // stored bundle matches the DB record.
-    pipeline.filesToUpload = upsertManifestUploadFile(
-      pipeline.filesToUpload,
-      manifest,
-      (manifestJson) => ({
-        name: "manifest.json",
-        content: new TextEncoder().encode(manifestJson),
-        contentType: "application/json",
-      }),
+  if (
+    options.test_attestation &&
+    pipeline.agentDocument?.sourceKind === "galactic_yaml" &&
+    options.test_attestation.schema_version !== 2
+  ) {
+    throw createHttpError(
+      "galactic.yaml releases require a current V2 gx.test qualification.",
+      400,
     );
   }
+  if (options.test_attestation?.schema_version === 2) {
+    if (
+      !options.source_hash ||
+      pipeline.agentDocument?.sourceKind !== "galactic_yaml"
+    ) {
+      throw createHttpError(
+        "A V2 gx.test qualification requires the exact galactic.yaml source release.",
+        400,
+      );
+    }
+    try {
+      await assertQualificationMatchesPreparedRelease({
+        qualification: options.test_attestation.qualification,
+        prepared: {
+          sourceHash: options.source_hash,
+          documentDigest: pipeline.agentDocument.documentDigest,
+          filesToUpload: pipeline.filesToUpload,
+          interfaceArtifacts: pipeline.interfaceArtifacts,
+          esmBundledCode: pipeline.esmBundledCode,
+        },
+      });
+    } catch (err) {
+      throw createHttpError(
+        err instanceof Error ? err.message : String(err),
+        400,
+      );
+    }
+  }
+
+  const manifest = pipeline.manifest;
+  const exports = pipeline.exports;
+
+  // The shared pipeline stamps interfaces before returning so gx.test and
+  // every upload surface compile the exact same release bytes.
+  const interfaceArtifacts = pipeline.interfaceArtifacts;
 
   // Generate app identity
   const appId = crypto.randomUUID();
@@ -2005,6 +2047,8 @@ export async function handleUploadFiles(
     manifest,
     files: pipeline.filesToUpload,
     storageKey,
+    executable: pipeline.esmBundledCode,
+    testAttestation: options.test_attestation,
   });
   const createPayload: Record<string, unknown> = {
     id: appId,

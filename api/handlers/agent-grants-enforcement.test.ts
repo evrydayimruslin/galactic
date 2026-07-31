@@ -27,6 +27,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 interface HarnessOptions {
   grants?: unknown[];
   onPending?: (body: unknown) => void;
+  onEntitlementCheck?: () => void;
 }
 
 function installHarness(options: HarnessOptions = {}): () => void {
@@ -42,6 +43,8 @@ function installHarness(options: HarnessOptions = {}): () => void {
     name: "Inventory",
     description: "Stock levels.",
     visibility: "public",
+    deployment_state: "legacy",
+    hosting_suspended: false,
     runtime: "deno",
     app_type: "mcp",
     storage_key: "apps/inventory",
@@ -83,10 +86,21 @@ function installHarness(options: HarnessOptions = {}): () => void {
     const p = url.pathname;
 
     if (p === "/auth/v1/user") {
-      return jsonResponse({ id: USER_ID, email: user.email, user_metadata: {} });
+      return jsonResponse({
+        id: USER_ID,
+        email: user.email,
+        user_metadata: {},
+      });
     }
     if (p === "/rest/v1/users") return jsonResponse([user]);
     if (p === "/rest/v1/apps" && method === "GET") return jsonResponse([app]);
+    if (p === "/rest/v1/account_entitlements" && method === "GET") {
+      options.onEntitlementCheck?.();
+      return jsonResponse([{
+        plan_code: "pro",
+        subscription_status: "active",
+      }]);
+    }
     if (p === "/rest/v1/agent_function_grants" && method === "GET") {
       return jsonResponse(options.grants ?? []);
     }
@@ -278,7 +292,11 @@ Deno.test("chokepoint: an unknown target function does NOT seed a pending reques
 });
 
 Deno.test("chokepoint: a tampered caller context fails closed", async () => {
-  const cleanup = installHarness({ grants: [activeGrantRow()] });
+  let entitlementChecks = 0;
+  const cleanup = installHarness({
+    grants: [activeGrantRow()],
+    onEntitlementCheck: () => entitlementChecks++,
+  });
   try {
     const token = await mintCallerContextToken({
       callerAppId: CALLER_APP_ID,
@@ -289,6 +307,11 @@ Deno.test("chokepoint: a tampered caller context fails closed", async () => {
     const error = body.error as { code: number; data?: { type?: string } };
     assertEquals(error.code, -32004);
     assertEquals(error.data?.type, "AGENT_CALLER_CONTEXT_INVALID");
+    assertEquals(
+      entitlementChecks,
+      0,
+      "tampered caller context must fail before entitlement lookup",
+    );
   } finally {
     cleanup();
   }
@@ -364,8 +387,9 @@ Deno.test("chokepoint: a self-call (caller === target) is exempt from the grant 
       userId: USER_ID,
     });
     const body = await callTarget(token);
-    const error = body.error as { code?: number; data?: { type?: string } } |
-      undefined;
+    const error = body.error as
+      | { code?: number; data?: { type?: string } }
+      | undefined;
     if (error) {
       assert(error.data?.type !== "AGENT_GRANT_REQUIRED");
       assert(error.code !== -32004);

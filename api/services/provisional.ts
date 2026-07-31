@@ -5,6 +5,7 @@
 import { createToken } from './tokens.ts';
 import { checkRateLimit } from './ratelimit.ts';
 import { getEnv } from '../lib/env.ts';
+import { isProSubscriptionRequired } from './pro-subscription.ts';
 
 
 // ============================================
@@ -65,6 +66,12 @@ export interface ConversionEventData {
  * Rate limited to 3 per IP per 24 hours.
  */
 export async function createProvisionalUser(clientIp: string): Promise<ProvisionalCreateResult> {
+  if (isProSubscriptionRequired()) {
+    throw withStatus(
+      "Provisional API keys are no longer available. Sign in and subscribe to Galactic Pro ($20/month).",
+      402,
+    );
+  }
   const ipCount = await countProvisionalsByIp(clientIp);
   console.log(`[PROVISIONAL] IP ${clientIp} has ${ipCount} provisionals in last 24h (limit: ${MAX_PROVISIONALS_PER_IP})`);
   if (ipCount >= MAX_PROVISIONALS_PER_IP) {

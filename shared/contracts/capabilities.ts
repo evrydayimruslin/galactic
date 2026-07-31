@@ -56,7 +56,12 @@ export interface CapabilityContext {
    * must use this value rather than re-reading a bearer header: credentials may
    * arrive through another supported transport (for example an auth cookie).
    */
-  authSource?: "supabase" | "api_token" | "routine_actor" | "sandbox_actor";
+  authSource?:
+    | "supabase"
+    | "api_token"
+    | "builder_handoff"
+    | "routine_actor"
+    | "sandbox_actor";
   /**
    * Surface-verified API-key bounds for honest progressive discovery.
    * Capability handlers may project these limits but must not treat them as a
@@ -65,6 +70,35 @@ export interface CapabilityContext {
   authorization?: {
     scopes?: string[];
     appIds?: string[] | null;
+    builderHandoff?: {
+      id: string;
+      candidateSetId: string;
+      intent: "agent" | "interface" | "function" | "routine" | "connect";
+      status:
+        | "created"
+        | "connected"
+        | "staged"
+        | "tested"
+        | "uploaded"
+        | "promoted"
+        | "cancelled"
+        | "rejected"
+        | "revoked"
+        | "expired";
+      targetAppId: string | null;
+      boundAppId: string | null;
+      bundleId: string | null;
+      sourceHash: string | null;
+      attestationId: string | null;
+      testAttestationDigest: string | null;
+      documentDigest: string | null;
+      reportDigest: string | null;
+      releaseDigest: string | null;
+      baseVersion: string | null;
+      baseSourceHash: string | null;
+      baseReleaseDigest: string | null;
+      baseStateDigest: string | null;
+    };
   };
   /** The surface the call arrived on — for telemetry, never for authorization. */
   surface: CapabilitySurface;

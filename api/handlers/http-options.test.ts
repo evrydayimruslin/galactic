@@ -16,6 +16,8 @@ type MockApp = {
   env_schema?: Record<string, unknown>;
   supabase_enabled?: boolean;
   supabase_config_id?: string | null;
+  deployment_state?: "legacy" | "ready";
+  hosting_suspended?: boolean;
 };
 
 async function withMockedApp<T>(
@@ -44,6 +46,22 @@ async function withMockedApp<T>(
     }
     if (url.startsWith("https://supabase.test/auth/v1/user")) {
       return new Response("{}", { status: 401 });
+    }
+    if (
+      url.startsWith(
+        "https://supabase.test/rest/v1/account_entitlements?user_id=eq.owner-123",
+      )
+    ) {
+      return new Response(
+        JSON.stringify([{
+          plan_code: "pro",
+          subscription_status: "active",
+        }]),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
     }
     if (
       url.startsWith(
@@ -112,6 +130,8 @@ function appWithHttpPolicy(): MockApp {
     env_schema: {},
     supabase_enabled: false,
     supabase_config_id: null,
+    deployment_state: "legacy",
+    hosting_suspended: false,
     manifest: JSON.stringify({
       name: "CORS App",
       version: "1.0.0",

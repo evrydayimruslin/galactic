@@ -1,17 +1,24 @@
 import {
   createContext,
+  type FormEvent,
   type ReactElement,
   type ReactNode,
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react";
 
-import { buildLaunchSignInUrl, recordLaunchAuthDiagnostic } from "../lib/auth";
+import {
+  buildLaunchSignInUrl,
+  recordLaunchAuthDiagnostic,
+  requestLaunchMagicLink,
+} from "../lib/auth";
 import { Wordmark } from "./launch-chrome";
 
-type SignInModalView = "default" | "another";
+type SignInModalView = "email" | "check_email";
+type AuthenticationMethod = "email" | "google" | null;
 
 const SignInModalContext = createContext<() => void>(() => {});
 
@@ -23,38 +30,130 @@ export function SignInModalProvider(
   { children }: { children: ReactNode },
 ): ReactElement {
   const [open, setOpen] = useState(false);
-  const openModal = useCallback(() => setOpen(true), []);
-  const closeModal = useCallback(() => setOpen(false), []);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const openModal = useCallback(() => {
+    returnFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    setOpen(true);
+  }, []);
+  const closeModal = useCallback(() => {
+    setOpen(false);
+    window.requestAnimationFrame(() => returnFocusRef.current?.focus());
+  }, []);
 
   return (
     <SignInModalContext.Provider value={openModal}>
-      {children}
+      <div
+        aria-hidden={open ? "true" : undefined}
+        className="signin-app-content"
+        inert={open}
+      >
+        {children}
+      </div>
       {open ? <SignInModal onClose={closeModal} /> : null}
     </SignInModalContext.Provider>
   );
 }
 
-function SignInModal({ onClose }: { onClose: () => void }): ReactElement {
-  const [view, setView] = useState<SignInModalView>("default");
-  const [authenticating, setAuthenticating] = useState(false);
+export function SignInModal(
+  { onClose }: { onClose: () => void },
+): ReactElement {
+  const [view, setView] = useState<SignInModalView>("email");
+  const [authenticating, setAuthenticating] = useState<AuthenticationMethod>(
+    null,
+  );
+  const [email, setEmail] = useState("");
+  const [error, setError] = useState("");
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const emailRef = useRef<HTMLInputElement>(null);
+  const confirmationHeadingRef = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const focusFrame = window.requestAnimationFrame(() => {
+      (emailRef.current ?? dialogRef.current)?.focus();
+    });
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab" || !dialogRef.current) return;
+      const focusable = focusableElements(dialogRef.current);
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialogRef.current.focus();
+        return;
+      }
+      const first = focusable[0]!;
+      const last = focusable[focusable.length - 1]!;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      window.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
   }, [onClose]);
+
+  useEffect(() => {
+    const focusFrame = window.requestAnimationFrame(() => {
+      if (view === "check_email") {
+        confirmationHeadingRef.current?.focus();
+      } else {
+        emailRef.current?.focus();
+      }
+    });
+    return () => window.cancelAnimationFrame(focusFrame);
+  }, [view]);
 
   const handleGoogle = () => {
     if (authenticating) return;
-    setAuthenticating(true);
+    setAuthenticating("google");
+    setError("");
     recordLaunchAuthDiagnostic({
       nextPath: `${window.location.pathname}${window.location.search}`,
       status: "redirecting",
     });
     window.location.href = buildLaunchSignInUrl();
   };
+
+  const handleEmail = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (authenticating || view === "check_email") return;
+
+    setAuthenticating("email");
+    setError("");
+    try {
+      await requestLaunchMagicLink(email.trim());
+      setView("check_email");
+      setAuthenticating(null);
+    } catch (err) {
+      setAuthenticating(null);
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to authenticate. Please try again.",
+      );
+    }
+  };
+
+  const editEmail = () => {
+    setView("email");
+    setError("");
+  };
+
+  const isBusy = authenticating !== null;
 
   return (
     <div
@@ -65,10 +164,13 @@ function SignInModal({ onClose }: { onClose: () => void }): ReactElement {
       role="presentation"
     >
       <div
-        aria-label="Sign in"
+        aria-describedby="signin-description"
+        aria-labelledby="signin-heading"
         aria-modal="true"
         className="signin-modal"
+        ref={dialogRef}
         role="dialog"
+        tabIndex={-1}
       >
         <div className="signin-handle" aria-hidden="true">
           <span />
@@ -83,59 +185,158 @@ function SignInModal({ onClose }: { onClose: () => void }): ReactElement {
         </button>
         <div className="signin-body">
           <Wordmark />
-          {view === "another"
-            ? <div className="signin-heading">Use another account</div>
-            : null}
-          <div className="signin-buttons">
-            <button
-              className={authenticating
-                ? "signin-google authenticating"
-                : "signin-google"}
-              onClick={handleGoogle}
-              type="button"
-            >
-              {authenticating
-                ? (
-                  <>
-                    <span className="signin-spinner" aria-hidden="true" />
-                    Opening Google…
-                  </>
-                )
-                : (
-                  <>
-                    <GoogleG />
-                    Sign in with Google
-                  </>
-                )}
-            </button>
-            {view === "another"
-              ? (
-                <button
-                  className="signin-secondary back"
-                  onClick={() => setView("default")}
-                  type="button"
-                >
-                  ← Back
-                </button>
-              )
-              : (
+          {view === "check_email"
+            ? (
+              <div
+                aria-atomic="true"
+                aria-live="polite"
+                className="signin-confirmation"
+                role="status"
+              >
+                <div className="signin-mail-icon" aria-hidden="true">
+                  <MailIcon />
+                </div>
+                <div>
+                  <h2
+                    className="signin-heading"
+                    id="signin-heading"
+                    ref={confirmationHeadingRef}
+                    tabIndex={-1}
+                  >
+                    Check your inbox
+                  </h2>
+                  <p id="signin-description">
+                    We sent a one-time sign-in link to{" "}
+                    <strong>{email}</strong>. It expires in one hour.
+                  </p>
+                  <p>
+                    Open the email, then press the confirmation button to
+                    continue to Galactic.
+                  </p>
+                </div>
                 <button
                   className="signin-secondary"
-                  onClick={() => setView("another")}
+                  onClick={editEmail}
                   type="button"
                 >
-                  Use another account
+                  Use another email
                 </button>
-              )}
-          </div>
-          <div className="signin-note">
-            {authenticating
-              ? "Complete sign-in in your browser."
-              : "Sign in to use or deploy tools."}
-          </div>
+              </div>
+            )
+            : (
+              <>
+                <div className="signin-intro">
+                  <h2 className="signin-heading" id="signin-heading">
+                    Sign in to Galactic
+                  </h2>
+                  <p id="signin-description">
+                    Continue with Google or receive a one-time link by email.
+                  </p>
+                </div>
+
+                <button
+                  className="signin-google"
+                  disabled={isBusy}
+                  onClick={handleGoogle}
+                  type="button"
+                >
+                  {authenticating === "google"
+                    ? (
+                      <>
+                        <span
+                          className="signin-spinner dark"
+                          aria-hidden="true"
+                        />
+                        Opening Google…
+                      </>
+                    )
+                    : (
+                      <>
+                        <GoogleG color="currentColor" />
+                        Continue with Google
+                      </>
+                    )}
+                </button>
+
+                <div className="signin-divider">
+                  <span>or</span>
+                </div>
+
+                <form className="signin-form" onSubmit={handleEmail}>
+                  <label htmlFor="signin-email">Email</label>
+                  <input
+                    autoComplete="email"
+                    autoFocus
+                    disabled={isBusy}
+                    id="signin-email"
+                    inputMode="email"
+                    onChange={(event) => setEmail(event.target.value)}
+                    placeholder="you@example.com"
+                    ref={emailRef}
+                    required
+                    type="email"
+                    value={email}
+                  />
+                  {error
+                    ? (
+                      <p className="signin-error" role="alert">
+                        {error}
+                      </p>
+                    )
+                    : null}
+                  <button
+                    className="signin-submit"
+                    disabled={isBusy}
+                    type="submit"
+                  >
+                    {authenticating === "email"
+                      ? (
+                        <>
+                          <span className="signin-spinner" aria-hidden="true" />
+                          Sending link…
+                        </>
+                      )
+                      : "Email me a sign-in link"}
+                  </button>
+                </form>
+
+                <p className="signin-note">
+                  By continuing, you agree to our <a href="/terms">Terms</a> and
+                  {" "}
+                  <a href="/privacy">Privacy Policy</a>.
+                </p>
+              </>
+            )}
         </div>
       </div>
     </div>
+  );
+}
+
+function focusableElements(container: HTMLElement): HTMLElement[] {
+  return Array.from(container.querySelectorAll<HTMLElement>(
+    'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )).filter((element) =>
+    !element.hasAttribute("hidden") &&
+    element.getAttribute("aria-hidden") !== "true"
+  );
+}
+
+function MailIcon(): ReactElement {
+  return (
+    <svg
+      fill="none"
+      height={22}
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={1.7}
+      viewBox="0 0 24 24"
+      width={22}
+    >
+      <path d="M4 6h16v12H4z" />
+      <path d="m4 7 8 6 8-6" />
+    </svg>
   );
 }
 

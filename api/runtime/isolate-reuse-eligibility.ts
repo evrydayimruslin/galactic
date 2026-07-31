@@ -18,6 +18,9 @@ const ANON_USER_ID = "00000000-0000-0000-0000-000000000000";
  *  - Anonymous callers NEVER reuse: the anon sentinel is a SHARED user id, so a
  *    warm isolate would persist app module-level state across DIFFERENT
  *    anonymous end-users — a cross-tenant leak.
+ *  - gx.test NEVER reuses: test bindings carry invocation-local state and
+ *    fail-closed effect latches keyed to one execution. Reusing their baked
+ *    props would make the evidence boundary depend on an incidental app id.
  *  - Fixture-backed executions (gx.test) NEVER reuse: d1Fixtures are per-call
  *    data baked into FixtureDatabaseBinding props, so a warm isolate would
  *    serve one test's fixtures to the next.
@@ -42,11 +45,19 @@ const ANON_USER_ID = "00000000-0000-0000-0000-000000000000";
 export function isolateReuseEligibility(
   config: Pick<
     RuntimeConfig,
-    "userId" | "d1Fixtures" | "permissions" | "appCallDependencies" | "slotBindings"
+    | "userId"
+    | "testMode"
+    | "d1Fixtures"
+    | "permissions"
+    | "appCallDependencies"
+    | "slotBindings"
   >,
 ): { eligible: boolean; reason: string } {
   if (!config.userId || config.userId === ANON_USER_ID) {
     return { eligible: false, reason: "anonymous_user" };
+  }
+  if (config.testMode === true) {
+    return { eligible: false, reason: "test_execution" };
   }
   if (config.d1Fixtures) {
     return { eligible: false, reason: "fixture_execution" };

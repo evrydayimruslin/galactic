@@ -8,6 +8,7 @@ const appState = vi.hoisted(() => ({
 }));
 
 vi.mock("./lib/auth", () => ({
+  establishLaunchMagicLinkSession: vi.fn(),
   exchangeLaunchBridgeToken: vi.fn(),
   getLaunchAuthToken: () => appState.authToken,
   isLaunchAuthSessionStorageChange: () => false,
@@ -17,6 +18,10 @@ vi.mock("./lib/auth", () => ({
   normalizeLocalPath: (value: string | null | undefined) => value || "/account",
   recordLaunchAuthDiagnostic: vi.fn(),
   refreshLaunchSession: vi.fn(async () => null),
+  refreshLaunchSessionIfAvailable: vi.fn(async () => null),
+  resolveMagicLinkNextPath: (
+    value: string | null | undefined,
+  ) => value || "/account",
   setLaunchAuthToken: vi.fn(),
 }));
 
@@ -50,6 +55,7 @@ vi.mock("./components/launch-chrome", async () => {
   return {
     LaunchShell: ({ children }: { children?: ReactNode }) =>
       createElement("div", { "data-shell": "compatibility" }, children),
+    Wordmark: () => createElement("span", null, "galactic"),
   };
 });
 
@@ -79,6 +85,14 @@ vi.mock("./components/nebula-fleet", async () => {
   };
 });
 
+vi.mock("./components/pre-auth-fleet", async () => {
+  const { createElement } = await import("react");
+  return {
+    PreAuthFleetHome: () =>
+      createElement("div", { "data-surface": "pre-auth-fleet" }),
+  };
+});
+
 vi.mock("./components/sign-in-modal", async () => {
   const { createElement } = await import("react");
   return {
@@ -93,6 +107,17 @@ vi.mock("./components/connect-tutorial", async () => {
   return {
     ConnectTutorialPanel: () =>
       createElement("div", { "data-surface": "connect" }),
+  };
+});
+
+vi.mock("./components/auth-funnel", async () => {
+  const { createElement } = await import("react");
+  return {
+    AuthFunnelApp: ({ signedIn }: { signedIn: boolean }) =>
+      createElement("div", {
+        "data-signed-in": String(signedIn),
+        "data-surface": "auth-funnel",
+      }),
   };
 });
 
@@ -130,6 +155,26 @@ afterEach(() => {
 });
 
 describe("App Agent Studio production routing", () => {
+  it("renders the blank fleet instead of redirecting a signed-out home", () => {
+    appState.authToken = null;
+    appState.live = {
+      data: {},
+      reload: vi.fn(),
+      status: "ready",
+    };
+    Object.assign(window.location, {
+      href: "https://connectgalactic.com/",
+      pathname: "/",
+      search: "",
+    });
+
+    const markup = renderToStaticMarkup(<App />);
+
+    expect(markup).toContain('data-surface="pre-auth-fleet"');
+    expect(markup).not.toContain('data-surface="connect"');
+    expect(window.history.replaceState).not.toHaveBeenCalled();
+  });
+
   it("renders Agent Studio for the authenticated owner Agent route", () => {
     appState.live = liveState("owner");
 
@@ -142,6 +187,29 @@ describe("App Agent Studio production routing", () => {
     );
     expect(markup).not.toContain('data-surface="agent-compatibility"');
   });
+
+  it.each([
+    [null, "false"],
+    ["owner-session", "true"],
+  ] as const)(
+    "routes the shared Add-Agent entry to the auth funnel (session %s)",
+    (token, signedIn) => {
+      appState.authToken = token;
+      appState.live = { data: {}, reload: vi.fn(), status: "ready" };
+      Object.assign(window.location, {
+        href:
+          "https://connectgalactic.com/connect?intent=agent&source=fleet-card",
+        pathname: "/connect",
+        search: "?intent=agent&source=fleet-card",
+      });
+
+      const markup = renderToStaticMarkup(<App />);
+
+      expect(markup).toContain('data-surface="auth-funnel"');
+      expect(markup).toContain(`data-signed-in="${signedIn}"`);
+      expect(markup).not.toContain('data-surface="connect"');
+    },
+  );
 
   it.each(["installed", "public"] as const)(
     "keeps a resolved %s non-owner on the compatibility Agent surface",

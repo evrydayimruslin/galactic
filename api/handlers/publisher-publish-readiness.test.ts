@@ -68,7 +68,7 @@ function lowBalanceBillingConfig(): Response {
   }]);
 }
 
-Deno.test("publisher readiness: API programmatic upload blocks non-private low-balance publish before storage writes", async () => {
+Deno.test("publisher readiness: API programmatic upload requires membership before legacy balance or storage work", async () => {
   await runSerial(async () => {
     const calls: string[] = [];
     await withMockedEnvAndFetch(
@@ -76,6 +76,9 @@ Deno.test("publisher readiness: API programmatic upload blocks non-private low-b
         const url = String(input);
         calls.push(url);
 
+        if (url.includes("/rest/v1/account_entitlements")) {
+          return Response.json([]);
+        }
         if (url.includes("/rest/v1/apps?owner_id=")) {
           return appCountResponse();
         }
@@ -117,25 +120,28 @@ Deno.test("publisher readiness: API programmatic upload blocks non-private low-b
         assertExists(caught);
         assertEquals((caught as { status?: number }).status, 402);
         assertEquals(
-          (caught as { details?: { required_light?: number } }).details
-            ?.required_light,
-          1000,
+          (caught as { code?: string }).code,
+          "PRO_SUBSCRIPTION_REQUIRED",
         );
-        assertEquals(
-          (caught as { details?: { current_balance_light?: number } }).details
-            ?.current_balance_light,
-          100,
+        assertStringIncludes(
+          caught instanceof Error ? caught.message : String(caught),
+          "active Galactic membership",
         );
         assertEquals(
           calls.some((url) => url.includes("/storage/v1/")),
           false,
+        );
+        assertEquals(
+          calls.some((url) => url.includes("/platform_billing_config")),
+          false,
+          "membership is the first publish boundary",
         );
       },
     );
   });
 });
 
-Deno.test("publisher readiness: Platform MCP ul.set version returns structured minimum-balance error", async () => {
+Deno.test("publisher readiness: Platform MCP retires direct public version switching after membership", async () => {
   await runSerial(async () => {
     await withMockedEnvAndFetch(
       async (input, init) => {
@@ -150,6 +156,12 @@ Deno.test("publisher readiness: Platform MCP ul.set version returns structured m
         }
         if (url.includes("/rest/v1/pending_permissions")) {
           return Response.json([]);
+        }
+        if (url.includes("/rest/v1/account_entitlements")) {
+          return Response.json([{
+            plan_code: "pro",
+            subscription_status: "active",
+          }]);
         }
         if (url.includes("/rest/v1/users?") && url.includes("select=tier")) {
           return Response.json([{ tier: "free" }]);
@@ -220,13 +232,11 @@ Deno.test("publisher readiness: Platform MCP ul.set version returns structured m
         assertExists(payload.error);
         assertStringIncludes(
           payload.error.message || "",
-          "Publishing requires at least $10.00",
+          "Direct version switching for public or unlisted Agents is retired",
         );
-        assertEquals(payload.error.data?.required_light, 1000);
-        assertEquals(payload.error.data?.current_balance_light, 100);
         assertEquals(
-          payload.error.data?.next_action,
-          "Add credits from Wallet to go live.",
+          payload.error.data?.type,
+          "LIVE_RELEASE_CAS_REQUIRED",
         );
       },
     );

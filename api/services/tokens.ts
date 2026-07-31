@@ -11,6 +11,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { getEnv } from '../lib/env.ts';
+import { requireActiveProSubscription } from './pro-subscription.ts';
 
 interface UserApiTokenRow {
   id: string;
@@ -321,7 +322,9 @@ async function backfillCanonicalTokenHash(
 
 /**
  * Create a new API token for a user.
- * All tiers have unlimited API tokens.
+ * API tokens are available only while the account has an active Pro
+ * subscription. Existing tokens are preserved across subscription changes,
+ * but request authentication rejects them while Pro is inactive.
  */
 export async function createToken(
   userId: string,
@@ -340,6 +343,8 @@ export async function createToken(
     function_names?: string[];
   }
 ): Promise<CreateTokenResult> {
+  await requireActiveProSubscription(userId);
+
   // Check if token with this name already exists
   const { data: existing } = await tokensTable()
     .select('id')
@@ -407,10 +412,16 @@ export async function listTokens(userId: string): Promise<ApiToken[]> {
     throw new Error(`Failed to list tokens: ${error.message}`);
   }
 
-  return (data || []).map((row: Omit<ApiToken, 'plaintext_token'>) => ({
-    ...row,
-    plaintext_token: null,
-  }));
+  return (data || [])
+    // Purpose-bound builder handoffs have their own durable lifecycle. They
+    // must never masquerade as persistent API keys in account settings.
+    .filter((row: Omit<ApiToken, 'plaintext_token'>) =>
+      !row.scopes?.some((scope) => scope.startsWith('handoff:'))
+    )
+    .map((row: Omit<ApiToken, 'plaintext_token'>) => ({
+      ...row,
+      plaintext_token: null,
+    }));
 }
 
 /**

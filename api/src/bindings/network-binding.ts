@@ -3,25 +3,34 @@
 // CF Workers constraint: I/O objects can't cross request contexts, so each RPC
 // method must open, use, and close the socket within one call.
 
-import { WorkerEntrypoint } from 'cloudflare:workers';
-import { connect } from 'cloudflare:sockets';
-import { isBlockedHost } from './outbound-policy.ts';
+import { WorkerEntrypoint } from "cloudflare:workers";
+import { connect } from "cloudflare:sockets";
+import { isBlockedHost } from "./outbound-policy.ts";
 import {
+  assertImapQuotable,
   assertNoHeaderInjection,
   assertSingleAddress,
   dotStuffBody,
-  assertImapQuotable,
-} from '../../services/mail-sanitize.ts';
-import type { ResolvedCredential } from '../../../shared/contracts/env.ts';
-import { parseMessage } from './mime-parse.ts';
+} from "../../services/mail-sanitize.ts";
+import type { ResolvedCredential } from "../../../shared/contracts/env.ts";
+import { parseMessage } from "./mime-parse.ts";
+import { assertBindingEffectAuthority } from "./function-authority.ts";
+import { resolveManagedEmailCredentials } from "./email-credential-policy.ts";
 
 interface NetworkBindingProps {
   userId: string;
   appId: string;
+  allowImap?: boolean;
+  allowSmtp?: boolean;
+  // galactic.yaml releases enforce protocol-specific variable roles and the
+  // release destination allowlist. Legacy manifests retain their historical
+  // arbitrary key names until they opt into the standard.
+  strictCredentialRoles?: boolean;
+  allowedDestinations?: string[];
   // Per-user values (host/user/pass etc.), decrypted, keyed by env var name.
-  // net.* resolves host/user/pass from these BY KEY — the sandbox never passes a
-  // raw host, so a developer cannot redirect the user's password to a host of
-  // their choosing; it only ever reaches one of the user's own configured hosts.
+  // net.* resolves host/user/pass from these BY KEY; strict galactic.yaml calls
+  // additionally bind the key roles and resolved destination before any socket
+  // opens.
   credentials: Record<string, ResolvedCredential>;
 }
 
@@ -64,11 +73,11 @@ interface ImapFetchResult {
 }
 
 const enc = new TextEncoder();
-const latin1 = new TextDecoder('latin1');
+const latin1 = new TextDecoder("latin1");
 
 // ── Security ──
-// host/port are sandbox-supplied, so block connections to internal/private
-// networks and the bare SMTP port before opening a socket. Reuses the shared
+// Block connections to internal/private networks and the bare SMTP port before
+// opening a socket. Reuses the shared
 // egress policy (outbound-policy.ts) so the IMAP/SMTP socket path gets the SAME
 // coverage as raw fetch — loopback/RFC1918/CGNAT/link-local/metadata + IPv6 +
 // integer/hex encodings — instead of the old weaker prefix check.
@@ -77,10 +86,9 @@ function validateTarget(hostname: string, port: number): void {
     throw new Error("Connections to internal/private networks are not allowed");
   }
   if (port === 25) throw new Error("Port 25 blocked. Use 465 or 587.");
-  // No allowlist here: the host is resolved from a per-user credential KEY (the
-  // user's own configured server), not a sandbox-supplied string, so the egress
-  // allowlist that constrains raw fetch() is unnecessary and would wrongly block
-  // the user's arbitrary mail host. SSRF (internal/private) is still enforced.
+  // galactic.yaml destination enforcement occurs while credentials are resolved
+  // above; this shared final check remains authoritative for SSRF and legacy
+  // manifest calls.
 }
 
 // ── Byte-accurate line/literal reader ──
@@ -151,20 +159,8 @@ class ByteReader {
 
 // ── Network Binding ──
 
-export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProps> {
-  // Resolve a per-user value by KEY from host-side props. The sandbox passes key
-  // names (never raw host/user/pass), so app code never sees the secret and a
-  // developer cannot point the connection at a host they choose.
-  private resolveCredential(key: string): string {
-    const entry = this.ctx.props.credentials?.[key];
-    if (!entry) {
-      throw new Error(
-        `Unknown credential "${key}" — connect it (per_user) before using net.*`,
-      );
-    }
-    return entry.value;
-  }
-
+export class NetworkBinding
+  extends WorkerEntrypoint<unknown, NetworkBindingProps> {
   /**
    * Fetch inbound mail above a UID watermark in a single TCP session.
    *
@@ -189,24 +185,41 @@ export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProp
     _processedFlag: string,
     limit: number,
   ): Promise<ImapFetchResult> {
-    const host = this.resolveCredential(hostKey);
-    const user = this.resolveCredential(userKey);
-    const pass = this.resolveCredential(passKey);
+    assertBindingEffectAuthority(
+      this.ctx.props.allowImap,
+      "email.imap.read",
+    );
+    const { host, user, pass, port: resolvedPort } =
+      resolveManagedEmailCredentials({
+        protocol: "imap",
+        hostKey,
+        userKey,
+        passKey,
+        port,
+        credentials: this.ctx.props.credentials ?? {},
+        allowedDestinations: this.ctx.props.allowedDestinations,
+        strict: this.ctx.props.strictCredentialRoles === true,
+      });
     // Fail closed on injection before opening the socket.
-    assertImapQuotable('user', user);
-    assertImapQuotable('pass', pass);
-    validateTarget(host, port);
-    const socket = connect({ hostname: host, port }, { secureTransport: 'on', allowHalfOpen: false });
+    assertImapQuotable("user", user);
+    assertImapQuotable("pass", pass);
+    validateTarget(host, resolvedPort);
+    const socket = connect({ hostname: host, port: resolvedPort }, {
+      secureTransport: "on",
+      allowHalfOpen: false,
+    });
     const lr = new ByteReader(socket.readable);
     const writer = socket.writable.getWriter();
     let tagNum = 0;
 
     // Send a command and read its tagged response. Any literals ({N}) are
     // captured as raw bytes (not decoded), so a FETCH body comes back intact.
-    async function cmd(command: string): Promise<{ lines: string[]; literals: Uint8Array[]; ok: boolean }> {
+    async function cmd(
+      command: string,
+    ): Promise<{ lines: string[]; literals: Uint8Array[]; ok: boolean }> {
       tagNum++;
-      const tag = 'A' + String(tagNum).padStart(4, '0');
-      await writer.write(enc.encode(tag + ' ' + command + '\r\n'));
+      const tag = "A" + String(tagNum).padStart(4, "0");
+      await writer.write(enc.encode(tag + " " + command + "\r\n"));
       const lines: string[] = [];
       const literals: Uint8Array[] = [];
       while (true) {
@@ -218,25 +231,28 @@ export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProp
           line = cont;
           lit = cont.match(/\{(\d+)\}$/);
         }
-        if (line.startsWith(tag + ' ')) {
-          return { lines, literals, ok: line.includes(tag + ' OK') };
+        if (line.startsWith(tag + " ")) {
+          return { lines, literals, ok: line.includes(tag + " OK") };
         }
         lines.push(line);
       }
     }
 
     try {
-      console.log('[NET:IMAP] Connecting to', host, port);
+      console.log("[NET:IMAP] Connecting to", host, resolvedPort);
       const greeting = await lr.readLine();
-      if (!greeting.startsWith('* OK')) throw new Error('IMAP greeting failed: ' + greeting);
+      if (!greeting.startsWith("* OK")) {
+        throw new Error("IMAP greeting failed: " + greeting);
+      }
 
       const loginResult = await cmd(
-        'LOGIN "' + user.replace(/["\\]/g, '\\$&') + '" "' + pass.replace(/["\\]/g, '\\$&') + '"',
+        'LOGIN "' + user.replace(/["\\]/g, "\\$&") + '" "' +
+          pass.replace(/["\\]/g, "\\$&") + '"',
       );
-      if (!loginResult.ok) throw new Error('IMAP login failed');
+      if (!loginResult.ok) throw new Error("IMAP login failed");
 
-      const selResult = await cmd('SELECT INBOX');
-      if (!selResult.ok) throw new Error('SELECT INBOX failed');
+      const selResult = await cmd("SELECT INBOX");
+      if (!selResult.ok) throw new Error("SELECT INBOX failed");
 
       // Mailbox identity + cursor come back as untagged "* OK [UIDVALIDITY n]" /
       // "* OK [UIDNEXT n]" responses.
@@ -253,13 +269,15 @@ export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProp
       // mail already read elsewhere is still ingested. `<lastUid+1>:*` always
       // echoes the highest UID even when nothing is new, so filter client-side.
       const searchCmd = lastUid > 0
-        ? 'UID SEARCH UID ' + (lastUid + 1) + ':*'
-        : 'UID SEARCH ALL';
+        ? "UID SEARCH UID " + (lastUid + 1) + ":*"
+        : "UID SEARCH ALL";
       const searchResult = await cmd(searchCmd);
       const uidLine = searchResult.lines.find((l) => /^\* SEARCH/i.test(l));
       const uids: number[] = [];
       if (uidLine) {
-        for (const p of uidLine.replace(/^\* SEARCH/i, '').trim().split(/\s+/)) {
+        for (
+          const p of uidLine.replace(/^\* SEARCH/i, "").trim().split(/\s+/)
+        ) {
           const n = parseInt(p, 10);
           if (n > lastUid) uids.push(n);
         }
@@ -267,8 +285,16 @@ export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProp
       uids.sort((a, b) => a - b);
 
       if (uids.length === 0) {
-        await cmd('LOGOUT');
-        return { emails: [], attemptedUids: [], uidValidity, uidNext, hasMore: false, maxUid: lastUid, skippedUids: [] };
+        await cmd("LOGOUT");
+        return {
+          emails: [],
+          attemptedUids: [],
+          uidValidity,
+          uidNext,
+          hasMore: false,
+          maxUid: lastUid,
+          skippedUids: [],
+        };
       }
 
       const attemptedUids = uids.slice(0, Math.max(1, limit));
@@ -279,12 +305,18 @@ export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProp
         try {
           // BODY.PEEK[] leaves \Seen untouched; the literal carries the raw
           // message which readBytes returns as exact octets.
-          const fetchResult = await cmd('UID FETCH ' + uid + ' (BODY.PEEK[])');
+          const fetchResult = await cmd("UID FETCH " + uid + " (BODY.PEEK[])");
           const rawMessage = fetchResult.literals[0];
-          if (!rawMessage || rawMessage.length === 0) { skippedUids.push(uid); continue; }
+          if (!rawMessage || rawMessage.length === 0) {
+            skippedUids.push(uid);
+            continue;
+          }
           const parsed = parseMessage(rawMessage);
           // Skip our own outbound (bounced back into the inbox, or a Sent copy).
-          if (businessEmail && parsed.from.toLowerCase() === businessEmail.toLowerCase()) {
+          if (
+            businessEmail &&
+            parsed.from.toLowerCase() === businessEmail.toLowerCase()
+          ) {
             skippedUids.push(uid);
             continue;
           }
@@ -295,12 +327,19 @@ export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProp
         }
       }
 
-      await cmd('LOGOUT');
+      await cmd("LOGOUT");
       // True mailbox tip (highest existing UID), not just the batch max — lets a
       // first-connect baseline be correct even if the server omitted UIDNEXT.
       // reduce (not Math.max spread) to stay safe on very large mailboxes.
       const maxUid = uids.reduce((m, u) => (u > m ? u : m), lastUid);
-      console.log('[NET:IMAP] Fetched', emails.length, 'of', attemptedUids.length, 'attempted; hasMore=', uids.length > attemptedUids.length);
+      console.log(
+        "[NET:IMAP] Fetched",
+        emails.length,
+        "of",
+        attemptedUids.length,
+        "attempted; hasMore=",
+        uids.length > attemptedUids.length,
+      );
       return {
         emails,
         attemptedUids,
@@ -311,12 +350,19 @@ export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProp
         skippedUids,
       };
     } catch (e: unknown) {
-      console.error('[NET:IMAP] ERROR:', e instanceof Error ? e.message : String(e));
+      console.error(
+        "[NET:IMAP] ERROR:",
+        e instanceof Error ? e.message : String(e),
+      );
       throw e;
     } finally {
       lr.releaseLock();
-      try { writer.releaseLock(); } catch { /* noop */ }
-      try { socket.close(); } catch { /* noop */ }
+      try {
+        writer.releaseLock();
+      } catch { /* noop */ }
+      try {
+        socket.close();
+      } catch { /* noop */ }
     }
   }
 
@@ -337,88 +383,128 @@ export class NetworkBinding extends WorkerEntrypoint<unknown, NetworkBindingProp
     body: string,
     inReplyTo?: string,
   ): Promise<{ success: boolean; messageId?: string; error?: string }> {
-    const host = this.resolveCredential(hostKey);
-    const user = this.resolveCredential(userKey);
-    const pass = this.resolveCredential(passKey);
+    assertBindingEffectAuthority(
+      this.ctx.props.allowSmtp,
+      "email.smtp.send",
+    );
+    const { host, user, pass, port: resolvedPort } =
+      resolveManagedEmailCredentials({
+        protocol: "smtp",
+        hostKey,
+        userKey,
+        passKey,
+        port,
+        credentials: this.ctx.props.credentials ?? {},
+        allowedDestinations: this.ctx.props.allowedDestinations,
+        strict: this.ctx.props.strictCredentialRoles === true,
+      });
     // Fail closed on header/command injection before opening the socket.
-    assertSingleAddress('from', from);
-    assertSingleAddress('to', to);
-    assertNoHeaderInjection('fromName', fromName);
-    assertNoHeaderInjection('subject', subject);
-    if (inReplyTo) assertNoHeaderInjection('inReplyTo', inReplyTo);
-    validateTarget(host, port);
-    const socket = connect({ hostname: host, port }, { secureTransport: 'on', allowHalfOpen: false });
+    assertSingleAddress("from", from);
+    assertSingleAddress("to", to);
+    assertNoHeaderInjection("fromName", fromName);
+    assertNoHeaderInjection("subject", subject);
+    if (inReplyTo) assertNoHeaderInjection("inReplyTo", inReplyTo);
+    validateTarget(host, resolvedPort);
+    const socket = connect({ hostname: host, port: resolvedPort }, {
+      secureTransport: "on",
+      allowHalfOpen: false,
+    });
     const lr = new ByteReader(socket.readable);
     const writer = socket.writable.getWriter();
 
     async function send(command: string): Promise<string> {
-      await writer.write(enc.encode(command + '\r\n'));
+      await writer.write(enc.encode(command + "\r\n"));
       return await lr.readLine();
     }
 
     // AUTH LOGIN wants base64 of the UTF-8 bytes; btoa() alone throws on any
     // non-Latin1 character in the credential.
     const b64 = (s: string): string => {
-      let bin = '';
+      let bin = "";
       for (const byte of enc.encode(s)) bin += String.fromCharCode(byte);
       return btoa(bin);
     };
     // EHLO/Message-ID identify as the sender's own domain (deliverability signal)
     // rather than a fixed platform hostname.
-    const senderDomain = (from.split('@')[1] || 'localhost').trim();
+    const senderDomain = (from.split("@")[1] || "localhost").trim();
 
     try {
       const greeting = await lr.readLine();
-      if (!greeting.startsWith('220')) throw new Error('SMTP greeting failed: ' + greeting);
+      if (!greeting.startsWith("220")) {
+        throw new Error("SMTP greeting failed: " + greeting);
+      }
 
-      let ehloResp = await send('EHLO ' + senderDomain);
+      let ehloResp = await send("EHLO " + senderDomain);
       while (!/^250 /.test(ehloResp)) {
-        if (/^[45]/.test(ehloResp)) throw new Error('EHLO rejected: ' + ehloResp);
+        if (/^[45]/.test(ehloResp)) {
+          throw new Error("EHLO rejected: " + ehloResp);
+        }
         ehloResp = await lr.readLine();
       }
 
-      const authResp = await send('AUTH LOGIN');
-      if (!authResp.startsWith('334')) throw new Error('AUTH LOGIN not offered: ' + authResp);
+      const authResp = await send("AUTH LOGIN");
+      if (!authResp.startsWith("334")) {
+        throw new Error("AUTH LOGIN not offered: " + authResp);
+      }
       await send(b64(user));
       const passResp = await send(b64(pass));
-      if (!passResp.startsWith('235')) throw new Error('SMTP auth failed: ' + passResp);
+      if (!passResp.startsWith("235")) {
+        throw new Error("SMTP auth failed: " + passResp);
+      }
 
-      const mailResp = await send('MAIL FROM:<' + from + '>');
-      if (!mailResp.startsWith('250')) throw new Error('MAIL FROM rejected: ' + mailResp);
-      const rcptResp = await send('RCPT TO:<' + to + '>');
-      if (!/^25[01]/.test(rcptResp)) throw new Error('RCPT TO rejected: ' + rcptResp);
+      const mailResp = await send("MAIL FROM:<" + from + ">");
+      if (!mailResp.startsWith("250")) {
+        throw new Error("MAIL FROM rejected: " + mailResp);
+      }
+      const rcptResp = await send("RCPT TO:<" + to + ">");
+      if (!/^25[01]/.test(rcptResp)) {
+        throw new Error("RCPT TO rejected: " + rcptResp);
+      }
 
-      const dataResp = await send('DATA');
-      if (!dataResp.startsWith('354')) throw new Error('SMTP DATA rejected: ' + dataResp);
+      const dataResp = await send("DATA");
+      if (!dataResp.startsWith("354")) {
+        throw new Error("SMTP DATA rejected: " + dataResp);
+      }
 
-      const messageId = crypto.randomUUID() + '@' + senderDomain;
-      let headers = 'From: ' + fromName + ' <' + from + '>\r\n';
-      headers += 'To: ' + to + '\r\n';
-      headers += 'Subject: ' + subject + '\r\n';
-      headers += 'Message-ID: <' + messageId + '>\r\n';
+      const messageId = crypto.randomUUID() + "@" + senderDomain;
+      let headers = "From: " + fromName + " <" + from + ">\r\n";
+      headers += "To: " + to + "\r\n";
+      headers += "Subject: " + subject + "\r\n";
+      headers += "Message-ID: <" + messageId + ">\r\n";
       if (inReplyTo) {
         // Thread the guest's reply back to us: In-Reply-To + References carry the
         // parent id so Gmail/Outlook group the reply into the same conversation.
-        headers += 'In-Reply-To: <' + inReplyTo + '>\r\n';
-        headers += 'References: <' + inReplyTo + '>\r\n';
+        headers += "In-Reply-To: <" + inReplyTo + ">\r\n";
+        headers += "References: <" + inReplyTo + ">\r\n";
       }
-      headers += 'MIME-Version: 1.0\r\n';
-      headers += 'Content-Type: text/plain; charset=UTF-8\r\n';
-      headers += 'Content-Transfer-Encoding: 8bit\r\n';
-      headers += 'Date: ' + new Date().toUTCString() + '\r\n';
+      headers += "MIME-Version: 1.0\r\n";
+      headers += "Content-Type: text/plain; charset=UTF-8\r\n";
+      headers += "Content-Transfer-Encoding: 8bit\r\n";
+      headers += "Date: " + new Date().toUTCString() + "\r\n";
 
-      await writer.write(enc.encode(headers + '\r\n' + dotStuffBody(body) + '\r\n.\r\n'));
+      await writer.write(
+        enc.encode(headers + "\r\n" + dotStuffBody(body) + "\r\n.\r\n"),
+      );
       const sendResp = await lr.readLine();
-      if (!sendResp.startsWith('250')) throw new Error('SMTP send failed: ' + sendResp);
+      if (!sendResp.startsWith("250")) {
+        throw new Error("SMTP send failed: " + sendResp);
+      }
 
-      await send('QUIT');
+      await send("QUIT");
       return { success: true, messageId };
     } catch (e: unknown) {
-      return { success: false, error: e instanceof Error ? e.message : String(e) };
+      return {
+        success: false,
+        error: e instanceof Error ? e.message : String(e),
+      };
     } finally {
       lr.releaseLock();
-      try { writer.releaseLock(); } catch { /* noop */ }
-      try { socket.close(); } catch { /* noop */ }
+      try {
+        writer.releaseLock();
+      } catch { /* noop */ }
+      try {
+        socket.close();
+      } catch { /* noop */ }
     }
   }
 }

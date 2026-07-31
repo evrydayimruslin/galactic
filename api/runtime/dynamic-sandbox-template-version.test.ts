@@ -1,11 +1,11 @@
-// Automated guard for SANDBOX_TEMPLATE_VERSION (dynamic-sandbox.ts). That
+// Automated guard for GALACTIC_SANDBOX_TEMPLATE_VERSION. That
 // constant is folded into the get() reuse key so a parent-worker deploy that
 // changes the GENERATED setup.js / wrapper.js can never collide with a still-
 // cached old warm isolate under an unchanged key. But the version is a MANUAL
 // constant -- nothing otherwise forces a bump when the template changes. This
 // test snapshots the generated modules for a fixed config: any edit to the
 // setup/wrapper template (or the fixed config below) flips the hash and fails
-// LOUDLY, with a message telling the developer to bump SANDBOX_TEMPLATE_VERSION.
+// LOUDLY, with a message telling the developer to bump the shared version.
 // It also asserts the template is DETERMINISTIC (two runs -> identical bytes),
 // the precondition for "same reuse key => same isolate content".
 
@@ -13,11 +13,12 @@ import { assert } from "https://deno.land/std@0.210.0/assert/assert.ts";
 import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
 import ts from "typescript";
 import { executeInDynamicSandbox } from "./dynamic-sandbox.ts";
+import { GALACTIC_SANDBOX_TEMPLATE_VERSION } from "./runtime-contract.ts";
 import type { RuntimeConfig } from "./sandbox.ts";
 
-// Bump this in lockstep with SANDBOX_TEMPLATE_VERSION whenever the generated
-// setup.js / wrapper.js template changes.
-const PINNED_TEMPLATE_VERSION = "2026-07-27.compute-rpc-structured-output.v16";
+// Bump this in lockstep with GALACTIC_SANDBOX_TEMPLATE_VERSION whenever the
+// generated setup.js / wrapper.js template changes.
+const PINNED_TEMPLATE_VERSION = "2026-07-30.codemode-function-authority.v25";
 
 // Stable separator between the two captured modules for the snapshot hash.
 const SEP = "\n----MODULE-BOUNDARY----\n";
@@ -173,6 +174,40 @@ Deno.test("sandbox template: warm-isolate requests serialize compatibility globa
   }
 });
 
+Deno.test("sandbox template: fire-and-forget effects drain before the transcript seals", async () => {
+  const h = installHarness();
+  try {
+    await executeInDynamicSandbox(fixedConfig(), "noop", []);
+    assert(
+      h.captured.setup.includes("__galacticPendingEffects"),
+      "setup must retain promises for host RPC and outbound effects",
+    );
+    assert(
+      h.captured.setup.includes("export function __setGalacticRpcEnv"),
+      "RPC bindings must enter the module-private pending-effect tracker",
+    );
+    assert(
+      h.captured.wrapper.includes(
+        "await __drainGalacticPendingEffects()",
+      ),
+      "wrapper must drain effects before returning an execution envelope",
+    );
+    assert(
+      !h.captured.setup.includes("globalThis.__rpcEnv") &&
+        !h.captured.wrapper.includes("globalThis.__rpcEnv"),
+      "tenant code must never receive the raw or proxied RPC environment",
+    );
+    assert(
+      !h.captured.setup.includes(
+        "globalThis.__galacticDrainPendingEffects",
+      ),
+      "tenant code must not be able to replace the transcript drain",
+    );
+  } finally {
+    h.restore();
+  }
+});
+
 Deno.test("sandbox template: structured-output error codes cross the worker boundary", async () => {
   const h = installHarness();
   try {
@@ -248,30 +283,31 @@ Deno.test("sandbox template: every generated JavaScript module parses", async ()
   }
 });
 
-Deno.test("sandbox template: snapshot pinned -- a template change must bump SANDBOX_TEMPLATE_VERSION", async () => {
+Deno.test("sandbox template: snapshot pinned -- a template change must bump the shared runtime contract", async () => {
   const h = installHarness();
   try {
     await executeInDynamicSandbox(fixedConfig(), "noop", []);
     const hash = await sha256Hex(h.captured.setup + SEP + h.captured.wrapper);
     // The pinned hash below is tied to PINNED_TEMPLATE_VERSION. If this assertion
     // fails, the generated setup.js/wrapper.js template (or the fixed config)
-    // changed. If it was a real TEMPLATE edit: (1) bump SANDBOX_TEMPLATE_VERSION
-    // in dynamic-sandbox.ts AND PINNED_TEMPLATE_VERSION here, then (2) update
-    // TEMPLATE_HASH below to the new value. This forces the reuse key to rotate
-    // so a cached old isolate cannot serve new template content.
+    // changed. If it was a real TEMPLATE edit: (1) bump
+    // GALACTIC_SANDBOX_TEMPLATE_VERSION in runtime-contract.ts AND
+    // PINNED_TEMPLATE_VERSION here, then (2) update TEMPLATE_HASH below. This
+    // forces both the reuse key and qualification runtime revision to rotate.
     const TEMPLATE_HASH =
-      "1c4927448b83eb289142069622109d790c669437c8d09b7853a83e4acc92499b";
+      "5bc40b572b870aac25cf0f90c5966a8de3c292f6b6f40a4e9d97478d63c2a87f";
     assertEquals(
       PINNED_TEMPLATE_VERSION,
-      "2026-07-27.compute-rpc-structured-output.v16",
+      GALACTIC_SANDBOX_TEMPLATE_VERSION,
       "PINNED_TEMPLATE_VERSION drifted from the pinned literal",
     );
     assertEquals(
       hash,
       TEMPLATE_HASH,
       "Generated sandbox template changed. If you edited the setup/wrapper " +
-        "template or loadConfig shape, bump SANDBOX_TEMPLATE_VERSION (+ the " +
-        "pins in this test). See the comment above.",
+        "template or loadConfig shape, bump " +
+        "GALACTIC_SANDBOX_TEMPLATE_VERSION (+ the pins in this test). " +
+        "See the comment above.",
     );
   } finally {
     h.restore();

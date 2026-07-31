@@ -149,12 +149,25 @@ dollars remain separate meters and policies.
 
 ## Coding-agent handoff
 
-The handoff must use the Milestone 1 token-saving path:
+Milestone 6 is the completed pre-deployment handoff. It begins only after the
+user follows the passwordless sign-in link and has a confirmed email.
 
 ```text
-gx.project -> gx.download (only when source is needed)
-           -> gx.stage -> gx.test(bundle_id)
-           -> gx.upload(bundle_id, test_attestation) -> owner review
+confirmed account session
+  -> reveal one exact 60-minute purpose-bound bearer
+  -> POST /mcp/platform only
+
+connect
+  -> bounded tool discovery + local scaffold/lint guidance
+  -> no account data, source staging, test, submit, or mutation
+
+agent/interface/function/routine
+  -> optional assigned-target gx.project/gx.download
+  -> gx.stage
+  -> gx.test(bundle_id)          # current V2 basic conformance
+  -> gx.upload(bundle_id, exact test_attestation)
+  -> immutable full-release candidate archive
+  -> bearer consumed; nothing deployed
 ```
 
 Implemented:
@@ -167,35 +180,128 @@ Implemented:
 - Signed-out draft and continuation-intent preservation through
   authentication.
 - Credential creation only when the user requests Copy.
-- Account-session-only, reveal-once credentials with an exact server-selected
-  30-minute expiry.
-- Exact Agent UUID and app-id restriction for `interface`, `function`, and
-  `routine`; workspace scope for `connect`.
+- A confirmed magic-link account session is required. There is no password
+  handoff path and an unconfirmed session cannot issue a bearer.
+- Account-session-only, reveal-once credentials backed by a durable
+  service-role session and an exact database-enforced 60-minute expiry.
+- Intent-specific scopes and targets are server-derived. `agent` reserves one
+  not-yet-created Agent UUID; `interface`, `function`, and `routine` bind one
+  exact owned Agent and its base lineage; `connect` has no candidate target.
 - Fail-closed client validation of target, expiry, and the complete exact scope
   set returned by the server.
+- Scope is not authority. Request authentication resolves the session from the
+  database on every bearer call and accepts it only at the exact
+  `/mcp/platform` path. Upload, cancellation, rejection, revocation, and expiry
+  are visible immediately even if a generic token verdict was cached.
+- Handoff MCP initialization exposes no recent Agents or account activity.
+  Resource list/read cannot reveal Library, Memory, or other account data.
+- Connect is inspection-only. It cannot stage, test, submit, deploy, or mutate.
+- Candidate sessions bind one candidate-set id, bundle/source lineage, current
+  V2 basic-conformance attestation, compiled document/report/release digests,
+  and an immutable archive root.
+- A failed test may be fixed by restaging before success. A lost successful
+  test response may safely replace only its attestation id/digest when the
+  bundle and all release-evidence digests are identical.
+- `gx.upload` uniformly means “submit a complete Agent release candidate” for
+  `agent`, `interface`, `function`, and `routine`. The intent labels the user's
+  requested work; it does not narrow the security review to one artifact
+  class.
+- Submission recompiles the exact tested release and freezes source, compiled
+  artifacts, `galactic.yaml`, conformance report, authority/manifest data, and
+  lineage in an immutable archive. It does not insert an Agent, update a live
+  version, apply migrations, start routines, deploy, publish, or activate.
+- Extension candidates carry base version, optional legacy source/release
+  digests, release generation, and a required base-state digest. The M7
+  deployment saga compare-and-swaps this lineage; a changed target makes the
+  candidate stale.
+- Owners may hold at most ten nonterminal/unclaimed handoffs. Pending submitted
+  archives are capped at ten and 100 MiB aggregate; a rejected archive is
+  unbound. Any definitive database rejection—including a concurrent
+  cancellation—triggers best-effort cleanup and leaves the tested session
+  retryable where its lifecycle allows. Every archive attempt stores its blobs
+  and submitted pointer under that attempt's archive digest, so cleanup cannot
+  delete objects retained by a concurrent exact retest. Ambiguous transport
+  outcomes retain objects because Postgres may already reference them;
+  unreachable object garbage collection remains an operational follow-up.
+- Successful upload consumes the bearer atomically while retaining the durable
+  session and append-only lifecycle history.
 - Removal of the legacy broad, 30-day builder-key fallback. An issuance failure
   now produces no substitute credential.
-- A visible New-Agent presentation that is deliberately non-operational. Both
-  client and server disable issuance until one credential can be atomically
-  bound to one created private, paused Agent.
 
-Remaining:
+Deliberate post-M6 boundaries:
 
-- Persist the handoff lifecycle: created, connected, staged, tested, uploaded,
-  promoted, cancelled/rejected/revoked, or expired.
-- Prove that the reviewed semantic delta matches the selected structural
-  intent, not only that it targets the right Agent.
 - Add a dedicated Agent-scoped connection-declaration intent for changing an
   Agent release's declared settings, credentials, endpoints, or authority
   requirements. This is distinct from workspace `connect`, which only opens a
   temporary coding session.
-- Enable New-Agent issuance only after AS-BE-002 provides atomic single-create
-  binding and terminal revocation.
 - Implement the OAuth/device-style standing machine exchange in AS-BE-016.
-  Until then, every copied prompt is a temporary 30-minute handoff and users
+  Until then, every copied prompt is a temporary 60-minute handoff and users
   must request a fresh one after expiry.
 
+## Milestone 7 deployment boundary — complete
+
+M6 still ends at `uploaded`, which means **candidate submitted, not
+deployed**. M7 adds the owner-controlled deployment boundary. Payment remains
+a membership unlock rather than deployment authorization:
+
+```text
+durable checkout attempt -> Start membership — $20/month
+  -> Membership active; nothing deployed
+  -> owner reviews one or more frozen candidates
+  -> clicks Deploy for each selected candidate
+  -> leased replay-safe saga + extension base-lineage CAS
+  -> private setup_required release; routines paused
+  -> credentials + authority/cadence/budget review
+  -> explicit owner activation
+```
+
+Implemented:
+
+- The pre-auth page is a blank version of the working member fleet, with the
+  Add Agent entry point and both clearly labeled examples retained. Sign in
+  uses the configured passwordless email link; this funnel has no password
+  form.
+- The invitation projects all pending immutable candidates and their
+  digest-bound server manifest summaries. The $20/month CTA creates or resumes
+  one opaque durable checkout attempt. Stripe reconciliation may make the
+  membership active, but neither checkout nor its return deploys anything.
+- A paid owner explicitly selects **Deploy**. Candidate deployments are
+  independent: successful Agents remain deployed when another selection is
+  stale or fails, and each card reports its own progress/result.
+- The deployment service accepts only current V2 basic-conformance evidence
+  for the exact uploaded archive. It materializes content-addressed source and
+  artifacts under the release digest, and stores the executable in a
+  release-digest key with mandatory signed byte/version/digest metadata and
+  strict read-back verification.
+- PostgreSQL owns a replay-safe, idempotency-bound leased saga. It checks active
+  membership and extension base lineage, fences each lease, reconciles an
+  interrupted attempt, and returns the committed result after a lost response
+  without reading mutable draft/workspace bytes.
+- Commit produces a private `setup_required` release with all routines paused
+  and exact release provenance. Setup collects user credentials and reviews
+  authority, cadence, and budget. A separate membership-checked owner action
+  explicitly changes the Agent to `ready` and activates any selected routine.
+- Mutable legacy patch/publish/rebuild/upload routes cannot replace canonical
+  qualified releases. Canonical execution resolves the immutable active
+  release digest, not a mutable latest or version-only pointer.
+- Broad authenticated writes to Agent and routine lifecycle tables are
+  revoked. Narrow service-role/security-definer mutations enforce membership,
+  release lineage, setup, activation, and execution beside their database
+  writes.
+- Direct run, HTTP/MCP, dynamic/native execution, codemode/recipe execution,
+  queued jobs, deferred event delivery, and routine claims all independently
+  require a runnable lifecycle and current active membership. A lapse fails
+  closed even for previously queued or active work.
+
+M7 is covered by route, service, runtime, replay, lineage, database privilege,
+and concurrency tests; full API/web suites and typechecks/builds; and
+responsive browser review. The OAuth/device-style standing connection in
+AS-BE-016 and the broader Studio milestones remain future work.
+
 ## Rollout order
+
+Milestones 6 and 7 complete the temporary coding-agent handoff through manual
+member deployment. Remaining Studio rollout:
 
 1. Full-page shell, canonical routes and aliases, exact themes, Overview, and
    honest contract-boundary states.

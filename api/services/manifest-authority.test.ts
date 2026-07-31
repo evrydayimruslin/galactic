@@ -27,6 +27,194 @@ Deno.test("manifest authority: ordinary implementation and function changes are 
   assertEquals(findManifestAuthorityExpansions(current, target), []);
 });
 
+Deno.test("manifest authority: function-scoped effect additions and moves require owner promotion", () => {
+  const current = {
+    permissions: ["storage:write"],
+    functions: {
+      status: {
+        authority: { level: "read", effects: {} },
+      },
+      write: {
+        authority: {
+          level: "internal_write",
+          effects: { "storage.write": "ask" },
+        },
+      },
+    },
+  };
+  const added = {
+    ...current,
+    functions: {
+      ...current.functions,
+      status: {
+        authority: {
+          level: "internal_write",
+          effects: { "storage.write": "ask" },
+        },
+      },
+    },
+  };
+  assertEquals(
+    findManifestAuthorityExpansions(current, added),
+    ["functions.authority:status\u0000storage.write"],
+  );
+
+  const moved = {
+    ...added,
+    functions: {
+      status: added.functions.status,
+      write: {
+        authority: { level: "read", effects: {} },
+      },
+    },
+  };
+  assertEquals(
+    findManifestAuthorityExpansions(current, moved),
+    ["functions.authority:status\u0000storage.write"],
+  );
+});
+
+Deno.test("manifest authority: ask to free is an expansion and free to ask is narrowing", () => {
+  const ask = {
+    permissions: ["storage:write"],
+    functions: {
+      write: {
+        authority: {
+          level: "internal_write",
+          effects: { "storage.write": "ask" },
+        },
+      },
+    },
+  };
+  const free = {
+    ...ask,
+    functions: {
+      write: {
+        authority: {
+          level: "internal_write",
+          effects: { "storage.write": "free" },
+        },
+      },
+    },
+  };
+
+  assertEquals(
+    findManifestAuthorityExpansions(ask, free),
+    ["functions.authority.free:write\u0000storage.write"],
+  );
+  assertEquals(findManifestAuthorityExpansions(free, ask), []);
+});
+
+Deno.test("manifest authority: effects without legacy permissions still require owner promotion", () => {
+  const current = {
+    functions: {
+      work: {
+        authority: { level: "read", effects: {} },
+      },
+    },
+  };
+  const target = {
+    functions: {
+      work: {
+        authority: {
+          level: "external_write",
+          effects: {
+            "database.read": "free",
+            "database.write": "ask",
+            "routine.read": "free",
+            "event.publish": "ask",
+          },
+        },
+      },
+    },
+    flight_recorder: true,
+  };
+
+  assertEquals(findManifestAuthorityExpansions(current, target), [
+    "functions.authority:work\u0000database.read",
+    "functions.authority:work\u0000database.write",
+    "functions.authority:work\u0000event.publish",
+    "functions.authority:work\u0000routine.read",
+  ]);
+});
+
+Deno.test("manifest authority: malformed opted-in authority fails closed", () => {
+  const current = {
+    functions: {
+      work: {
+        authority: { level: "read", effects: {} },
+      },
+    },
+  };
+  const malformedTargets = [
+    {
+      functions: {
+        work: {
+          authority: {
+            level: "external_write",
+            effects: { "event.publish": "sometimes" },
+          },
+        },
+      },
+    },
+    {
+      functions: {
+        work: {
+          authority: {
+            level: "read",
+            effects: { "event.publish": "ask" },
+          },
+        },
+      },
+    },
+    {
+      functions: {
+        work: {
+          authority: { level: "read", effects: {}, typo: true },
+        },
+      },
+    },
+    {
+      functions: {
+        work: {
+          authority: { level: "read", effects: {} },
+        },
+        missing: { description: "No authority in an opted-in manifest" },
+      },
+    },
+  ];
+
+  for (const target of malformedTargets) {
+    assertEquals(
+      findManifestAuthorityExpansions(current, target).some((path) =>
+        path.startsWith("functions.authority.invalid:")
+      ),
+      true,
+    );
+  }
+});
+
+Deno.test("manifest authority: removing function authority cannot restore legacy app-wide capabilities", () => {
+  const current = {
+    permissions: ["storage:write"],
+    functions: {
+      safe: {
+        authority: { level: "read", effects: {} },
+      },
+    },
+  };
+  const target = {
+    permissions: ["storage:write"],
+    functions: {
+      safe: { description: "Legacy function" },
+    },
+  };
+
+  assertEquals(findManifestAuthorityExpansions(current, target), [
+    "functions.authority:removed",
+  ]);
+});
+
 Deno.test("manifest authority: new runtime, network, and cross-Agent powers require owner promotion", () => {
   const expansions = findManifestAuthorityExpansions(
     {
@@ -84,13 +272,15 @@ Deno.test("manifest authority: compute permission, profile, tools, and secrets r
     },
   );
 
-  for (const path of [
-    "permissions:compute:exec",
-    "compute.profile:developer-v1",
-    "compute.tools:browser",
-    "compute.tools:shell",
-    "compute.secrets:GH_TOKEN",
-  ]) {
+  for (
+    const path of [
+      "permissions:compute:exec",
+      "compute.profile:developer-v1",
+      "compute.tools:browser",
+      "compute.tools:shell",
+      "compute.secrets:GH_TOKEN",
+    ]
+  ) {
     assert(expansions.includes(path), `${path} should require owner promotion`);
   }
 });
@@ -292,12 +482,16 @@ Deno.test("manifest authority: owner-facing delta is symmetric and strips intern
     },
   );
 
-  assert(changes.some((item) =>
-    item.change === "added" && item.path.includes("storage:write")
-  ));
-  assert(changes.some((item) =>
-    item.change === "removed" && item.path.includes("memory:read")
-  ));
+  assert(
+    changes.some((item) =>
+      item.change === "added" && item.path.includes("storage:write")
+    ),
+  );
+  assert(
+    changes.some((item) =>
+      item.change === "removed" && item.path.includes("memory:read")
+    ),
+  );
   assert(changes.every((item) => !item.path.includes("\0")));
   assert(changes.every((item) => !item.label.includes("\0")));
 });

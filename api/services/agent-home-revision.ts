@@ -2,15 +2,14 @@ import { getEnv } from "../lib/env.ts";
 import { isAccountSessionAuthSource } from "./control-plane-auth.ts";
 import type { RequestAuthSource } from "./request-auth.ts";
 import {
-  normalizeRoutineSchedule,
   type NormalizedProductionRoutineSchedule,
+  normalizeRoutineSchedule,
   RoutineScheduleValidationError,
 } from "./routine-schedule.ts";
 
 const REVISION_TOKEN_PREFIX = "ah1";
 const POSITIVE_DECIMAL = /^[1-9][0-9]*$/;
-const UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TRANSIENT_DATABASE_CODES = new Set(["40P01", "40001"]);
 const MAX_RPC_ATTEMPTS = 3;
 
@@ -18,6 +17,8 @@ type AgentHomeRevisionErrorCode =
   | "ACCOUNT_SESSION_REQUIRED"
   | "AGENT_HOME_INVALID_REVISION"
   | "AGENT_HOME_REVISION_CONFLICT"
+  | "AGENT_HOME_RELEASE_CONFLICT"
+  | "PRO_SUBSCRIPTION_REQUIRED"
   | "AGENT_HOME_NOT_FOUND"
   | "AGENT_HOME_PRIVATE_REQUIRED"
   | "AGENT_HOME_ROUTINE_NOT_FOUND"
@@ -208,6 +209,8 @@ function databaseErrorCode(value: unknown): AgentHomeRevisionErrorCode | null {
   switch (code) {
     case "AGENT_HOME_INVALID_REVISION":
     case "AGENT_HOME_REVISION_CONFLICT":
+    case "AGENT_HOME_RELEASE_CONFLICT":
+    case "PRO_SUBSCRIPTION_REQUIRED":
     case "AGENT_HOME_NOT_FOUND":
     case "AGENT_HOME_PRIVATE_REQUIRED":
     case "AGENT_HOME_ROUTINE_NOT_FOUND":
@@ -250,6 +253,10 @@ function mappedStatus(code: AgentHomeRevisionErrorCode): number {
   switch (code) {
     case "AGENT_HOME_REVISION_CONFLICT":
       return 412;
+    case "AGENT_HOME_RELEASE_CONFLICT":
+      return 409;
+    case "PRO_SUBSCRIPTION_REQUIRED":
+      return 403;
     case "AGENT_HOME_PRIVATE_REQUIRED":
     case "AGENT_HOME_IDEMPOTENCY_MISMATCH":
     case "AGENT_HOME_ACTION_IN_PROGRESS":
@@ -307,6 +314,10 @@ async function responseError(
     status: mappedStatus(code),
     message: code === "AGENT_HOME_REVISION_CONFLICT"
       ? "This Agent changed after the page was loaded. Refresh before retrying."
+      : code === "AGENT_HOME_RELEASE_CONFLICT"
+      ? "This Agent release changed. Refresh setup before activating."
+      : code === "PRO_SUBSCRIPTION_REQUIRED"
+      ? "An active Galactic membership is required to activate this Agent."
       : code === "AGENT_HOME_NOT_FOUND" ||
           code === "AGENT_HOME_ROUTINE_NOT_FOUND"
       ? "Agent Home was not found."
@@ -561,7 +572,9 @@ function requireNormalizedSchedule(
     normalized = normalizeRoutineSchedule(value);
   } catch (error) {
     if (error instanceof RoutineScheduleValidationError) {
-      throw invalidMutation(`The routine schedule is invalid: ${error.message}`);
+      throw invalidMutation(
+        `The routine schedule is invalid: ${error.message}`,
+      );
     }
     throw error;
   }
@@ -823,6 +836,97 @@ export async function updateAgentHomeManagedRoutineStatusCAS(input: {
     deps,
   );
   return revisionFromMutation(payload, base.appId);
+}
+
+/**
+ * Crosses the M7 setup boundary in one database transaction. The database
+ * revalidates membership, immutable release lineage, settings, authority,
+ * cadence, and budgets before making the Agent runnable. `routineId` is
+ * optional because a callable Agent can be valid without a recurring routine.
+ */
+export async function activateMemberDeployedAgentCAS(input: {
+  appId: string;
+  userId: string;
+  expectedRevision: string;
+  expectedReleaseGeneration: string | number;
+  authSource: RequestAuthSource | string | null | undefined;
+  routineId?: string | null;
+}, deps: AgentHomeDatabaseDeps = {}): Promise<{
+  revision: string;
+  releaseGeneration: string;
+  routineId: string | null;
+  routineStatus: "active" | null;
+  replayed: boolean;
+}> {
+  const base = mutationBase(input);
+  const expectedReleaseGeneration = normalizePositiveRevision(
+    input.expectedReleaseGeneration,
+  );
+  const routineId = input.routineId === null || input.routineId === undefined
+    ? null
+    : requireUuid(input.routineId, "routineId");
+  const payload = await callRpc(
+    "activate_member_deployed_agent",
+    {
+      p_request: {
+        owner_id: base.userId,
+        app_id: base.appId,
+        expected_release_generation: expectedReleaseGeneration,
+        expected_agent_home_revision: base.expectedRevision,
+        routine_id: routineId,
+      },
+    },
+    base.appId,
+    deps,
+  );
+  const row = firstRow(payload);
+  const deploymentState = stringValue(row?.deployment_state);
+  const releaseGeneration = stringValue(row?.release_generation) ??
+    (typeof row?.release_generation === "number" &&
+        Number.isSafeInteger(row.release_generation)
+      ? String(row.release_generation)
+      : null);
+  const revision = stringValue(row?.agent_home_revision) ??
+    stringValue(row?.new_revision);
+  const rawRoutineId = row?.routine_id;
+  const returnedRoutineId = rawRoutineId === null ||
+      rawRoutineId === undefined
+    ? null
+    : stringValue(rawRoutineId);
+  const rawRoutineStatus = row?.routine_status;
+  const routineStatus = rawRoutineStatus === null ||
+      rawRoutineStatus === undefined
+    ? null
+    : stringValue(rawRoutineStatus);
+  if (
+    !row ||
+    stringValue(row.app_id) !== base.appId ||
+    deploymentState !== "ready" ||
+    releaseGeneration !== expectedReleaseGeneration ||
+    !revision ||
+    (rawRoutineId !== null && rawRoutineId !== undefined &&
+      returnedRoutineId === null) ||
+    (returnedRoutineId !== null && !UUID.test(returnedRoutineId)) ||
+    (rawRoutineStatus !== null && rawRoutineStatus !== undefined &&
+      routineStatus === null) ||
+    (routineStatus !== null && routineStatus !== "active") ||
+    (routineId === null && returnedRoutineId !== null) ||
+    (routineId !== null && returnedRoutineId !== routineId) ||
+    typeof row.replayed !== "boolean"
+  ) {
+    throw new AgentHomeRevisionError({
+      code: "AGENT_HOME_SERVICE_UNAVAILABLE",
+      status: 503,
+      message: "Agent activation persistence returned an invalid result.",
+    });
+  }
+  return {
+    revision: formatAgentHomeRevision(base.appId, revision),
+    releaseGeneration,
+    routineId: returnedRoutineId,
+    routineStatus,
+    replayed: row?.replayed === true,
+  };
 }
 
 export async function pauseAgentHomeRoutineEmergency(input: {

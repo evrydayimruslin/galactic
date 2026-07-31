@@ -1,10 +1,15 @@
-import type { HealthWindows } from '../types/index.ts';
-import type { MCPToolAnnotations } from './mcp.ts';
+import type {
+  HealthWindows,
+  VersionTestQualificationMetadata,
+} from "../types/index.ts";
+import type { MCPToolAnnotations } from "./mcp.ts";
 
-export const LAUNCH_MVP_VERSION = 'persistent-agent-mvp-v1' as const;
-export const AGENT_HOME_CONTRACT_VERSION = '2026-07-23.operator.1' as const;
-export const OPERATOR_ISSUE_CONTRACT_VERSION = '2026-07-24.operator-issues.1' as const;
-export const OPERATOR_DIAGNOSTIC_CONTRACT_VERSION = '2026-07-24.operator-diagnostics.1' as const;
+export const LAUNCH_MVP_VERSION = "persistent-agent-mvp-v1" as const;
+export const AGENT_HOME_CONTRACT_VERSION = "2026-07-23.operator.1" as const;
+export const OPERATOR_ISSUE_CONTRACT_VERSION =
+  "2026-07-24.operator-issues.1" as const;
+export const OPERATOR_DIAGNOSTIC_CONTRACT_VERSION =
+  "2026-07-24.operator-diagnostics.1" as const;
 
 /**
  * Machine-readable invariants for operator issues and remediation.
@@ -15,198 +20,206 @@ export const OPERATOR_DIAGNOSTIC_CONTRACT_VERSION = '2026-07-24.operator-diagnos
  * never infer remediation from prose or execute a server-supplied URL.
  */
 export const OPERATOR_ISSUE_POLICY = {
-  diagnosisAuthority: 'trusted_server_condition',
-  remediationAuthority: 'server_registry',
-  navigationContract: 'semantic_target',
-  conditionLifecycleAuthority: 'operator_issue',
-  attentionStateAuthority: 'operator_issue_attention_state',
-  notificationRole: 'immutable_evidence_and_reports',
-  globalCountMeaning: 'unique_items',
-  agentCountMeaning: 'relevance_projections',
-  blockerOrdering: 'dependency_then_source_order',
-  scheduledResumeAfterRecovery: 'explicit_owner_action',
-  legacyProseAndUrlParsing: 'compatibility_only',
+  diagnosisAuthority: "trusted_server_condition",
+  remediationAuthority: "server_registry",
+  navigationContract: "semantic_target",
+  conditionLifecycleAuthority: "operator_issue",
+  attentionStateAuthority: "operator_issue_attention_state",
+  notificationRole: "immutable_evidence_and_reports",
+  globalCountMeaning: "unique_items",
+  agentCountMeaning: "relevance_projections",
+  blockerOrdering: "dependency_then_source_order",
+  scheduledResumeAfterRecovery: "explicit_owner_action",
+  legacyProseAndUrlParsing: "compatibility_only",
 } as const;
 
 // Machine-readable safety/product invariants for the private persistent-Agent
 // launch. Capability-basin code may support broader modes, but the Conjure and
 // Agent-home paths must never silently widen these choices.
 export const PERSISTENT_AGENT_LAUNCH_POLICY = {
-  access: 'private_owner_only',
+  access: "private_owner_only",
   primaryRoutinesPerAgent: 1,
-  additionalRoutinesPerAgent: 'unbounded_within_shared_capacity',
-  scheduleSurface: 'interval_and_cron',
-  reportingDestination: 'galactic_inbox',
-  perAgentCapacityCeiling: 'owner_configured_share_of_account_windows',
-  activationAuthority: 'account_session',
-  connectedAgentAuthority: 'scoped_builder_operator',
-  crossAgentTargets: 'owned_private_agents_only',
-  crossAgentApproval: 'account_session',
-  budgetEnforcement: 'hard_pre_execution',
+  additionalRoutinesPerAgent: "unbounded_within_shared_capacity",
+  scheduleSurface: "interval_and_cron",
+  reportingDestination: "galactic_inbox",
+  perAgentCapacityCeiling: "owner_configured_share_of_account_windows",
+  activationAuthority: "account_session",
+  connectedAgentAuthority: "scoped_builder_operator",
+  crossAgentTargets: "owned_private_agents_only",
+  crossAgentApproval: "account_session",
+  budgetEnforcement: "hard_pre_execution",
   manualRunsCountTowardBudgets: true,
-  updatePromotion: 'test_then_promote',
+  updatePromotion: "test_then_promote",
   expandedCapabilitiesRequireReapproval: true,
 } as const;
 
 export const LAUNCH_INCLUDED_CAPABILITIES = [
-  'private_agent_library',
-  'persistent_agent_home',
-  'full_time_routines',
-  'multi_routine_agents',
-  'cron_timezone_scheduling',
-  'durable_event_triggers',
-  'sandboxed_execution',
-  'owned_agent_composition',
-  'runtime_monitoring',
-  'owner_inbox_reporting',
-  'hard_budget_limits',
-  'encrypted_runtime_settings',
-  'byok',
-  'subscription_capacity',
-  'coalesced_capacity_waiting',
-  'per_agent_capacity_caps',
-  'agent_filtered_alerts',
-  'compact_owner_fleet',
-  'animated_agent_icons',
-  'scoped_builder_connection',
-  'cli_api_mcp',
+  "private_agent_library",
+  "persistent_agent_home",
+  "full_time_routines",
+  "multi_routine_agents",
+  "cron_timezone_scheduling",
+  "durable_event_triggers",
+  "sandboxed_execution",
+  "owned_agent_composition",
+  "runtime_monitoring",
+  "owner_inbox_reporting",
+  "hard_budget_limits",
+  "encrypted_runtime_settings",
+  "byok",
+  "subscription_capacity",
+  "coalesced_capacity_waiting",
+  "per_agent_capacity_caps",
+  "agent_filtered_alerts",
+  "compact_owner_fleet",
+  "animated_agent_icons",
+  "scoped_builder_connection",
+  "cli_api_mcp",
 ] as const;
 
-export type LaunchIncludedCapability = typeof LAUNCH_INCLUDED_CAPABILITIES[number];
+export type LaunchIncludedCapability =
+  typeof LAUNCH_INCLUDED_CAPABILITIES[number];
 
 export const LAUNCH_DEFERRED_CAPABILITIES = [
-  'marketplace',
-  'public_discovery',
-  'public_agent_pages',
-  'agent_installation',
-  'public_unlisted_publication',
-  'seller_monetization',
-  'earnings_payouts_referrals',
-  'leaderboards',
-  'marketplace_trust_reputation',
-  'cross_user_sharing',
-  'external_reporting_destinations',
-  'command_cards',
-  'command_dashboards',
-  'agentic_ui_composer',
-  'standalone_website_builder',
+  "marketplace",
+  "public_discovery",
+  "public_agent_pages",
+  "agent_installation",
+  "public_unlisted_publication",
+  "seller_monetization",
+  "earnings_payouts_referrals",
+  "leaderboards",
+  "marketplace_trust_reputation",
+  "cross_user_sharing",
+  "external_reporting_destinations",
+  "command_cards",
+  "command_dashboards",
+  "agentic_ui_composer",
+  "standalone_website_builder",
 ] as const;
 
-export type LaunchDeferredCapability = typeof LAUNCH_DEFERRED_CAPABILITIES[number];
+export type LaunchDeferredCapability =
+  typeof LAUNCH_DEFERRED_CAPABILITIES[number];
 
 export const LAUNCH_PUBLIC_ROUTES = [
-  '/',
-  '/connect',
-  '/agents',
-  '/browse',
-  '/agents/:slug',
-  '/account',
-  '/admin/agents/:id',
-  '/terms',
-  '/privacy',
+  "/",
+  "/connect",
+  "/agents",
+  "/browse",
+  "/agents/:slug",
+  "/account",
+  "/admin/agents/:id",
+  "/terms",
+  "/privacy",
 ] as const;
 
 export type LaunchPublicRoute = typeof LAUNCH_PUBLIC_ROUTES[number];
 
 export const LAUNCH_COMPATIBILITY_PUBLIC_ROUTES = [
-  '/discover',
-  '/install',
-  '/library',
-  '/store',
-  '/wallet',
-  '/settings',
-  '/tools/:slug',
-  '/admin/tools/:id',
+  "/discover",
+  "/install",
+  "/library",
+  "/store",
+  "/wallet",
+  "/settings",
+  "/tools/:slug",
+  "/admin/tools/:id",
 ] as const;
 
-export type LaunchCompatibilityPublicRoute = typeof LAUNCH_COMPATIBILITY_PUBLIC_ROUTES[number];
+export type LaunchCompatibilityPublicRoute =
+  typeof LAUNCH_COMPATIBILITY_PUBLIC_ROUTES[number];
 
 export const LAUNCH_API_ROUTES = [
-  'GET /api/launch/status',
-  'GET /api/launch/openapi.json',
-  'GET /api/launch/install',
-  'GET /api/launch/api-keys',
-  'POST /api/launch/api-keys',
-  'DELETE /api/launch/api-keys/:id',
-  'POST /api/launch/handoffs',
-  'POST /api/launch/agents/:id/handoffs',
-  'GET /api/launch/byok',
-  'PUT /api/launch/byok/:provider',
-  'DELETE /api/launch/byok/:provider',
-  'POST /api/launch/byok/primary',
-  'GET /api/launch/inference-options',
-  'GET /api/launch/subscription',
-  'POST /api/launch/subscription/checkout',
-  'POST /api/launch/subscription/portal',
-  'GET /api/launch/capacity',
-  'GET /api/launch/fleet',
-  'GET /api/launch/fleet/preferences',
-  'PATCH /api/launch/fleet/preferences',
-  'PUT /api/launch/fleet/order',
-  'GET /api/launch/notifications',
-  'GET /api/launch/attention',
-  'PATCH /api/launch/operator-items/:id/attention',
-  'POST /api/launch/operator-items/:id/actions',
-  'PATCH /api/launch/notifications',
-  'POST /api/launch/notifications/:id/actions',
-  'GET /api/launch/search',
-  'GET /api/launch/library',
-  'POST /api/launch/folders',
-  'PATCH /api/launch/folders/:id',
-  'DELETE /api/launch/folders/:id',
-  'PUT /api/launch/folders/members',
-  'GET /api/launch/store',
-  'GET /api/launch/discover',
-  'GET /api/launch/agents/:id',
-  'GET /api/launch/agents/:id/preferences',
-  'PATCH /api/launch/agents/:id/preferences',
-  'GET /api/launch/agents/:id/attention',
-  'GET /api/launch/agents/:id/home',
-  'GET /api/launch/agents/:id/home/activity',
-  'GET /api/launch/agents/:id/routine-runs/:runId',
-  'GET /api/launch/agents/:id/routine-runs/:runId/logs/:receiptId',
-  'PATCH /api/launch/agents/:id/home/identity',
-  'PATCH /api/launch/agents/:id/home/routine',
-  'PUT /api/launch/agents/:id/home/settings',
-  'POST /api/launch/agents/:id/home/actions',
-  'POST /api/launch/agents/:id/home/pause',
-  'GET /api/launch/agents/:id/routines',
-  'GET /api/launch/agents/:id/routines/:routineId',
-  'PATCH /api/launch/agents/:id/routines/:routineId',
-  'POST /api/launch/agents/:id/routines/:routineId/actions',
-  'GET /api/launch/agents/:id/capacity',
-  'PATCH /api/launch/agents/:id/capacity',
-  'GET /api/launch/agents/:id/compute/settings',
-  'PUT /api/launch/agents/:id/compute/settings',
-  'GET /api/launch/agents/:id/compute/runs',
-  'POST /api/launch/agents/:id/compute/runs/:runId/cancel',
-  'GET /api/launch/agents/:id/compute/runs/:runId/artifacts/:artifactId',
-  'GET /api/launch/agents/:id/routine',
-  'GET /api/launch/agents/:id/functions',
-  'POST /api/launch/agents/:id/functions/:functionName/run',
-  'POST /api/launch/agents/:id/install',
-  'DELETE /api/launch/agents/:id/install',
-  'GET /api/launch/agents/:id/caller-permissions',
-  'PATCH /api/launch/agents/:id/caller-permissions',
-  'GET /api/launch/agents/:id/function-inference',
-  'PUT /api/launch/agents/:id/function-inference',
-  'DELETE /api/launch/agents/:id/function-inference',
-  'GET /api/launch/agents/:id/settings',
-  'PUT /api/launch/agents/:id/settings',
-  'GET /api/launch/admin/agents/:id',
-  'GET /api/launch/agents/:id/wiring',
-  'GET /api/launch/agents/:id/caller-trust',
-  'GET /api/launch/grants',
-  'POST /api/launch/grants',
-  'PATCH /api/launch/grants/:id',
-  'POST /api/launch/grants/:id/approve',
-  'DELETE /api/launch/grants/:id',
-  'GET /api/launch/wiring/targets',
-  'GET /api/launch/settings',
-  'PATCH /api/launch/settings',
-  'GET /api/launch/jobs/:id',
-  'GET /api/launch/leaderboard',
-  'GET /api/launch/platform-primitives',
+  "GET /api/launch/status",
+  "GET /api/launch/openapi.json",
+  "GET /api/launch/install",
+  "GET /api/launch/api-keys",
+  "POST /api/launch/api-keys",
+  "DELETE /api/launch/api-keys/:id",
+  "POST /api/launch/handoffs",
+  "POST /api/launch/agents/:id/handoffs",
+  "GET /api/launch/candidates",
+  "GET /api/launch/candidates/:candidateId",
+  "POST /api/launch/candidates/:candidateId/deploy",
+  "GET /api/launch/byok",
+  "PUT /api/launch/byok/:provider",
+  "DELETE /api/launch/byok/:provider",
+  "POST /api/launch/byok/primary",
+  "GET /api/launch/inference-options",
+  "GET /api/launch/subscription",
+  "POST /api/launch/subscription/checkout",
+  "GET /api/launch/subscription/checkout-attempts/:attemptId",
+  "POST /api/launch/subscription/checkout-attempts/:attemptId/cancel",
+  "POST /api/launch/subscription/portal",
+  "GET /api/launch/capacity",
+  "GET /api/launch/fleet",
+  "GET /api/launch/fleet/preferences",
+  "PATCH /api/launch/fleet/preferences",
+  "PUT /api/launch/fleet/order",
+  "GET /api/launch/notifications",
+  "GET /api/launch/attention",
+  "PATCH /api/launch/operator-items/:id/attention",
+  "POST /api/launch/operator-items/:id/actions",
+  "PATCH /api/launch/notifications",
+  "POST /api/launch/notifications/:id/actions",
+  "GET /api/launch/search",
+  "GET /api/launch/library",
+  "POST /api/launch/folders",
+  "PATCH /api/launch/folders/:id",
+  "DELETE /api/launch/folders/:id",
+  "PUT /api/launch/folders/members",
+  "GET /api/launch/store",
+  "GET /api/launch/discover",
+  "GET /api/launch/agents/:id",
+  "GET /api/launch/agents/:id/preferences",
+  "PATCH /api/launch/agents/:id/preferences",
+  "GET /api/launch/agents/:id/attention",
+  "GET /api/launch/agents/:id/home",
+  "GET /api/launch/agents/:id/home/activity",
+  "GET /api/launch/agents/:id/routine-runs/:runId",
+  "GET /api/launch/agents/:id/routine-runs/:runId/logs/:receiptId",
+  "PATCH /api/launch/agents/:id/home/identity",
+  "PATCH /api/launch/agents/:id/home/routine",
+  "PUT /api/launch/agents/:id/home/settings",
+  "POST /api/launch/agents/:id/home/actions",
+  "POST /api/launch/agents/:id/home/pause",
+  "GET /api/launch/agents/:id/routines",
+  "GET /api/launch/agents/:id/routines/:routineId",
+  "PATCH /api/launch/agents/:id/routines/:routineId",
+  "POST /api/launch/agents/:id/routines/:routineId/actions",
+  "GET /api/launch/agents/:id/capacity",
+  "PATCH /api/launch/agents/:id/capacity",
+  "GET /api/launch/agents/:id/compute/settings",
+  "PUT /api/launch/agents/:id/compute/settings",
+  "GET /api/launch/agents/:id/compute/runs",
+  "POST /api/launch/agents/:id/compute/runs/:runId/cancel",
+  "GET /api/launch/agents/:id/compute/runs/:runId/artifacts/:artifactId",
+  "GET /api/launch/agents/:id/routine",
+  "GET /api/launch/agents/:id/functions",
+  "POST /api/launch/agents/:id/functions/:functionName/run",
+  "POST /api/launch/agents/:id/install",
+  "DELETE /api/launch/agents/:id/install",
+  "GET /api/launch/agents/:id/caller-permissions",
+  "PATCH /api/launch/agents/:id/caller-permissions",
+  "GET /api/launch/agents/:id/function-inference",
+  "PUT /api/launch/agents/:id/function-inference",
+  "DELETE /api/launch/agents/:id/function-inference",
+  "GET /api/launch/agents/:id/settings",
+  "PUT /api/launch/agents/:id/settings",
+  "GET /api/launch/admin/agents/:id",
+  "GET /api/launch/agents/:id/wiring",
+  "GET /api/launch/agents/:id/caller-trust",
+  "GET /api/launch/grants",
+  "POST /api/launch/grants",
+  "PATCH /api/launch/grants/:id",
+  "POST /api/launch/grants/:id/approve",
+  "DELETE /api/launch/grants/:id",
+  "GET /api/launch/wiring/targets",
+  "GET /api/launch/settings",
+  "PATCH /api/launch/settings",
+  "GET /api/launch/jobs/:id",
+  "GET /api/launch/leaderboard",
+  "GET /api/launch/platform-primitives",
 ] as const;
 
 export type LaunchApiRoute = typeof LAUNCH_API_ROUTES[number];
@@ -215,68 +228,69 @@ export type LaunchApiRoute = typeof LAUNCH_API_ROUTES[number];
 // serves them (normalized to the canonical /agents/caller-permissions
 // paths); removal is scheduled one release window after clients migrate.
 export const LAUNCH_COMPATIBILITY_API_ROUTES = [
-  'GET /api/launch/tools/:id',
-  'GET /api/launch/tools/:id/functions',
-  'POST /api/launch/tools/:id/functions/:functionName/run',
-  'GET /api/launch/tools/:id/agent-permissions',
-  'PATCH /api/launch/tools/:id/agent-permissions',
-  'GET /api/launch/admin/tools/:id',
+  "GET /api/launch/tools/:id",
+  "GET /api/launch/tools/:id/functions",
+  "POST /api/launch/tools/:id/functions/:functionName/run",
+  "GET /api/launch/tools/:id/agent-permissions",
+  "PATCH /api/launch/tools/:id/agent-permissions",
+  "GET /api/launch/admin/tools/:id",
 ] as const;
 
-export type LaunchCompatibilityApiRoute = typeof LAUNCH_COMPATIBILITY_API_ROUTES[number];
+export type LaunchCompatibilityApiRoute =
+  typeof LAUNCH_COMPATIBILITY_API_ROUTES[number];
 
 export const LAUNCH_INSTALL_TARGETS = [
-  'prompt',
-  'claude_code',
-  'cursor',
-  'codex',
-  'openai_remote_mcp',
-  'generic_mcp',
-  'cli',
-  'api',
+  "prompt",
+  "claude_code",
+  "cursor",
+  "codex",
+  "openai_remote_mcp",
+  "generic_mcp",
+  "cli",
+  "api",
 ] as const;
 
 export type LaunchInstallTarget = typeof LAUNCH_INSTALL_TARGETS[number];
 
 export const LAUNCH_AGENT_RELATIONSHIPS = [
-  'owner',
-  'installed',
-  'public',
+  "owner",
+  "installed",
+  "public",
 ] as const;
 
 export type LaunchAgentRelationship = typeof LAUNCH_AGENT_RELATIONSHIPS[number];
 
 export const LAUNCH_AGENT_KINDS = [
-  'mcp',
-  'http',
-  'markdown',
-  'gpu',
+  "mcp",
+  "http",
+  "markdown",
+  "gpu",
 ] as const;
 
 export type LaunchAgentKind = typeof LAUNCH_AGENT_KINDS[number];
 
 export const LAUNCH_AGENT_VISIBILITIES = [
-  'public',
-  'private',
-  'unlisted',
+  "public",
+  "private",
+  "unlisted",
 ] as const;
 
 export type LaunchAgentVisibility = typeof LAUNCH_AGENT_VISIBILITIES[number];
 
 export const LAUNCH_LEADERBOARD_KINDS = [
-  'builder',
-  'fee_credit',
+  "builder",
+  "fee_credit",
   // Per-Agent fees-waived ranking (the Browse "Top Agents" chart).
-  'agent_fee_credit',
+  "agent_fee_credit",
 ] as const;
 
 export type LaunchLeaderboardKind = typeof LAUNCH_LEADERBOARD_KINDS[number];
 
 export const LAUNCH_PLATFORM_PRIMITIVES = [
-  'install',
-  'deploy',
-  'api_keys',
-  'owner_admin',
+  "install",
+  "deploy",
+  "api_keys",
+  "owner_admin",
 ] as const;
 
 export type LaunchPlatformPrimitive = typeof LAUNCH_PLATFORM_PRIMITIVES[number];
@@ -373,35 +387,35 @@ export interface LaunchApiKeyDeleteResponse {
 }
 
 export const LAUNCH_HANDOFF_INTENTS = [
-  'agent',
-  'interface',
-  'function',
-  'routine',
-  'connect',
+  "agent",
+  "interface",
+  "function",
+  "routine",
+  "connect",
 ] as const;
 
 export type LaunchHandoffIntent = typeof LAUNCH_HANDOFF_INTENTS[number];
 
 export const LAUNCH_AGENT_EXTENSION_HANDOFF_INTENTS = [
-  'interface',
-  'function',
-  'routine',
+  "interface",
+  "function",
+  "routine",
 ] as const satisfies readonly LaunchHandoffIntent[];
 
 export type LaunchAgentExtensionHandoffIntent =
   typeof LAUNCH_AGENT_EXTENSION_HANDOFF_INTENTS[number];
 
 export const LAUNCH_HANDOFF_STATUSES = [
-  'created',
-  'connected',
-  'staged',
-  'tested',
-  'uploaded',
-  'promoted',
-  'cancelled',
-  'rejected',
-  'revoked',
-  'expired',
+  "created",
+  "connected",
+  "staged",
+  "tested",
+  "uploaded",
+  "promoted",
+  "cancelled",
+  "rejected",
+  "revoked",
+  "expired",
 ] as const;
 
 export type LaunchHandoffStatus = typeof LAUNCH_HANDOFF_STATUSES[number];
@@ -419,9 +433,16 @@ export interface LaunchHandoffCreateRequest {
 }
 
 export type LaunchHandoffTarget =
-  | { kind: 'workspace' }
+  | { kind: "workspace" }
   | {
-    kind: 'agent';
+    kind: "new_agent";
+    /** Server-reserved Agent UUID that this handoff alone may create. */
+    reservedAgentId: string;
+    /** New-Agent handoffs are permanently limited to one reserved Agent. */
+    maxAgents: 1;
+  }
+  | {
+    kind: "agent";
     agentId: string;
     agentSlug?: string | null;
     agentName: string;
@@ -460,35 +481,218 @@ export interface LaunchHandoffCreateResponse {
   generatedAt: string;
 }
 
+export const LAUNCH_CANDIDATE_STATUSES = [
+  "ready",
+  "deploying",
+  "deployed",
+  "stale",
+  "blocked",
+] as const;
+
+export type LaunchCandidateStatus = typeof LAUNCH_CANDIDATE_STATUSES[number];
+
+export type LaunchCandidateTarget =
+  | {
+    kind: "new_agent";
+    reservedAgentId: string;
+  }
+  | {
+    kind: "extension";
+    agentId: string;
+    agentSlug: string | null;
+    agentName: string;
+    baseLineage: {
+      version: string;
+      sourceHash: string | null;
+      releaseDigest: string | null;
+      stateDigest: string;
+    };
+    currentVersion: string | null;
+    lineageStatus: "current" | "stale";
+  };
+
+export interface LaunchCandidateFunctionProjection {
+  name: string;
+  description: string;
+  authorityLevel: "read" | "internal_write" | "external_write" | null;
+  effects: Array<{
+    id: string;
+    policy: "ask" | "free";
+  }>;
+}
+
+export interface LaunchCandidateInterfaceProjection {
+  id: string;
+  label: string;
+  description: string | null;
+  functions: string[];
+}
+
+export interface LaunchCandidateRoutineProjection {
+  id: string;
+  label: string;
+  description: string | null;
+  handler: string;
+  hasDefaultSchedule: boolean;
+}
+
+export interface LaunchCandidateSettingProjection {
+  key: string;
+  label: string | null;
+  description: string | null;
+  required: boolean;
+  secret: boolean;
+  scope: "agent" | "per_user";
+  destination: string | null;
+}
+
+/**
+ * Durable owner-safe receipt for a completed candidate deployment.
+ *
+ * The receipt is projected from the committed deployment record so a browser
+ * can recover setup navigation after a lost response or reload. It deliberately
+ * contains no idempotency key, lease, storage key, source, or credential data.
+ */
+export interface LaunchCandidateDeploymentReceipt {
+  deploymentId: string;
+  completedAt: string;
+  agent: {
+    id: string;
+    slug: string;
+    name: string;
+    version: string;
+    setupRequired: true;
+  };
+}
+
+/**
+ * Owner-safe invitation for one immutable, qualified candidate.
+ *
+ * This projection intentionally excludes source bytes, executable bytes,
+ * secret values, raw test inputs, and bearer credentials. The release and
+ * evidence fields are derived from the digest-verified candidate archive.
+ */
+export interface LaunchCandidateInvitation {
+  id: string;
+  handoffId: string;
+  intent: Exclude<LaunchHandoffIntent, "connect">;
+  status: LaunchCandidateStatus;
+  target: LaunchCandidateTarget;
+  archive: {
+    digest: string;
+    byteCount: number;
+    objectCount: number;
+  };
+  release: {
+    version: string;
+    name: string;
+    description: string | null;
+    functions: LaunchCandidateFunctionProjection[];
+    interfaces: LaunchCandidateInterfaceProjection[];
+    routines: LaunchCandidateRoutineProjection[];
+    settings: LaunchCandidateSettingProjection[];
+    network: Array<{
+      host: string;
+      label: string | null;
+      description: string | null;
+    }>;
+    compute: {
+      profile: string;
+      tools: string[];
+      secretNames: string[];
+    } | null;
+    permissions: string[];
+  };
+  evidence: {
+    bundleId: string;
+    sourceHash: string;
+    attestationId: string;
+    attestationDigest: string;
+    documentDigest: string;
+    reportDigest: string;
+    releaseDigest: string;
+    qualification: VersionTestQualificationMetadata;
+  };
+  deploymentReady: boolean;
+  blocker: {
+    code: string;
+    message: string;
+  } | null;
+  /**
+   * Present only when `status` is `deployed`. Non-completed candidates always
+   * project null, including recoverable in-progress deployments.
+   */
+  deployment: LaunchCandidateDeploymentReceipt | null;
+  /** Opaque revision the owner reviewed and must echo when deploying. */
+  reviewRevision: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LaunchCandidateListResponse {
+  candidates: LaunchCandidateInvitation[];
+  subscription: LaunchSubscriptionResponse;
+  generatedAt: string;
+}
+
+export interface LaunchCandidateDetailResponse {
+  candidate: LaunchCandidateInvitation;
+  generatedAt: string;
+}
+
+export interface LaunchCandidateDeployRequest {
+  idempotencyKey: string;
+  archiveDigest: string;
+  releaseDigest: string;
+  reviewRevision: string;
+}
+
+export interface LaunchCandidateDeployResponse {
+  success: boolean;
+  candidateId: string;
+  deploymentId: string;
+  status: "pending" | "completed" | "failed";
+  replayed: boolean;
+  agent: {
+    id: string;
+    slug: string;
+    name: string;
+    version: string;
+    setupRequired: boolean;
+  } | null;
+  message: string;
+  generatedAt: string;
+}
+
 /**
  * Autonomous execution authority for work initiated by a persistent Agent.
  * This is deliberately separate from connected-caller permissions, routine
  * capability approval, and cross-Agent grants.
  */
 export const LAUNCH_AUTONOMOUS_FUNCTION_POLICIES = [
-  'off',
-  'ask',
-  'free',
+  "off",
+  "ask",
+  "free",
 ] as const;
 
 export type LaunchAutonomousFunctionPolicy =
   typeof LAUNCH_AUTONOMOUS_FUNCTION_POLICIES[number];
 
 export const LAUNCH_FUNCTION_CONSEQUENCE_GROUPS = [
-  'read',
-  'internal_write',
-  'external_side_effect',
-  'spend',
+  "read",
+  "internal_write",
+  "external_side_effect",
+  "spend",
 ] as const;
 
 export type LaunchFunctionConsequenceGroup =
   typeof LAUNCH_FUNCTION_CONSEQUENCE_GROUPS[number];
 
 export type LaunchAutonomousPolicyActor =
-  | { kind: 'user'; userId: string }
+  | { kind: "user"; userId: string }
   | {
-    kind: 'system';
-    source: 'release_default' | 'migration' | 'safety_reset';
+    kind: "system";
+    source: "release_default" | "migration" | "safety_reset";
   };
 
 export interface LaunchAutonomousFunctionPolicyProjection {
@@ -517,13 +721,13 @@ export interface LaunchAutonomousFunctionPolicyUpdateRequest {
 }
 
 export const LAUNCH_APPROVAL_STATUSES = [
-  'pending',
-  'approved',
-  'rejected',
-  'resuming',
-  'completed',
-  'expired',
-  'failed',
+  "pending",
+  "approved",
+  "rejected",
+  "resuming",
+  "completed",
+  "expired",
+  "failed",
 ] as const;
 
 export type LaunchApprovalStatus = typeof LAUNCH_APPROVAL_STATUSES[number];
@@ -558,9 +762,9 @@ export interface LaunchApprovalEnvelope {
 }
 
 export const LAUNCH_APPROVAL_ACTIONS = [
-  'approve',
-  'revise',
-  'reject',
+  "approve",
+  "revise",
+  "reject",
 ] as const;
 
 export type LaunchApprovalAction = typeof LAUNCH_APPROVAL_ACTIONS[number];
@@ -572,35 +776,37 @@ interface LaunchApprovalActionRequestBase {
 
 export type LaunchApprovalActionRequest =
   | LaunchApprovalActionRequestBase & {
-    action: 'approve';
+    action: "approve";
     /** Atomically changes this function from `ask` to `free`. */
     stopAsking?: boolean;
   }
   | LaunchApprovalActionRequestBase & {
-    action: 'revise';
+    action: "revise";
     /** Sanitized replacement input for the exact held run. */
     revisedInput: Record<string, unknown>;
     /** Atomically changes this function from `ask` to `free`. */
     stopAsking?: boolean;
   }
   | LaunchApprovalActionRequestBase & {
-    action: 'reject';
+    action: "reject";
   };
 
 export const LAUNCH_CALLER_FUNCTION_POLICIES = [
-  'always',
-  'ask',
-  'never',
+  "always",
+  "ask",
+  "never",
 ] as const;
 
-export type LaunchCallerFunctionPolicy = typeof LAUNCH_CALLER_FUNCTION_POLICIES[number];
+export type LaunchCallerFunctionPolicy =
+  typeof LAUNCH_CALLER_FUNCTION_POLICIES[number];
 
 export const LAUNCH_WALLET_FUNDING_METHODS = [
-  'card',
-  'ach',
+  "card",
+  "ach",
 ] as const;
 
-export type LaunchWalletFundingMethod = typeof LAUNCH_WALLET_FUNDING_METHODS[number];
+export type LaunchWalletFundingMethod =
+  typeof LAUNCH_WALLET_FUNDING_METHODS[number];
 
 export interface LaunchMoneyAmount {
   credits: number;
@@ -625,10 +831,10 @@ export interface LaunchPricingSummary {
 
 export interface LaunchAccessPolicySummary {
   configured: boolean;
-  mode: 'static' | 'module';
+  mode: "static" | "module";
   module: string | null;
   exportName: string;
-  execution: 'static_pricing' | 'runtime_policy';
+  execution: "static_pricing" | "runtime_policy";
 }
 
 export interface LaunchFunctionSummary {
@@ -651,7 +857,7 @@ export interface LaunchFunctionSummary {
 
 export type LaunchAgentHandle = Pick<
   LaunchAgentSummary,
-  'id' | 'slug' | 'name' | 'relationship' | 'publicUrl' | 'adminUrl'
+  "id" | "slug" | "name" | "relationship" | "publicUrl" | "adminUrl"
 >;
 
 export interface LaunchAgentFunctionsResponse {
@@ -674,9 +880,9 @@ export interface LaunchFunctionRunWarning {
 
 export interface LaunchFunctionRunResponse {
   success: boolean;
-  agent: Pick<LaunchAgentSummary, 'id' | 'slug' | 'name'>;
+  agent: Pick<LaunchAgentSummary, "id" | "slug" | "name">;
   /** @deprecated Use agent. */
-  tool: Pick<LaunchAgentSummary, 'id' | 'slug' | 'name'>;
+  tool: Pick<LaunchAgentSummary, "id" | "slug" | "name">;
   functionName: string;
   result?: unknown;
   receiptId?: string | null;
@@ -692,7 +898,7 @@ export interface LaunchFunctionRunResponse {
 /** GET /api/launch/jobs/:id — poll a durable async execution (twin of ul.job). */
 export interface LaunchJobStatusResponse {
   jobId: string;
-  status: 'queued' | 'running' | 'completed' | 'failed';
+  status: "queued" | "running" | "completed" | "failed";
   /** Present only when status is completed. */
   result: unknown;
   /** Present only when status is failed. */
@@ -701,10 +907,10 @@ export interface LaunchJobStatusResponse {
   aiCostCredits: number;
   /** Structured pre-execution wait; null for an ordinary queue backlog. */
   admissionWait: {
-    code: 'capacity_waiting' | 'agent_cap_waiting' | 'concurrency_waiting';
+    code: "capacity_waiting" | "agent_cap_waiting" | "concurrency_waiting";
     retryAt: string;
     nextAttemptAt: string | null;
-    scope: 'account' | 'agent' | 'ai' | 'routine' | null;
+    scope: "account" | "agent" | "ai" | "routine" | null;
     message: string | null;
   } | null;
   /** Links the job to its execution receipt and AI-spend ledger entries. */
@@ -714,7 +920,7 @@ export interface LaunchJobStatusResponse {
   generatedAt: string;
 }
 
-export type LaunchCallerFunctionPermissionSource = 'explicit' | 'default';
+export type LaunchCallerFunctionPermissionSource = "explicit" | "default";
 
 export interface LaunchCallerFunctionPermissionSummary {
   appId: string;
@@ -747,7 +953,7 @@ export interface LaunchCallerFunctionPermissionsResponse {
 export interface LaunchFunctionInferenceOverrideSummary {
   appId: string;
   functionName: string;
-  billingMode: 'byok';
+  billingMode: "byok";
   provider: string;
   model: string | null;
   updatedAt?: string | null;
@@ -774,8 +980,8 @@ export interface LaunchCallerFunctionPermissionsUpdateRequest {
 }
 
 export interface LaunchCallerPermissionRequired {
-  type: 'permission_required';
-  policy: 'ask';
+  type: "permission_required";
+  policy: "ask";
   appId: string;
   functionName: string;
   message: string;
@@ -784,12 +990,12 @@ export interface LaunchCallerPermissionRequired {
   updatedAt?: string | null;
   // Set when an "always" policy was downgraded to "ask" because the target was
   // not recently healthy (no_data or red), rather than an explicit "ask".
-  reason?: 'health_gate';
+  reason?: "health_gate";
 }
 
 export interface LaunchCallerPermissionDenied {
-  type: 'permission_denied';
-  policy: 'never';
+  type: "permission_denied";
+  policy: "never";
   appId: string;
   functionName: string;
   message: string;
@@ -814,7 +1020,7 @@ export interface LaunchWalletFundingQuoteRequest {
 
 export interface LaunchWalletFundingFeeSummary {
   method: LaunchWalletFundingMethod;
-  methodLabel: 'Card' | 'Bank (ACH)';
+  methodLabel: "Card" | "Bank (ACH)";
   amountCredits: number;
   /** @deprecated alias of amountCredits */
   amountLight: number;
@@ -833,7 +1039,8 @@ export interface LaunchWalletFundingQuoteResponse {
   generatedAt: string;
 }
 
-export interface LaunchWalletFundingIntentRequest extends LaunchWalletFundingQuoteRequest {
+export interface LaunchWalletFundingIntentRequest
+  extends LaunchWalletFundingQuoteRequest {
   // Required and literally `true`: this is a consent record — callers must
   // collect explicit acceptance, never default it.
   termsAccepted: true;
@@ -890,8 +1097,8 @@ export interface LaunchByokPrimaryRequest {
   provider: string;
 }
 
-export type LaunchPlanCode = 'free' | 'pro' | 'max_5x' | 'max_10x';
-export type LaunchCapacityState = 'available' | 'low' | 'waiting';
+export type LaunchPlanCode = "pro";
+export type LaunchCapacityState = "available" | "low" | "waiting";
 
 export interface LaunchCapacityWindow {
   state: LaunchCapacityState;
@@ -903,7 +1110,6 @@ export interface LaunchCapacityWindow {
 export interface LaunchCapacityResponse {
   plan: LaunchPlanCode;
   state: LaunchCapacityState;
-  burst: LaunchCapacityWindow;
   weekly: LaunchCapacityWindow;
   nextEligibleAt: string | null;
   activeAgentLimit: number | null;
@@ -922,41 +1128,41 @@ export interface LaunchAgentCapacityWindow {
 
 export interface LaunchAgentCapacityResponse {
   agentId: string;
-  /** Free remains fixed/qualitative; paid plans expose the owner-set ceiling. */
-  capPercent: number | null;
+  /** Percentage of the shared weekly allowance assigned to this Agent. */
+  capPercent: number;
   state: LaunchCapacityState;
-  burst: LaunchAgentCapacityWindow;
   weekly: LaunchAgentCapacityWindow;
   nextEligibleAt: string | null;
-  blocker?: 'agent_cap_too_low_for_request' | null;
+  blocker?: "agent_cap_too_low_for_request" | null;
   generatedAt: string;
 }
 
 export interface LaunchAgentCapacityUpdateRequest {
-  /** Percent of both shared windows, with up to two decimal places. */
+  /** Percent of the shared weekly allowance, with up to two decimal places. */
   capPercent: number;
 }
 
 export type LaunchSubscriptionStatus =
-  | 'inactive'
-  | 'incomplete'
-  | 'incomplete_expired'
-  | 'trialing'
-  | 'active'
-  | 'past_due'
-  | 'canceled'
-  | 'unpaid'
-  | 'paused';
+  | "inactive"
+  | "incomplete"
+  | "incomplete_expired"
+  | "trialing"
+  | "active"
+  | "past_due"
+  | "canceled"
+  | "unpaid"
+  | "paused";
 
 export interface LaunchSubscriptionResponse {
   plan: LaunchPlanCode;
   planName: string;
   priceCents: number;
-  currency: 'usd';
-  interval: 'month';
+  currency: "usd";
+  interval: "month";
   status: LaunchSubscriptionStatus;
   currentPeriodEnd: string | null;
   cancelAtPeriodEnd: boolean;
+  hasActiveSubscription: boolean;
   canSubscribe: boolean;
   canManage: boolean;
   capacity: LaunchCapacityResponse;
@@ -964,12 +1170,33 @@ export interface LaunchSubscriptionResponse {
 }
 
 export interface LaunchSubscriptionCheckoutRequest {
-  plan: 'pro';
-  returnUrl?: string;
+  plan: "pro";
+  returnUrl: string;
+  idempotencyKey: string;
 }
 
 export interface LaunchSubscriptionRedirectResponse {
   url: string;
+  attemptId: string;
+  status: "pending";
+  generatedAt: string;
+}
+
+export type LaunchSubscriptionCheckoutAttemptStatus =
+  | "creating"
+  | "pending"
+  | "active"
+  | "cancelled"
+  | "failed"
+  | "expired";
+
+export type LaunchSubscriptionCheckoutResponse =
+  LaunchSubscriptionRedirectResponse;
+
+export interface LaunchSubscriptionCheckoutAttemptResponse {
+  attemptId: string;
+  status: LaunchSubscriptionCheckoutAttemptStatus;
+  subscription: LaunchSubscriptionResponse;
   generatedAt: string;
 }
 
@@ -984,7 +1211,7 @@ export interface LaunchPlatformModelResponse {
 }
 
 export interface LaunchInferenceOptionsResponse {
-  billingMode: 'byok';
+  billingMode: "byok";
   primaryProvider: string | null;
   configuredProviders: string[];
   /** @deprecated Legacy compatibility only; launch responses omit it. */
@@ -1000,23 +1227,23 @@ export interface LaunchInferenceOptionsResponse {
 }
 
 export type LaunchDiscoveryRetrievalMode =
-  | 'browse'
-  | 'lexical'
-  | 'semantic'
-  | 'hybrid';
+  | "browse"
+  | "lexical"
+  | "semantic"
+  | "hybrid";
 
 export type LaunchDiscoverySource =
-  | 'tools'
-  | 'public_pages'
-  | 'install_docs'
-  | 'platform_primitives';
+  | "tools"
+  | "public_pages"
+  | "install_docs"
+  | "platform_primitives";
 
-export type LaunchRelevanceSource = 'semantic' | 'lexical' | 'curated';
+export type LaunchRelevanceSource = "semantic" | "lexical" | "curated";
 
 export type LaunchSemanticSubjectType =
-  | 'app'
-  | 'function'
-  | 'platform_primitive';
+  | "app"
+  | "function"
+  | "platform_primitive";
 
 export interface LaunchRelevanceSummary {
   source: LaunchRelevanceSource;
@@ -1083,7 +1310,7 @@ export interface LaunchNotification {
   id: string;
   agent_id?: string | null;
   kind: string;
-  severity: 'info' | 'warning' | 'critical';
+  severity: "info" | "warning" | "critical";
   title: string;
   body?: string | null;
   entity_type?: string | null;
@@ -1123,22 +1350,22 @@ export interface LaunchFullTimeDisclosure {
   capabilities: Array<{
     appRef: string | null;
     functionName: string | null;
-    access: 'read' | 'write' | null;
+    access: "read" | "write" | null;
   }>;
 }
 
 export type LaunchAgentRoutineStatus =
-  | 'active'
-  | 'paused'
-  | 'disabled'
-  | 'error';
+  | "active"
+  | "paused"
+  | "disabled"
+  | "error";
 
 export type LaunchAgentRoutineHealth =
-  | 'active'
-  | 'paused'
-  | 'running'
-  | 'needs_approval'
-  | 'error';
+  | "active"
+  | "paused"
+  | "running"
+  | "needs_approval"
+  | "error";
 
 export interface LaunchAgentRoutineBudget {
   maxLightPerRun: number;
@@ -1152,7 +1379,7 @@ export interface LaunchAgentRoutineCapability {
   appId: string | null;
   appRef: string;
   functionName: string;
-  access: 'read' | 'write';
+  access: "read" | "write";
   required: boolean;
   purpose: string | null;
   approved: boolean;
@@ -1168,12 +1395,12 @@ export interface LaunchAgentRoutineBlocker {
 export interface LaunchAgentRoutineRun {
   id: string;
   status:
-    | 'queued'
-    | 'running'
-    | 'succeeded'
-    | 'failed'
-    | 'cancelled'
-    | 'skipped';
+    | "queued"
+    | "running"
+    | "succeeded"
+    | "failed"
+    | "cancelled"
+    | "skipped";
   trigger: string;
   traceId: string | null;
   startedAt: string | null;
@@ -1185,16 +1412,16 @@ export interface LaunchAgentRoutineRun {
   createdAt: string;
 }
 
-export type LaunchAgentRoutineRole = 'primary' | 'routine';
+export type LaunchAgentRoutineRole = "primary" | "routine";
 
 export type LaunchAgentRoutineSchedule =
   | {
-    kind: 'interval';
+    kind: "interval";
     intervalSeconds: number;
     label: string;
   }
   | {
-    kind: 'cron';
+    kind: "cron";
     expression: string;
     timezone: string;
     label: string;
@@ -1222,8 +1449,8 @@ export interface LaunchAgentRoutineOverview {
   capabilities: LaunchAgentRoutineCapability[];
   blockers: LaunchAgentRoutineBlocker[];
   reportingDestination: {
-    kind: 'galactic_inbox';
-    label: 'Galactic inbox';
+    kind: "galactic_inbox";
+    label: "Galactic inbox";
   };
   nextRunAt: string | null;
   lastRunAt: string | null;
@@ -1254,7 +1481,7 @@ export interface LaunchAgentRoutineResponse {
 
 export interface LaunchAgentRoutinesResponse {
   revision: string;
-  agent: LaunchAgentRoutineResponse['agent'];
+  agent: LaunchAgentRoutineResponse["agent"];
   primaryRoutineId: string | null;
   routines: LaunchAgentRoutineOverview[];
   aggregate: {
@@ -1275,21 +1502,22 @@ export interface LaunchAgentRoutineUpdateRequest {
   mission?: string | null;
   intervalSeconds?: number;
   schedule?:
-    | { kind: 'interval'; intervalSeconds: number }
-    | { kind: 'cron'; expression: string; timezone?: string };
+    | { kind: "interval"; intervalSeconds: number }
+    | { kind: "cron"; expression: string; timezone?: string };
   /** When supplied, all four hard ceilings are required. */
   budgets?: LaunchAgentRoutineBudget;
 }
 
-export interface LaunchAgentManagedRoutineUpdateRequest extends LaunchAgentRoutineUpdateRequest {
+export interface LaunchAgentManagedRoutineUpdateRequest
+  extends LaunchAgentRoutineUpdateRequest {
   expectedRevision: string;
 }
 
 export type LaunchAgentRoutineAction =
-  | 'approve_capabilities'
-  | 'activate'
-  | 'pause'
-  | 'run_now';
+  | "approve_capabilities"
+  | "activate"
+  | "pause"
+  | "run_now";
 
 export interface LaunchAgentRoutineActionRequest {
   action: LaunchAgentRoutineAction;
@@ -1297,32 +1525,33 @@ export interface LaunchAgentRoutineActionRequest {
   capabilityIds?: string[];
 }
 
-export interface LaunchAgentManagedRoutineActionRequest extends LaunchAgentRoutineActionRequest {
+export interface LaunchAgentManagedRoutineActionRequest
+  extends LaunchAgentRoutineActionRequest {
   expectedRevision: string;
   /** Stable across retries of this exact action. */
   idempotencyKey: string;
 }
 
 export type LaunchAgentHomeLifecycleState =
-  | 'needs_setup'
-  | 'ready'
-  | 'active'
-  | 'paused'
-  | 'disabled';
+  | "needs_setup"
+  | "ready"
+  | "active"
+  | "paused"
+  | "disabled";
 
-export type LaunchAgentHomeExecutionState = 'idle' | 'queued' | 'running';
+export type LaunchAgentHomeExecutionState = "idle" | "queued" | "running";
 
 export type LaunchAgentHomeHealth =
-  | 'unknown'
-  | 'healthy'
-  | 'degraded'
-  | 'failing';
+  | "unknown"
+  | "healthy"
+  | "degraded"
+  | "failing";
 
 export interface LaunchAgentHomeRequirement {
   id: string;
   /** Exact opaque id accepted by the corresponding action, when applicable. */
   actionId: string | null;
-  kind: 'routine' | 'setting' | 'capability' | 'grant' | 'release';
+  kind: "routine" | "setting" | "capability" | "grant" | "release";
   label: string;
   description: string | null;
   required: boolean;
@@ -1330,52 +1559,52 @@ export interface LaunchAgentHomeRequirement {
   blocking: boolean;
   secret: boolean;
   settingKey: string | null;
-  settingScope: 'agent' | 'per_user' | null;
+  settingScope: "agent" | "per_user" | null;
   input: string | null;
   placeholder: string | null;
   help: string | null;
   group: string | null;
   destination: string | null;
   updatedAt: string | null;
-  actions: Array<'set' | 'replace' | 'remove' | 'approve' | 'promote'>;
+  actions: Array<"set" | "replace" | "remove" | "approve" | "promote">;
 }
 
 export type LaunchAgentHomeAuthorityKind =
-  | 'function'
-  | 'agent_call'
-  | 'network'
-  | 'ai'
-  | 'storage'
-  | 'memory'
-  | 'reporting'
-  | 'compute'
-  | 'other';
+  | "function"
+  | "agent_call"
+  | "network"
+  | "ai"
+  | "storage"
+  | "memory"
+  | "reporting"
+  | "compute"
+  | "other";
 
 export interface LaunchAgentHomeAuthorityItem {
   id: string;
   /** Exact capability/grant id accepted by an approval action, if any. */
   actionId: string | null;
   kind: LaunchAgentHomeAuthorityKind;
-  direction: 'inbound' | 'outbound' | 'internal';
+  direction: "inbound" | "outbound" | "internal";
   label: string;
   target: string | null;
-  access: 'read' | 'write' | 'execute';
-  source: 'manifest' | 'routine' | 'platform';
+  access: "read" | "write" | "execute";
+  source: "manifest" | "routine" | "platform";
   requested: boolean;
   approved: boolean;
   approvalBasis:
-    | 'live_release'
-    | 'owner_capability_approval'
-    | 'platform_policy'
-    | 'pending';
+    | "live_release"
+    | "owner_capability_approval"
+    | "platform_policy"
+    | "pending";
   effective: boolean;
   required: boolean;
   purpose: string | null;
-  badges: Array<'Read' | 'Write' | 'AI'>;
+  badges: Array<"Read" | "Write" | "AI">;
 }
 
 export interface LaunchAgentHomeBudget {
-  unit: 'work_units';
+  unit: "work_units";
   ceilings: {
     perRun: number;
     daily: number;
@@ -1394,7 +1623,7 @@ export interface LaunchAgentHomeBudget {
 
 export interface LaunchAgentHomeRun {
   id: string;
-  status: LaunchAgentRoutineRun['status'];
+  status: LaunchAgentRoutineRun["status"];
   trigger: string;
   traceId: string | null;
   startedAt: string | null;
@@ -1413,6 +1642,28 @@ export interface LaunchAgentHomeReleaseVersion {
   sourceFingerprint: string | null;
   uploadedAt: string | null;
   testedAt: string | null;
+  /** Server-derived, owner-safe projection of a signed V2 gx.test result. */
+  qualification?: {
+    profile: "basic";
+    status: "passed";
+    summary: string;
+    releaseDigest: string;
+    cases: {
+      declared: number;
+      required: number;
+      passed: number;
+      optionalFailed: number;
+    };
+    functions: {
+      declared: number;
+      exercised: number;
+    };
+    effects: {
+      declared: number;
+      exercised: number;
+      untested: number;
+    };
+  } | null;
 }
 
 export interface LaunchAgentHomeRelease {
@@ -1420,17 +1671,17 @@ export interface LaunchAgentHomeRelease {
     | (LaunchAgentHomeReleaseVersion & {
       promotedAt: string | null;
       executedVersion: string | null;
-      integrity: 'verified' | 'unverified' | 'unknown';
+      integrity: "verified" | "unverified" | "unknown";
     })
     | null;
   candidate:
     | (LaunchAgentHomeReleaseVersion & {
       authorityChanges: Array<{
-        change: 'added' | 'removed' | 'changed';
+        change: "added" | "removed" | "changed";
         path: string;
         label: string;
       }>;
-      reviewStatus: 'ready' | 'owner_review_required' | 'unavailable';
+      reviewStatus: "ready" | "owner_review_required" | "unavailable";
       canPromote: boolean;
     })
     | null;
@@ -1438,14 +1689,14 @@ export interface LaunchAgentHomeRelease {
 }
 
 export type LaunchAgentPane =
-  | 'overview'
-  | 'interfaces'
-  | 'alerts'
-  | 'access'
-  | 'routines'
-  | 'functions'
-  | 'compute'
-  | 'settings';
+  | "overview"
+  | "interfaces"
+  | "alerts"
+  | "access"
+  | "routines"
+  | "functions"
+  | "compute"
+  | "settings";
 
 /**
  * A navigation-only destination. Consumers must treat `href` as an internal
@@ -1459,14 +1710,14 @@ export interface LaunchNavigationTarget {
 }
 
 export type LaunchAgentEvidenceKind =
-  | 'routine'
-  | 'run'
-  | 'schedule'
-  | 'notification'
-  | 'setting'
-  | 'authority'
-  | 'release'
-  | 'compute';
+  | "routine"
+  | "run"
+  | "schedule"
+  | "notification"
+  | "setting"
+  | "authority"
+  | "release"
+  | "compute";
 
 /**
  * Owner-safe provenance for an operator-facing conclusion. `sourceId` is an
@@ -1481,32 +1732,32 @@ export interface LaunchAgentEvidenceReference {
   destination?: LaunchNavigationTarget | null;
 }
 
-export type LaunchOperatorItemClass = 'report' | 'issue';
+export type LaunchOperatorItemClass = "report" | "issue";
 
 export type LaunchOperatorConditionCode =
-  | 'ACCOUNT_BYOK_MISSING'
-  | 'ACCOUNT_USAGE_EXHAUSTED'
-  | 'AGENT_CAPABILITY_APPROVAL_REQUIRED'
-  | 'AGENT_GRANT_REQUIRED'
-  | 'AGENT_PRIMARY_ROUTINE_MISSING'
-  | 'AGENT_RELEASE_REVIEW_REQUIRED'
-  | 'AGENT_REPORTING_NOT_CONFIGURED'
-  | 'AGENT_SECRET_MISSING'
-  | 'AGENT_SETTING_MISSING'
-  | 'ROUTINE_PAUSED_AFTER_FAILURES'
-  | 'ROUTINE_USAGE_EXHAUSTED';
+  | "ACCOUNT_BYOK_MISSING"
+  | "ACCOUNT_USAGE_EXHAUSTED"
+  | "AGENT_CAPABILITY_APPROVAL_REQUIRED"
+  | "AGENT_GRANT_REQUIRED"
+  | "AGENT_PRIMARY_ROUTINE_MISSING"
+  | "AGENT_RELEASE_REVIEW_REQUIRED"
+  | "AGENT_REPORTING_NOT_CONFIGURED"
+  | "AGENT_SECRET_MISSING"
+  | "AGENT_SETTING_MISSING"
+  | "ROUTINE_PAUSED_AFTER_FAILURES"
+  | "ROUTINE_USAGE_EXHAUSTED";
 
 export type LaunchOperatorDiagnosisProvenance =
-  | 'platform'
-  | 'provider'
-  | 'developer'
-  | 'combined'
-  | 'unknown';
+  | "platform"
+  | "provider"
+  | "developer"
+  | "combined"
+  | "unknown";
 
 export type LaunchOperatorDiagnosticNavigationAction =
-  | 'inspect_run'
-  | 'open_logs'
-  | 'open_routine';
+  | "inspect_run"
+  | "open_logs"
+  | "open_routine";
 
 export interface LaunchOperatorDiagnosis {
   /** Stable platform-owned condition code. */
@@ -1612,11 +1863,11 @@ export interface LaunchOperatorRoutineRunLogExcerpt {
 }
 
 export type LaunchOperatorScope =
-  | { kind: 'account' }
-  | { kind: 'agent'; agentId: string }
-  | { kind: 'routine'; agentId: string; routineId: string }
+  | { kind: "account" }
+  | { kind: "agent"; agentId: string }
+  | { kind: "routine"; agentId: string; routineId: string }
   | {
-    kind: 'run';
+    kind: "run";
     agentId: string;
     routineId: string;
     runId: string;
@@ -1628,134 +1879,134 @@ export type LaunchOperatorScope =
  */
 export type LaunchOperatorSemanticTarget =
   | {
-    kind: 'account_provider';
+    kind: "account_provider";
     provider: string | null;
   }
   | {
-    kind: 'account_usage';
+    kind: "account_usage";
   }
   | {
-    kind: 'agent_setup_requirement';
+    kind: "agent_setup_requirement";
     agentId: string;
     requirementId: string;
   }
   | {
-    kind: 'agent_setting';
+    kind: "agent_setting";
     agentId: string;
     settingKey: string;
-    settingScope: 'agent' | 'per_user';
+    settingScope: "agent" | "per_user";
   }
   | {
-    kind: 'agent_access_item';
+    kind: "agent_access_item";
     agentId: string;
     itemId: string;
   }
   | {
-    kind: 'agent_release';
+    kind: "agent_release";
     agentId: string;
     releaseId: string | null;
   }
   | {
-    kind: 'routine';
+    kind: "routine";
     agentId: string;
     routineId: string;
   }
   | {
-    kind: 'routine_run';
+    kind: "routine_run";
     agentId: string;
     routineId: string;
     runId: string;
   }
   | {
-    kind: 'routine_logs';
+    kind: "routine_logs";
     agentId: string;
     routineId: string;
     runId: string | null;
   };
 
 export type LaunchOperatorRemediationKey =
-  | 'adjust_capacity'
-  | 'approve_capability'
-  | 'approve_grant'
-  | 'configure_provider'
-  | 'configure_routine'
-  | 'configure_secret'
-  | 'configure_setting'
-  | 'enable_routine'
-  | 'inspect_run'
-  | 'open_logs'
-  | 'open_routine'
-  | 'review_access'
-  | 'review_release'
-  | 'resume_routine'
-  | 'run_once'
-  | 'verify_connection';
+  | "adjust_capacity"
+  | "approve_capability"
+  | "approve_grant"
+  | "configure_provider"
+  | "configure_routine"
+  | "configure_secret"
+  | "configure_setting"
+  | "enable_routine"
+  | "inspect_run"
+  | "open_logs"
+  | "open_routine"
+  | "review_access"
+  | "review_release"
+  | "resume_routine"
+  | "run_once"
+  | "verify_connection";
 
 export type LaunchOperatorRemediationPresentation =
-  | 'inline'
-  | 'navigate'
-  | 'execute';
+  | "inline"
+  | "navigate"
+  | "execute";
 
 export type LaunchOperatorRemediationAuthority =
-  | 'account_session'
-  | 'agent_operate';
+  | "account_session"
+  | "agent_operate";
 
 export type LaunchOperatorRemediationSideEffect =
-  | 'none'
-  | 'configuration_write'
-  | 'bounded_approval'
-  | 'routine_execution'
-  | 'schedule_change';
+  | "none"
+  | "configuration_write"
+  | "bounded_approval"
+  | "routine_execution"
+  | "schedule_change";
 
 export interface LaunchOperatorRemediationTargetMap {
-  adjust_capacity: Extract<LaunchOperatorSemanticTarget, { kind: 'routine' }>;
+  adjust_capacity: Extract<LaunchOperatorSemanticTarget, { kind: "routine" }>;
   approve_capability: Extract<
     LaunchOperatorSemanticTarget,
-    { kind: 'agent_access_item' }
+    { kind: "agent_access_item" }
   >;
   approve_grant: Extract<
     LaunchOperatorSemanticTarget,
-    { kind: 'agent_access_item' }
+    { kind: "agent_access_item" }
   >;
   configure_provider: Extract<
     LaunchOperatorSemanticTarget,
-    { kind: 'account_provider' }
+    { kind: "account_provider" }
   >;
   configure_routine: Extract<
     LaunchOperatorSemanticTarget,
-    { kind: 'agent_setup_requirement' }
+    { kind: "agent_setup_requirement" }
   >;
   configure_secret: Extract<
     LaunchOperatorSemanticTarget,
-    { kind: 'agent_setting' }
+    { kind: "agent_setting" }
   >;
   configure_setting: Extract<
     LaunchOperatorSemanticTarget,
-    { kind: 'agent_setting' }
+    { kind: "agent_setting" }
   >;
-  enable_routine: Extract<LaunchOperatorSemanticTarget, { kind: 'routine' }>;
+  enable_routine: Extract<LaunchOperatorSemanticTarget, { kind: "routine" }>;
   inspect_run: Extract<
     LaunchOperatorSemanticTarget,
-    { kind: 'routine_run' }
+    { kind: "routine_run" }
   >;
   open_logs: Extract<
     LaunchOperatorSemanticTarget,
-    { kind: 'routine_logs' }
+    { kind: "routine_logs" }
   >;
-  open_routine: Extract<LaunchOperatorSemanticTarget, { kind: 'routine' }>;
+  open_routine: Extract<LaunchOperatorSemanticTarget, { kind: "routine" }>;
   review_access: Extract<
     LaunchOperatorSemanticTarget,
-    { kind: 'agent_access_item' }
+    { kind: "agent_access_item" }
   >;
   review_release: Extract<
     LaunchOperatorSemanticTarget,
-    { kind: 'agent_release' }
+    { kind: "agent_release" }
   >;
-  resume_routine: Extract<LaunchOperatorSemanticTarget, { kind: 'routine' }>;
-  run_once: Extract<LaunchOperatorSemanticTarget, { kind: 'routine' }>;
+  resume_routine: Extract<LaunchOperatorSemanticTarget, { kind: "routine" }>;
+  run_once: Extract<LaunchOperatorSemanticTarget, { kind: "routine" }>;
   verify_connection: Extract<
     LaunchOperatorSemanticTarget,
-    { kind: 'routine' }
+    { kind: "routine" }
   >;
 }
 
@@ -1792,9 +2043,9 @@ export interface LaunchOperatorOrdering {
 
 export interface LaunchOperatorRecoveryPolicy {
   mode:
-    | 'automatic_reset'
-    | 'revalidate_condition'
-    | 'successful_verification';
+    | "automatic_reset"
+    | "revalidate_condition"
+    | "successful_verification";
   mayRecoverAutomatically: boolean;
   /** Recovery never silently resumes a paused schedule. */
   resumesScheduledWork: false;
@@ -1806,7 +2057,7 @@ interface LaunchOperatorItemBase<TId extends string | null> {
   /** Stable active-condition/dedupe key derived only from trusted identifiers. */
   conditionKey: string;
   scope: LaunchOperatorScope;
-  severity: 'info' | 'warning' | 'critical';
+  severity: "info" | "warning" | "critical";
   diagnosis: LaunchOperatorDiagnosis;
   affectedAgents: LaunchOperatorAffectedAgent[];
   remediations: LaunchOperatorRemediation[];
@@ -1819,13 +2070,13 @@ interface LaunchOperatorItemBase<TId extends string | null> {
 
 export interface LaunchOperatorIssue<TId extends string | null = string>
   extends LaunchOperatorItemBase<TId> {
-  itemClass: 'issue';
+  itemClass: "issue";
   requiresAction: true;
 }
 
 export interface LaunchOperatorReport<TId extends string | null = string>
   extends LaunchOperatorItemBase<TId> {
-  itemClass: 'report';
+  itemClass: "report";
   requiresAction: false;
   requiresDecision: false;
   remediations: [];
@@ -1842,7 +2093,7 @@ export type LaunchOperatorItemCandidate = LaunchOperatorItem<null>;
  * changes whether the underlying condition is active or recovered.
  */
 export interface LaunchOperatorAttentionState {
-  state: 'open' | 'snoozed' | 'dismissed';
+  state: "open" | "snoozed" | "dismissed";
   readAt: string | null;
   snoozedUntil: string | null;
   dismissedAt: string | null;
@@ -1854,11 +2105,11 @@ export interface LaunchOperatorAttentionEntry {
 }
 
 export type LaunchOperatorAttentionAction =
-  | 'mark_read'
-  | 'mark_unread'
-  | 'snooze'
-  | 'reopen'
-  | 'dismiss';
+  | "mark_read"
+  | "mark_unread"
+  | "snooze"
+  | "reopen"
+  | "dismiss";
 
 export interface LaunchOperatorAttentionActionRequest {
   action: LaunchOperatorAttentionAction;
@@ -1887,12 +2138,12 @@ export interface LaunchOperatorItemActionRequest {
 export interface LaunchOperatorItemActionResponse {
   itemId: string;
   remediationId: string;
-  action: 'run_once';
+  action: "run_once";
   requestId: string;
   runId: string;
-  state: 'queued';
+  state: "queued";
   /** A successful verification still requires a separate owner decision. */
-  scheduleState: 'paused';
+  scheduleState: "paused";
   replayed: boolean;
   generatedAt: string;
 }
@@ -1925,11 +2176,11 @@ export interface LaunchOperatorAttentionProjection {
   /** Opaque cursor for the next page in trusted producer order. */
   nextCursor: string | null;
   available: boolean;
-  unavailableReason: 'temporarily_unavailable' | null;
+  unavailableReason: "temporarily_unavailable" | null;
   generatedAt: string;
 }
 
-export type LaunchAttentionReadSource = 'legacy' | 'canonical';
+export type LaunchAttentionReadSource = "legacy" | "canonical";
 
 /**
  * The Agent's canonical responsibility. Identity (name/description) remains a
@@ -1938,37 +2189,37 @@ export type LaunchAttentionReadSource = 'legacy' | 'canonical';
  */
 export interface LaunchAgentDirective {
   mission: string;
-  source: 'primary_routine' | 'managed_routines';
+  source: "primary_routine" | "managed_routines";
   sourceRoutineId: string | null;
   cadence: LaunchAgentRoutineSchedule | null;
   reporting: {
-    kind: 'galactic_inbox';
-    label: 'Galactic inbox';
+    kind: "galactic_inbox";
+    label: "Galactic inbox";
     configured: boolean;
   };
 }
 
 export type LaunchAgentOperatingState =
-  | 'no_live_release'
-  | 'no_enabled_routine'
-  | 'setup_required'
-  | 'error'
-  | 'running'
-  | 'queued'
-  | 'capacity_waiting'
-  | 'scheduled'
-  | 'event_waiting'
-  | 'standing_by'
-  | 'paused'
-  | 'disabled';
+  | "no_live_release"
+  | "no_enabled_routine"
+  | "setup_required"
+  | "error"
+  | "running"
+  | "queued"
+  | "capacity_waiting"
+  | "scheduled"
+  | "event_waiting"
+  | "standing_by"
+  | "paused"
+  | "disabled";
 
 export type LaunchAgentWorkingExclusionReason =
-  | 'no_live_release'
-  | 'no_enabled_routine'
-  | 'setup_required'
-  | 'error'
-  | 'paused'
-  | 'disabled';
+  | "no_live_release"
+  | "no_enabled_routine"
+  | "setup_required"
+  | "error"
+  | "paused"
+  | "disabled";
 
 /**
  * Strict fleet-count eligibility. `working` is true only when the Agent is
@@ -1994,12 +2245,12 @@ export interface LaunchAgentOperatingSummary {
   label: string;
   detail: string | null;
   basis:
-    | 'readiness'
-    | 'routine_run'
-    | 'capacity'
-    | 'next_wake'
-    | 'subscription'
-    | 'routine';
+    | "readiness"
+    | "routine_run"
+    | "capacity"
+    | "next_wake"
+    | "subscription"
+    | "routine";
   routineId: string | null;
   routineName: string | null;
   runId: string | null;
@@ -2011,14 +2262,14 @@ export interface LaunchAgentOperatingSummary {
 }
 
 export type LaunchAgentActivityKind =
-  | 'scheduled_run'
-  | 'routine_run'
-  | 'agent_event'
-  | 'attention'
-  | 'compute_run'
-  | 'release';
+  | "scheduled_run"
+  | "routine_run"
+  | "agent_event"
+  | "attention"
+  | "compute_run"
+  | "release";
 
-export type LaunchAgentActivityPhase = 'up_next' | 'now' | 'recent';
+export type LaunchAgentActivityPhase = "up_next" | "now" | "recent";
 
 export interface LaunchAgentActivityItem {
   /** Stable source-derived id, for example `run:{uuid}`. */
@@ -2062,10 +2313,10 @@ export interface LaunchAgentActivityResponse {
 }
 
 export type LaunchAgentAttentionLifecycleState =
-  | 'open'
-  | 'snoozed'
-  | 'resolved'
-  | 'archived';
+  | "open"
+  | "snoozed"
+  | "resolved"
+  | "archived";
 
 interface LaunchAgentAttentionLifecycleBase {
   /** Read state is orthogonal: reading an incident never resolves it. */
@@ -2074,16 +2325,18 @@ interface LaunchAgentAttentionLifecycleBase {
   resolutionReason: string | null;
 }
 
-export interface LaunchAgentAttentionReportLifecycle extends LaunchAgentAttentionLifecycleBase {
-  state: 'open' | 'archived';
+export interface LaunchAgentAttentionReportLifecycle
+  extends LaunchAgentAttentionLifecycleBase {
+  state: "open" | "archived";
   snoozedUntil: null;
   resolvedAt: null;
   resolutionReason: null;
   archivedAt: string | null;
 }
 
-export interface LaunchAgentAttentionIncidentLifecycle extends LaunchAgentAttentionLifecycleBase {
-  state: 'open' | 'snoozed' | 'resolved';
+export interface LaunchAgentAttentionIncidentLifecycle
+  extends LaunchAgentAttentionLifecycleBase {
+  state: "open" | "snoozed" | "resolved";
   snoozedUntil: string | null;
   resolvedAt: string | null;
   archivedAt: null;
@@ -2104,11 +2357,11 @@ export interface LaunchAgentAttentionBrief {
 }
 
 export type LaunchAgentAttentionActionKey =
-  | 'open_access_setting'
-  | 'open_release_review'
-  | 'open_routine'
-  | 'approve_grant'
-  | 'resume_agent';
+  | "open_access_setting"
+  | "open_release_review"
+  | "open_routine"
+  | "approve_grant"
+  | "resume_agent";
 
 /**
  * Canonical persisted/server action parameters. These names intentionally use
@@ -2152,7 +2405,7 @@ export interface LaunchAgentAttentionAction {
   id: string;
   key: LaunchAgentAttentionActionKey;
   label: string;
-  emphasis: 'primary' | 'secondary' | 'danger';
+  emphasis: "primary" | "secondary" | "danger";
   /** Server-validated parameters retained for audit/debug display only. */
   parameters: Record<string, string>;
   destination: LaunchNavigationTarget | null;
@@ -2164,14 +2417,14 @@ interface LaunchAgentAttentionBase<
   id: string;
   notificationId: string;
   agentId: string;
-  severity: 'info' | 'warning' | 'critical';
+  severity: "info" | "warning" | "critical";
   requiresAction: boolean;
   lifecycle: TLifecycle;
   brief: LaunchAgentAttentionBrief;
   actions: LaunchAgentAttentionAction[];
   occurredAt: string;
   enrichment: {
-    status: 'raw' | 'pending' | 'ready' | 'failed';
+    status: "raw" | "pending" | "ready" | "failed";
     version: string | null;
     generatedAt: string | null;
   };
@@ -2184,13 +2437,13 @@ interface LaunchAgentAttentionBase<
 
 export interface LaunchAgentAttentionReport
   extends LaunchAgentAttentionBase<LaunchAgentAttentionReportLifecycle> {
-  type: 'report';
+  type: "report";
   requiresAction: false;
 }
 
 export interface LaunchAgentAttentionIncident
   extends LaunchAgentAttentionBase<LaunchAgentAttentionIncidentLifecycle> {
-  type: 'incident';
+  type: "incident";
   requiresAction: true;
   incidentCode: string | null;
 }
@@ -2210,7 +2463,7 @@ export interface LaunchAgentAttentionProjection {
    * Older servers omit this field; clients should treat omission as available.
    */
   available?: boolean;
-  unavailableReason?: 'temporarily_unavailable' | null;
+  unavailableReason?: "temporarily_unavailable" | null;
   /**
    * Additive M5 read migration. Existing fields remain the legacy notification
    * projection until clients cut over; when `readSource` is canonical, clients
@@ -2230,7 +2483,7 @@ export interface LaunchGlobalAttentionEntry {
 }
 
 export interface LaunchGlobalAttentionAgentCount {
-  agent: LaunchGlobalAttentionEntry['agent'];
+  agent: LaunchGlobalAttentionEntry["agent"];
   openCount: number;
   requiresDecisionCount: number;
 }
@@ -2244,7 +2497,7 @@ export interface LaunchGlobalAttentionResponse {
   /** Opaque cursor for the next, older page of active Attention. */
   nextCursor: string | null;
   available: boolean;
-  unavailableReason: 'temporarily_unavailable' | null;
+  unavailableReason: "temporarily_unavailable" | null;
   generatedAt: string;
   /**
    * Additive M5 read migration. Global canonical items are unique conditions;
@@ -2256,12 +2509,12 @@ export interface LaunchGlobalAttentionResponse {
 
 export interface LaunchAgentAttentionActionRequest {
   action:
-    | 'read'
-    | 'archive'
-    | 'snooze'
-    | 'resolve'
-    | 'reopen'
-    | 'execute_brief';
+    | "read"
+    | "archive"
+    | "snooze"
+    | "resolve"
+    | "reopen"
+    | "execute_brief";
   actionId?: string;
   snoozedUntil?: string;
   resolutionReason?: string;
@@ -2277,15 +2530,15 @@ export interface LaunchAgentAttentionActionResponse {
 }
 
 export type LaunchAgentAccessGroupKind =
-  | 'external_endpoint'
-  | 'configuration'
-  | 'agent'
-  | 'ai'
-  | 'storage'
-  | 'memory'
-  | 'compute'
-  | 'reporting'
-  | 'internal';
+  | "external_endpoint"
+  | "configuration"
+  | "agent"
+  | "ai"
+  | "storage"
+  | "memory"
+  | "compute"
+  | "reporting"
+  | "internal";
 
 export interface LaunchAgentAccessCredential {
   key: string;
@@ -2303,7 +2556,7 @@ export interface LaunchAgentAccessSetting {
 }
 
 export interface LaunchAgentAccessConsumer {
-  kind: 'routine' | 'function';
+  kind: "routine" | "function";
   id: string;
   label: string;
 }
@@ -2345,7 +2598,7 @@ export interface LaunchAgentHomeResponse {
     slug: string;
     name: string;
     description: string | null;
-    visibility: 'private';
+    visibility: "private";
   };
   /** Canonical Operator-grade projections; optional during additive rollout. */
   directive?: LaunchAgentDirective;
@@ -2358,8 +2611,8 @@ export interface LaunchAgentHomeResponse {
     mission: string;
     cadence: LaunchAgentRoutineSchedule | null;
     reporting: {
-      kind: 'galactic_inbox';
-      label: 'Galactic inbox';
+      kind: "galactic_inbox";
+      label: "Galactic inbox";
       configured: boolean;
     };
   };
@@ -2382,7 +2635,7 @@ export interface LaunchAgentHomeResponse {
     items: LaunchAgentHomeAuthorityItem[];
   };
   /** Aggregate managed-routine state; primary fields above remain compatibility aliases. */
-  routines?: Omit<LaunchAgentRoutinesResponse, 'agent' | 'generatedAt'>;
+  routines?: Omit<LaunchAgentRoutinesResponse, "agent" | "generatedAt">;
   capacity: LaunchCapacityResponse | null;
   agentCapacity?: LaunchAgentCapacityResponse | null;
   budget: LaunchAgentHomeBudget | null;
@@ -2404,7 +2657,8 @@ export interface LaunchAgentHomeMutationBase {
   expectedRevision: string;
 }
 
-export interface LaunchAgentHomeIdentityUpdateRequest extends LaunchAgentHomeMutationBase {
+export interface LaunchAgentHomeIdentityUpdateRequest
+  extends LaunchAgentHomeMutationBase {
   name?: string;
   description?: string | null;
 }
@@ -2412,15 +2666,17 @@ export interface LaunchAgentHomeIdentityUpdateRequest extends LaunchAgentHomeMut
 export interface LaunchAgentHomeRoutineUpdateRequest
   extends LaunchAgentHomeMutationBase, LaunchAgentRoutineUpdateRequest {}
 
-export interface LaunchAgentHomeSettingsUpdateRequest extends LaunchAgentHomeMutationBase {
+export interface LaunchAgentHomeSettingsUpdateRequest
+  extends LaunchAgentHomeMutationBase {
   values: Record<string, string | null>;
 }
 
 export type LaunchAgentHomeAction =
   | LaunchAgentRoutineAction
-  | 'promote_candidate';
+  | "promote_candidate";
 
-export interface LaunchAgentHomeActionRequest extends LaunchAgentHomeMutationBase {
+export interface LaunchAgentHomeActionRequest
+  extends LaunchAgentHomeMutationBase {
   action: LaunchAgentHomeAction;
   /** Client-generated UUID; retries with the same key return the first action. */
   idempotencyKey: string;
@@ -2460,22 +2716,22 @@ export interface LaunchAgentSummary {
 }
 
 export type LaunchFleetAgentState =
-  | 'active'
-  | 'paused'
-  | 'error'
-  | 'idle'
-  | 'unconfigured';
+  | "active"
+  | "paused"
+  | "error"
+  | "idle"
+  | "unconfigured";
 
 export type LaunchFleetAgentHealth =
-  | 'healthy'
-  | 'waiting'
-  | 'paused'
-  | 'error'
-  | 'idle';
+  | "healthy"
+  | "waiting"
+  | "paused"
+  | "error"
+  | "idle";
 
 export interface LaunchFleetActivity {
   id: string;
-  kind: 'run' | 'alert';
+  kind: "run" | "alert";
   title: string;
   summary?: string | null;
   status: string;
@@ -2523,41 +2779,42 @@ export interface LaunchFleetOrderResponse {
 }
 
 export const LAUNCH_FLEET_SHORTCUT_ACTIONS = [
-  'search',
-  'alerts',
-  'settings',
-  'agent-1',
-  'agent-2',
-  'agent-3',
-  'agent-4',
-  'agent-5',
-  'agent-6',
-  'agent-7',
-  'agent-8',
-  'agent-9',
-  'agent-10',
-  'help',
-  'dismiss',
+  "search",
+  "alerts",
+  "settings",
+  "agent-1",
+  "agent-2",
+  "agent-3",
+  "agent-4",
+  "agent-5",
+  "agent-6",
+  "agent-7",
+  "agent-8",
+  "agent-9",
+  "agent-10",
+  "help",
+  "dismiss",
 ] as const;
 
-export type LaunchFleetShortcutAction = typeof LAUNCH_FLEET_SHORTCUT_ACTIONS[number];
+export type LaunchFleetShortcutAction =
+  typeof LAUNCH_FLEET_SHORTCUT_ACTIONS[number];
 
 export const LAUNCH_FLEET_SHORTCUT_DEFAULTS = {
-  search: 'k',
-  alerts: 'a',
-  settings: 's',
-  'agent-1': '1',
-  'agent-2': '2',
-  'agent-3': '3',
-  'agent-4': '4',
-  'agent-5': '5',
-  'agent-6': '6',
-  'agent-7': '7',
-  'agent-8': '8',
-  'agent-9': '9',
-  'agent-10': '0',
-  help: '?',
-  dismiss: 'Escape',
+  search: "k",
+  alerts: "a",
+  settings: "s",
+  "agent-1": "1",
+  "agent-2": "2",
+  "agent-3": "3",
+  "agent-4": "4",
+  "agent-5": "5",
+  "agent-6": "6",
+  "agent-7": "7",
+  "agent-8": "8",
+  "agent-9": "9",
+  "agent-10": "0",
+  help: "?",
+  dismiss: "Escape",
 } as const satisfies Record<LaunchFleetShortcutAction, string>;
 
 /**
@@ -2626,17 +2883,17 @@ export interface LaunchFleetResponse {
 }
 
 export type LaunchAgentSearchSubjectKind =
-  | 'agent'
-  | 'directive'
-  | 'interface'
-  | 'routine'
-  | 'function'
-  | 'function_field'
-  | 'attention'
-  | 'run'
-  | 'release'
-  | 'setting'
-  | 'authority';
+  | "agent"
+  | "directive"
+  | "interface"
+  | "routine"
+  | "function"
+  | "function_field"
+  | "attention"
+  | "run"
+  | "release"
+  | "setting"
+  | "authority";
 
 export interface LaunchAgentSearchRequest {
   query: string;
@@ -2674,12 +2931,12 @@ export interface LaunchAgentAdminSummary {
   /** @deprecated Use agent. */
   tool: LaunchAgentSummary;
   editableFields: readonly (
-    | 'name'
-    | 'description'
-    | 'visibility'
-    | 'pricing'
-    | 'secrets'
-    | 'trust'
+    | "name"
+    | "description"
+    | "visibility"
+    | "pricing"
+    | "secrets"
+    | "trust"
   )[];
   receiptsUrl?: string | null;
   logsUrl?: string | null;
@@ -2689,7 +2946,7 @@ export interface LaunchAgentAdminSummary {
   referral?: {
     url: string;
     slug: string;
-    status: 'active' | 'disabled';
+    status: "active" | "disabled";
   } | null;
 }
 
@@ -2743,7 +3000,7 @@ export interface LaunchTrustCard {
   signed_manifest: boolean;
   // Does the EXECUTING bundle match its signed attestation? "verified"/
   // "unverified" on the detail surface; "unknown" on cheap batch surfaces.
-  executed_integrity: 'verified' | 'unverified' | 'unknown';
+  executed_integrity: "verified" | "unverified" | "unknown";
   signer: string | null;
   signed_at: string | null;
   version: string | null;
@@ -2784,14 +3041,14 @@ export interface LaunchTrustCard {
   developer_can_read_user_data: boolean;
   execution_receipts: {
     enabled: true;
-    field: 'receipt_id';
-    backing_log: 'mcp_call_logs.id';
+    field: "receipt_id";
+    backing_log: "mcp_call_logs.id";
   };
 }
 
 export interface LaunchDiscoveryRequest {
   query?: string;
-  kind?: LaunchAgentKind | 'all';
+  kind?: LaunchAgentKind | "all";
   limit?: number;
 }
 
@@ -2832,7 +3089,7 @@ export interface LaunchFolderMutationResponse {
 
 export interface LaunchFolderMemberMutationResponse {
   appId: string;
-  scope: 'owned' | 'installed';
+  scope: "owned" | "installed";
   folderId: string | null;
   generatedAt: string;
 }
@@ -2883,10 +3140,10 @@ export interface LaunchWalletSummary {
 }
 
 export type LaunchWalletDetailKind =
-  | 'transactions'
-  | 'receipts'
-  | 'earnings'
-  | 'payouts';
+  | "transactions"
+  | "receipts"
+  | "earnings"
+  | "payouts";
 
 export interface LaunchWalletPageRequest {
   cursor?: string | null;
@@ -2906,28 +3163,28 @@ export interface LaunchWalletPageInfo {
 }
 
 export interface LaunchWalletTransactionsResponse {
-  kind: 'transactions';
+  kind: "transactions";
   items: LaunchWalletTransaction[];
   page: LaunchWalletPageInfo;
   generatedAt: string;
 }
 
 export interface LaunchWalletReceiptsResponse {
-  kind: 'receipts';
+  kind: "receipts";
   items: LaunchWalletReceiptSummary[];
   page: LaunchWalletPageInfo;
   generatedAt: string;
 }
 
 export interface LaunchWalletEarningsResponse {
-  kind: 'earnings';
+  kind: "earnings";
   items: LaunchWalletEarningSummary[];
   page: LaunchWalletPageInfo;
   generatedAt: string;
 }
 
 export interface LaunchWalletPayoutsResponse {
-  kind: 'payouts';
+  kind: "payouts";
   items: LaunchWalletPayoutSummary[];
   page: LaunchWalletPageInfo;
   generatedAt: string;
@@ -2940,10 +3197,10 @@ export type LaunchWalletDetailResponse =
   | LaunchWalletPayoutsResponse;
 
 export type LaunchPayoutStatusKind =
-  | 'not_connected'
-  | 'onboarding'
-  | 'ready'
-  | 'unavailable';
+  | "not_connected"
+  | "onboarding"
+  | "ready"
+  | "unavailable";
 
 export interface LaunchPayoutStatus {
   kind: LaunchPayoutStatusKind;
@@ -2953,7 +3210,7 @@ export interface LaunchPayoutStatus {
 }
 
 export interface LaunchWalletAction {
-  id: 'topup' | 'transactions' | 'receipts' | 'earnings' | 'payouts';
+  id: "topup" | "transactions" | "receipts" | "earnings" | "payouts";
   label: string;
   description: string;
   href?: string | null;
@@ -3015,21 +3272,22 @@ export interface LaunchLeaderboardEntry {
   avatarUrl?: string | null;
   value: LaunchMoneyAmount;
   eventCount?: number;
-  featuredAgent?: Pick<LaunchAgentSummary, 'id' | 'slug' | 'name'> | null;
+  featuredAgent?: Pick<LaunchAgentSummary, "id" | "slug" | "name"> | null;
   /** @deprecated Use featuredAgent. */
-  featuredTool?: Pick<LaunchAgentSummary, 'id' | 'slug' | 'name'> | null;
+  featuredTool?: Pick<LaunchAgentSummary, "id" | "slug" | "name"> | null;
 }
 
 export interface LaunchLeaderboardResponse {
   kind: LaunchLeaderboardKind;
-  period: '30d' | '90d' | 'all';
+  period: "30d" | "90d" | "all";
   entries: LaunchLeaderboardEntry[];
   generatedAt: string;
 }
 
 export const LAUNCH_SCOPE_CONTRACT: LaunchScopeContract = {
   version: LAUNCH_MVP_VERSION,
-  thesis: 'Conjure a private persistent Agent; Galactic keeps it working, bounded, and portable.',
+  thesis:
+    "Conjure a private persistent Agent; Galactic keeps it working, bounded, and portable.",
   policy: PERSISTENT_AGENT_LAUNCH_POLICY,
   includedCapabilities: LAUNCH_INCLUDED_CAPABILITIES,
   deferredCapabilities: LAUNCH_DEFERRED_CAPABILITIES,
@@ -3041,14 +3299,14 @@ export const LAUNCH_SCOPE_CONTRACT: LaunchScopeContract = {
 export function isLaunchDeferredCapability(
   value: unknown,
 ): value is LaunchDeferredCapability {
-  return typeof value === 'string' &&
+  return typeof value === "string" &&
     (LAUNCH_DEFERRED_CAPABILITIES as readonly string[]).includes(value);
 }
 
 export function isLaunchIncludedCapability(
   value: unknown,
 ): value is LaunchIncludedCapability {
-  return typeof value === 'string' &&
+  return typeof value === "string" &&
     (LAUNCH_INCLUDED_CAPABILITIES as readonly string[]).includes(value);
 }
 
@@ -3084,13 +3342,17 @@ export const LAUNCH_AGENT_FUNCTION_POLICIES = LAUNCH_CALLER_FUNCTION_POLICIES;
 /** @deprecated Use LaunchCallerFunctionPolicy. */
 export type LaunchAgentFunctionPolicy = LaunchCallerFunctionPolicy;
 /** @deprecated Use LaunchCallerFunctionPermissionSource. */
-export type LaunchAgentFunctionPermissionSource = LaunchCallerFunctionPermissionSource;
+export type LaunchAgentFunctionPermissionSource =
+  LaunchCallerFunctionPermissionSource;
 /** @deprecated Use LaunchCallerFunctionPermissionSummary. */
-export type LaunchAgentFunctionPermissionSummary = LaunchCallerFunctionPermissionSummary;
+export type LaunchAgentFunctionPermissionSummary =
+  LaunchCallerFunctionPermissionSummary;
 /** @deprecated Use LaunchCallerFunctionPermissionUpdate. */
-export type LaunchAgentFunctionPermissionUpdate = LaunchCallerFunctionPermissionUpdate;
+export type LaunchAgentFunctionPermissionUpdate =
+  LaunchCallerFunctionPermissionUpdate;
 /** @deprecated Use LaunchCallerFunctionPermissionsResponse. */
-export type LaunchAgentFunctionPermissionsResponse = LaunchCallerFunctionPermissionsResponse;
+export type LaunchAgentFunctionPermissionsResponse =
+  LaunchCallerFunctionPermissionsResponse;
 /** @deprecated Use LaunchCallerFunctionPermissionsUpdateRequest. */
 export type LaunchAgentFunctionPermissionsUpdateRequest =
   LaunchCallerFunctionPermissionsUpdateRequest;

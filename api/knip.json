@@ -2,6 +2,7 @@
   "$schema": "./node_modules/knip/schema.json",
   "entry": [
     "src/worker-entry.ts",
+    "src/**/*.test.ts",
     "handlers/*.test.ts",
     "services/*.test.ts",
     "runtime/*.test.ts"

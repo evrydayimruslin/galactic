@@ -11,8 +11,11 @@
 //   - NO raw owner SQL: the unscoped createD1DataService.all is used only with
 //     fixed, identifier-guarded templates and scoped-builder output.
 //
-// Full cross-user read (for support) is intentionally NOT here — that is a
-// separate, disclosed + audited owner opt-in (tracked for a later PR).
+// Cross-user support read exists only through the explicit `support_read`
+// action. It requires a platform-signed permission bound to this exact current
+// app/version/runtime and manifest, and it records an append-only audit event
+// before returning rows. Mutable manifests or transplanted version metadata
+// cannot authorize it.
 
 import { CapabilityError } from "../../../shared/contracts/capabilities.ts";
 import type { App } from "../../../shared/types/index.ts";
@@ -20,7 +23,10 @@ import { createAppsService } from "../apps.ts";
 import { getD1DatabaseId } from "../d1-provisioning.ts";
 import { createD1DataService } from "../d1-data.ts";
 import { buildSelect } from "../../src/bindings/scoped-query.ts";
-import { resolveAppPermissions, SUPPORT_DATA_READ_PERMISSION } from "../trust.ts";
+import {
+  hasVerifiedCurrentVersionPermission,
+  SUPPORT_DATA_READ_PERMISSION,
+} from "../trust.ts";
 import { recordSupportDataAccess } from "../support-access-log.ts";
 
 // SQLite identifier guard for table names we interpolate into fixed templates.
@@ -155,10 +161,15 @@ export async function inspectAppDatabase(
     if (!tables.includes(table)) {
       throw new CapabilityError("not_found", `Table not found: ${table}`);
     }
-    // GATE: the app must have DECLARED the disclosed permission — the SAME
-    // permission the trust card surfaces (resolveAppPermissions). Off by default.
-    const permissions = resolveAppPermissions(app);
-    if (!permissions.includes(SUPPORT_DATA_READ_PERMISSION)) {
+    // GATE: cross-user access requires a platform-signed permission on this
+    // exact app/current-version/runtime. Raw manifest or transplanted version
+    // metadata is disclosure-only and can never authorize support access.
+    if (
+      !await hasVerifiedCurrentVersionPermission(
+        app,
+        SUPPORT_DATA_READ_PERMISSION,
+      )
+    ) {
       throw new CapabilityError(
         "forbidden",
         `This app has not enabled support data access. Declare the ` +

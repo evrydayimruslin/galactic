@@ -139,12 +139,6 @@ describe("Agent Studio partial screens", () => {
         capacity={{
           agentId: "agent-1",
           blocker: null,
-          burst: {
-            capUsedPercent: 41,
-            resetsAt: "2026-07-27T17:00:00.000Z",
-            shareUsedPercent: 7,
-            state: "available",
-          },
           capPercent: 20,
           generatedAt: "2026-07-27T12:00:00.000Z",
           nextEligibleAt: null,
@@ -160,10 +154,9 @@ describe("Agent Studio partial screens", () => {
       />,
     );
 
-    expect(markup).toContain("41%");
-    expect(markup).toContain("32% weekly");
-    expect(markup).toContain("20% ceiling");
-    expect(markup).not.toContain(">7%<");
+    expect(markup).toContain("32%");
+    expect(markup).toContain("20% weekly ceiling");
+    expect(markup).not.toContain(">5%<");
     expect(markup).toContain("Save ceiling");
   });
 });

@@ -4,12 +4,12 @@ import type {
   ManifestParameter,
   ManifestReturn,
   ManifestSkill,
-} from '../../shared/contracts/manifest.ts';
-import { validateManifest } from '../../shared/contracts/manifest.ts';
-import { COMPUTE_EXEC_PERMISSION } from '../../shared/contracts/compute.ts';
-import type { ParseResult } from './parser.ts';
-import { parseTypeScript } from './parser.ts';
-import { parseAppManifest } from './app-settings.ts';
+} from "../../shared/contracts/manifest.ts";
+import { validateManifest } from "../../shared/contracts/manifest.ts";
+import { COMPUTE_EXEC_PERMISSION } from "../../shared/contracts/compute.ts";
+import type { ParseResult } from "./parser.ts";
+import { parseTypeScript } from "./parser.ts";
+import { parseAppManifest } from "./app-settings.ts";
 
 interface ManifestAppIdentity {
   name?: string | null;
@@ -17,7 +17,7 @@ interface ManifestAppIdentity {
   description?: string | null;
 }
 
-type ManifestHydrationSource = 'uploaded' | 'merged' | 'generated';
+type ManifestHydrationSource = "uploaded" | "merged" | "generated";
 
 interface ManifestHydrationResult {
   manifest: AppManifest;
@@ -28,21 +28,23 @@ interface ManifestHydrationResult {
 interface StoredManifestCoverageResult {
   manifest: AppManifest | null;
   manifestJson: string | null;
-  source: 'stored' | ManifestHydrationSource | 'none';
+  source: "stored" | ManifestHydrationSource | "none";
 }
 
-function jsonSchemaToManifestType(schema: Record<string, unknown>): ManifestParameter['type'] {
+function jsonSchemaToManifestType(
+  schema: Record<string, unknown>,
+): ManifestParameter["type"] {
   const type = schema.type as string;
   if (
-    type === 'string' ||
-    type === 'number' ||
-    type === 'boolean' ||
-    type === 'object' ||
-    type === 'array'
+    type === "string" ||
+    type === "number" ||
+    type === "boolean" ||
+    type === "object" ||
+    type === "array"
   ) {
     return type;
   }
-  return 'object';
+  return "object";
 }
 
 function hasRichManifestDescriptions(manifest: AppManifest): boolean {
@@ -51,9 +53,9 @@ function hasRichManifestDescriptions(manifest: AppManifest): boolean {
   }
 
   return Object.values(manifest.functions).some((fn) =>
-    typeof fn.description === 'string' &&
+    typeof fn.description === "string" &&
     fn.description.trim().length > 0 &&
-    !fn.description.startsWith('Function ')
+    !fn.description.startsWith("Function ")
   );
 }
 
@@ -69,16 +71,16 @@ function buildDefaultManifestSkill(
 ): ManifestSkill {
   const appName = app.name || app.slug;
   const functionSummary = functionNames.length > 0
-    ? `Functions: ${functionNames.slice(0, 12).join(', ')}.`
+    ? `Functions: ${functionNames.slice(0, 12).join(", ")}.`
     : undefined;
   return {
     name: `${appName} context`,
     description: `Full usage context and examples for ${appName}.`,
     semantic_description: [app.description, functionSummary]
       .filter((part): part is string => Boolean(part && part.trim()))
-      .join(' '),
-    resource: 'skills.md',
-    format: 'markdown',
+      .join(" "),
+    resource: "skills.md",
+    format: "markdown",
   };
 }
 
@@ -86,7 +88,9 @@ function withDefaultManifestSkill(
   manifest: AppManifest,
   app: ManifestAppIdentity,
 ): AppManifest {
-  const functionNames = manifest.functions ? Object.keys(manifest.functions) : [];
+  const functionNames = manifest.functions
+    ? Object.keys(manifest.functions)
+    : [];
   const defaultSkill = buildDefaultManifestSkill(app, functionNames);
   return {
     ...manifest,
@@ -108,8 +112,8 @@ export function generateManifestFromParseResult(
   // (true AND false) so the Free Mode AI gate can tell "analyzed, no AI" from
   // "old manifest, unknown". Both generation and embedding are provider-backed
   // inference, so either capability must preserve the per-function signal.
-  const appHasInference = parseResult.permissions.includes('ai:call') ||
-    parseResult.permissions.includes('ai:embed');
+  const appHasInference = parseResult.permissions.includes("ai:call") ||
+    parseResult.permissions.includes("ai:embed");
   const appHasCompute = parseResult.permissions.includes(
     COMPUTE_EXEC_PERMISSION,
   );
@@ -124,10 +128,11 @@ export function generateManifestFromParseResult(
         ...(param.default !== undefined ? { default: param.default } : {}),
         ...(param.schema && (param.schema as Record<string, unknown>).properties
           ? {
-            properties: (param.schema as Record<string, unknown>).properties as Record<
-              string,
-              ManifestParameter
-            >,
+            properties: (param.schema as Record<string, unknown>)
+              .properties as Record<
+                string,
+                ManifestParameter
+              >,
           }
           : {}),
       };
@@ -139,7 +144,7 @@ export function generateManifestFromParseResult(
       returns: fn.returns?.type
         ? ({
           type: jsonSchemaToManifestType({
-            type: fn.returns.type.replace(/^Promise<(.+)>$/, '$1'),
+            type: fn.returns.type.replace(/^Promise<(.+)>$/, "$1"),
           } as Record<string, unknown>),
           description: fn.returns.description || undefined,
         } as ManifestReturn)
@@ -154,8 +159,8 @@ export function generateManifestFromParseResult(
     name: app.name || app.slug,
     version,
     description: app.description || undefined,
-    type: 'mcp',
-    entry: { functions: options.entryFileName || 'index.ts' },
+    type: "mcp",
+    entry: { functions: options.entryFileName || "index.ts" },
     functions: Object.keys(functions).length > 0 ? functions : undefined,
     skills: {
       context: buildDefaultManifestSkill(
@@ -163,7 +168,9 @@ export function generateManifestFromParseResult(
         parseResult.functions.map((fn) => fn.name),
       ),
     },
-    permissions: parseResult.permissions.length > 0 ? parseResult.permissions : undefined,
+    permissions: parseResult.permissions.length > 0
+      ? parseResult.permissions
+      : undefined,
   };
 }
 
@@ -175,15 +182,15 @@ export function generateManifestFromParseResult(
 // carry-forward path) must keep them — otherwise a full-time agent silently
 // loses its routine template and flight recorder on the next regenerate.
 const CARRIED_MANIFEST_FIELDS = [
-  'external_functions',
-  'interfaces',
-  'routines',
-  'emits',
-  'imports',
-  'network',
-  'flight_recorder',
-  'compute',
-  'operator_errors',
+  "external_functions",
+  "interfaces",
+  "routines",
+  "emits",
+  "imports",
+  "network",
+  "flight_recorder",
+  "compute",
+  "operator_errors",
 ] as const;
 
 function carryForwardDeclaredFields(
@@ -206,8 +213,7 @@ function carryForwardDeclaredFields(
         name,
         {
           ...fn,
-          uses_compute:
-            existing.functions?.[name]?.uses_compute === true ||
+          uses_compute: existing.functions?.[name]?.uses_compute === true ||
             fn.uses_compute === true,
         },
       ]),
@@ -218,17 +224,17 @@ function carryForwardDeclaredFields(
     };
     const computeSecretDeclarations = Object.fromEntries(
       (existing.compute.secrets || []).flatMap((secret) =>
-        declaredEnvVars[secret]
-          ? [[secret, declaredEnvVars[secret]]]
-          : []
+        declaredEnvVars[secret] ? [[secret, declaredEnvVars[secret]]] : []
       ),
     );
     result = {
       ...result,
-      permissions: [...new Set([
-        ...(result.permissions || []),
-        COMPUTE_EXEC_PERMISSION,
-      ])],
+      permissions: [
+        ...new Set([
+          ...(result.permissions || []),
+          COMPUTE_EXEC_PERMISSION,
+        ]),
+      ],
       functions,
       ...(Object.keys(computeSecretDeclarations).length > 0
         ? {
@@ -250,14 +256,22 @@ export function mergeManifestWithParseResult(
   version: string,
   options: { entryFileName?: string } = {},
 ): ManifestHydrationResult {
-  const autoManifest = generateManifestFromParseResult(app, parseResult, version, options);
+  const autoManifest = generateManifestFromParseResult(
+    app,
+    parseResult,
+    version,
+    options,
+  );
 
-  if (existingManifest?.type === 'mcp' && hasManifestFunctionContracts(existingManifest)) {
+  if (
+    existingManifest?.type === "mcp" &&
+    hasManifestFunctionContracts(existingManifest)
+  ) {
     if (!hasRichManifestDescriptions(existingManifest)) {
       return {
         manifest: carryForwardDeclaredFields(existingManifest, autoManifest),
         parseResult,
-        source: 'generated',
+        source: "generated",
       };
     }
 
@@ -266,10 +280,12 @@ export function mergeManifestWithParseResult(
     const effectivePermissions = autoManifest.permissions?.includes(
         COMPUTE_EXEC_PERMISSION,
       )
-      ? [...new Set([
-        ...(mergedPermissions || []),
-        COMPUTE_EXEC_PERMISSION,
-      ])]
+      ? [
+        ...new Set([
+          ...(mergedPermissions || []),
+          COMPUTE_EXEC_PERMISSION,
+        ]),
+      ]
       : mergedPermissions;
 
     const mergedManifest: AppManifest = {
@@ -277,7 +293,8 @@ export function mergeManifestWithParseResult(
       version,
       entry: {
         ...existingManifest.entry,
-        functions: existingManifest.entry?.functions || options.entryFileName || 'index.ts',
+        functions: existingManifest.entry?.functions || options.entryFileName ||
+          "index.ts",
       },
       permissions: effectivePermissions,
       functions: { ...(existingManifest.functions || {}) },
@@ -300,8 +317,8 @@ export function mergeManifestWithParseResult(
     // it's written explicitly (true AND false) for per-function precision; true
     // is sticky — a function can't shed the flag by omission or by declaring false.
     if (
-      mergedManifest.permissions?.includes('ai:call') ||
-      mergedManifest.permissions?.includes('ai:embed')
+      mergedManifest.permissions?.includes("ai:call") ||
+      mergedManifest.permissions?.includes("ai:embed")
     ) {
       for (const fn of parseResult.functions) {
         const target = mergedManifest.functions?.[fn.name];
@@ -328,14 +345,14 @@ export function mergeManifestWithParseResult(
     return {
       manifest: mergedManifest,
       parseResult,
-      source: 'merged',
+      source: "merged",
     };
   }
 
   return {
     manifest: carryForwardDeclaredFields(existingManifest, autoManifest),
     parseResult,
-    source: 'generated',
+    source: "generated",
   };
 }
 
@@ -345,17 +362,56 @@ export async function hydrateManifestForSource(input: {
   sourceCode: string;
   filename?: string;
   version: string;
+  /**
+   * Treat an existing compiled contract as the complete authority ceiling.
+   * Source inspection may reject a mismatch, but may never add permissions or
+   * callable functions to it.
+   */
+  authoritativeContract?: boolean;
 }): Promise<ManifestHydrationResult> {
   const existingManifest = parseAppManifest(input.existingManifest);
-  const parseResult = await parseTypeScript(input.sourceCode, input.filename || 'index.ts');
+  const parseResult = await parseTypeScript(
+    input.sourceCode,
+    input.filename || "index.ts",
+  );
 
-  if (existingManifest?.type === 'mcp' && hasManifestFunctionContracts(existingManifest)) {
+  if (input.authoritativeContract) {
+    if (
+      existingManifest?.type !== "mcp" ||
+      !hasManifestFunctionContracts(existingManifest)
+    ) {
+      throw new Error(
+        "An authoritative Agent contract must compile to an MCP manifest with functions",
+      );
+    }
+    const declaredPermissions = new Set(existingManifest.permissions || []);
+    const undeclaredPermissions = parseResult.permissions.filter(
+      (permission) => !declaredPermissions.has(permission),
+    );
+    if (undeclaredPermissions.length > 0) {
+      throw new Error(
+        `Source uses runtime permissions not declared by galactic.yaml: ${
+          undeclaredPermissions.sort().join(", ")
+        }`,
+      );
+    }
+    return {
+      manifest: existingManifest,
+      parseResult,
+      source: "uploaded",
+    };
+  }
+
+  if (
+    existingManifest?.type === "mcp" &&
+    hasManifestFunctionContracts(existingManifest)
+  ) {
     return mergeManifestWithParseResult(
       input.app,
       existingManifest,
       parseResult,
       input.version,
-      { entryFileName: input.filename || 'index.ts' },
+      { entryFileName: input.filename || "index.ts" },
     );
   }
 
@@ -366,16 +422,16 @@ export async function hydrateManifestForSource(input: {
         input.app,
         parseResult,
         input.version,
-        { entryFileName: input.filename || 'index.ts' },
+        { entryFileName: input.filename || "index.ts" },
       ),
     ),
     parseResult,
-    source: existingManifest ? 'merged' : 'generated',
+    source: existingManifest ? "merged" : "generated",
   };
 }
 
 function isManifestFileName(filename: string): boolean {
-  return (filename.split('/').pop() || filename) === 'manifest.json';
+  return (filename.split("/").pop() || filename) === "manifest.json";
 }
 
 async function fetchStoredManifest(
@@ -397,21 +453,21 @@ async function fetchStoredSource(
   storageKey: string,
 ): Promise<{ code: string; filename: string } | null> {
   const candidates = [
-    '_source_index.ts',
-    '_source_index.tsx',
-    '_source_index.jsx',
-    '_source_index.js',
-    'index.ts',
-    'index.tsx',
-    'index.jsx',
-    'index.js',
+    "_source_index.ts",
+    "_source_index.tsx",
+    "_source_index.jsx",
+    "_source_index.js",
+    "index.ts",
+    "index.tsx",
+    "index.jsx",
+    "index.js",
   ];
 
   for (const candidate of candidates) {
     try {
       const code = await fetchTextFile(`${storageKey}${candidate}`);
-      const filename = candidate.startsWith('_source_')
-        ? candidate.replace('_source_', '')
+      const filename = candidate.startsWith("_source_")
+        ? candidate.replace("_source_", "")
         : candidate;
       return { code, filename };
     } catch {
@@ -429,23 +485,29 @@ export async function resolveStoredManifestCoverage(input: {
   version: string;
   existingManifest?: AppManifest | string | null;
 }): Promise<StoredManifestCoverageResult> {
-  const storedManifest = await fetchStoredManifest(input.fetchTextFile, input.storageKey);
+  const storedManifest = await fetchStoredManifest(
+    input.fetchTextFile,
+    input.storageKey,
+  );
   if (hasManifestFunctionContracts(storedManifest)) {
     const manifest = withDefaultManifestSkill(storedManifest!, input.app);
     return {
       manifest,
       manifestJson: JSON.stringify(manifest, null, 2),
-      source: 'stored',
+      source: "stored",
     };
   }
 
-  const sourceFile = await fetchStoredSource(input.fetchTextFile, input.storageKey);
+  const sourceFile = await fetchStoredSource(
+    input.fetchTextFile,
+    input.storageKey,
+  );
   if (!sourceFile) {
     const manifest = parseAppManifest(storedManifest || input.existingManifest);
     return {
       manifest,
       manifestJson: manifest ? JSON.stringify(manifest, null, 2) : null,
-      source: manifest ? 'merged' : 'none',
+      source: manifest ? "merged" : "none",
     };
   }
 
@@ -464,12 +526,16 @@ export async function resolveStoredManifestCoverage(input: {
   };
 }
 
-export function upsertManifestUploadFile<T extends { name: string } & Record<string, unknown>>(
+export function upsertManifestUploadFile<
+  T extends { name: string } & Record<string, unknown>,
+>(
   files: T[],
   manifest: AppManifest | null,
   buildFile: (manifestJson: string) => T,
 ): T[] {
-  const withoutManifest = files.filter((file) => !isManifestFileName(file.name));
+  const withoutManifest = files.filter((file) =>
+    !isManifestFileName(file.name)
+  );
   if (!manifest) {
     return withoutManifest;
   }

@@ -59,6 +59,181 @@ describe("Compute release workflow static guards", () => {
     );
   });
 
+  it("binds the exact local image to a registry SBOM without a Docker export", async () => {
+    const deploy = await text(".github/workflows/compute-deploy.yml");
+    const install = deploy.indexOf("Install dependencies");
+    const build = deploy.indexOf("Build and smoke exact image");
+    const push = deploy.indexOf("Push image and resolve registry digest");
+    const pullCredential = deploy.indexOf(
+      "Issue isolated read-only registry credential for SBOM",
+    );
+    const sbom = deploy.indexOf("Generate image SBOM");
+    const vulnerabilityGate = deploy.indexOf(
+      "Gate all critical and fixable high image vulnerabilities",
+    );
+    const deployConfig = deploy.indexOf(
+      "Build exact-digest Compute deployment config",
+    );
+    expect(build).toBeGreaterThan(install);
+    expect(push).toBeGreaterThan(build);
+    expect(pullCredential).toBeGreaterThan(push);
+    expect(sbom).toBeGreaterThan(pullCredential);
+    expect(vulnerabilityGate).toBeGreaterThan(sbom);
+    expect(deployConfig).toBeGreaterThan(vulnerabilityGate);
+
+    const buildStep = deploy.slice(build, push);
+    expect(buildStep).toContain(
+      "docker builder prune --all --force",
+    );
+    expect(buildStep).toContain("local-image-id.txt");
+    expect(buildStep).toContain(
+      "docker image inspect --format '{{.Id}}'",
+    );
+    expect(buildStep).toContain("base-image-id.txt");
+    expect(buildStep).not.toContain("docker system prune");
+    expect(buildStep).not.toContain("docker image prune");
+
+    const pushStep = deploy.slice(push, pullCredential);
+    expect(pushStep).toContain("remote_config_digest");
+    expect(pushStep).toContain("local_image_id");
+    expect(pushStep).toContain(
+      '"The pushed manifest config does not match the exact local image."',
+    );
+    expect(pushStep).toContain(
+      'docker image rm --force "$local_image_id"',
+    );
+    expect(pushStep).toContain(
+      'docker image rm --force "$base_image_id"',
+    );
+    expect(pushStep).toContain(
+      "docker logout registry.cloudflare.com",
+    );
+    expect(pushStep.indexOf("remote_config_digest")).toBeLessThan(
+      pushStep.indexOf('docker image rm --force "$local_image_id"'),
+    );
+    expect(pushStep).not.toContain("docker image prune");
+    expect(pushStep).not.toContain("docker system prune");
+
+    const credentialStep = deploy.slice(pullCredential, sbom);
+    expect(credentialStep).toContain("--pull");
+    expect(credentialStep).not.toContain("--push");
+    expect(credentialStep).toContain("--expiration-minutes 60");
+    expect(credentialStep).toContain("SBOM_DOCKER_CONFIG");
+
+    const sbomStep = deploy.slice(sbom, vulnerabilityGate);
+    expect(sbomStep).toContain(
+      'expected_image_id="$(cat "$EVIDENCE_DIR/local-image-id.txt")"',
+    );
+    expect(sbomStep).toContain(
+      '"$syft_dir/syft" "registry:$REMOTE_IMAGE"',
+    );
+    expect(sbomStep).not.toContain('"docker:$LOCAL_IMAGE_TAG"');
+    expect(sbomStep).toContain("image.syft.json");
+    expect(sbomStep).toContain(
+      ".source.metadata.manifestDigest == $manifest_digest",
+    );
+    expect(sbomStep).toContain(
+      ".source.metadata.imageID == $image_id",
+    );
+    expect(sbomStep).toContain('"$EVIDENCE_DIR/sbom-source.json"');
+    expect(sbomStep).not.toContain("docker image inspect");
+    expect(sbomStep).toContain(
+      'rm -rf -- "$SBOM_DOCKER_CONFIG"',
+    );
+    expect(deploy).toContain(
+      'rm -rf -- "$RUNNER_TEMP/compute-sbom-docker"',
+    );
+  });
+
+  it("scans the exact Compute CI rootfs without exporting or copying the image", async () => {
+    const workflow = await text(".github/workflows/compute-ci.yml");
+    const build = workflow.indexOf("Build immutable-input image");
+    const smoke = workflow.indexOf("Smoke actual image");
+    const prepare = workflow.indexOf("Prepare exact image for no-copy SBOM");
+    const sbom = workflow.indexOf(
+      "Generate no-copy rootfs SBOM and provenance evidence",
+    );
+    const cleanup = workflow.indexOf("Release exact CI image storage");
+    const vulnerabilityGate = workflow.indexOf(
+      "Gate all critical and fixable high image vulnerabilities",
+    );
+    expect(smoke).toBeGreaterThan(build);
+    expect(prepare).toBeGreaterThan(smoke);
+    expect(sbom).toBeGreaterThan(prepare);
+    expect(cleanup).toBeGreaterThan(sbom);
+    expect(vulnerabilityGate).toBeGreaterThan(cleanup);
+
+    const prepareStep = workflow.slice(prepare, sbom);
+    expect(prepareStep).toContain("docker builder prune --all --force");
+    expect(prepareStep).toContain("pre-sbom-prune-disk.txt");
+    expect(prepareStep).toContain("post-sbom-prune-disk.txt");
+    expect(prepareStep).not.toContain("docker system prune");
+    expect(prepareStep).not.toContain("docker image prune");
+
+    const sbomStep = workflow.slice(sbom, cleanup);
+    expect(sbomStep).toContain('docker run --rm');
+    expect(sbomStep).toContain('--read-only');
+    expect(sbomStep).toContain('--network none');
+    expect(sbomStep).toContain('--cap-drop ALL');
+    expect(sbomStep).toContain('--cap-add DAC_READ_SEARCH');
+    expect(
+      [...sbomStep.matchAll(/--cap-add ([A-Z_]+)/gu)].map(
+        (match) => match[1],
+      ),
+    ).toEqual(["DAC_READ_SEARCH"]);
+    expect(sbomStep).toContain('--security-opt no-new-privileges=true');
+    expect(sbomStep).toContain('--user 0:0');
+    expect(sbomStep).toContain(
+      '--tmpfs /tmp:rw,nosuid,nodev,noexec,size=512m',
+    );
+    expect(sbomStep).toContain(
+      'src=$syft_dir/syft,dst=/__galactic_syft,readonly',
+    );
+    expect(sbomStep).toContain(
+      'install -d -m 0777 "$syft_output_dir"',
+    );
+    expect(sbomStep).toContain(
+      'src=$syft_output_dir,dst=/__galactic_output',
+    );
+    expect(sbomStep).not.toContain(
+      'src=$EVIDENCE_DIR,dst=/__galactic',
+    );
+    expect(sbomStep).toContain('--entrypoint /__galactic_syft');
+    expect(sbomStep).toContain('"$expected_image_id"');
+    expect(sbomStep).toContain('"dir:/"');
+    expect(sbomStep).toContain("--exclude './proc/**'");
+    expect(sbomStep).not.toContain('"docker:$IMAGE_TAG"');
+    expect(sbomStep).not.toContain('"registry:');
+    expect(sbomStep).not.toContain("docker save");
+    expect(sbomStep).not.toContain("docker push");
+    expect(sbomStep).toContain(
+      '-o "syft-json=/__galactic_output/image.syft.json"',
+    );
+    expect(sbomStep).toContain(
+      '-o "spdx-json=/__galactic_output/image.raw.spdx.json"',
+    );
+    expect(sbomStep).toContain(
+      'mv "$syft_output_dir/image.syft.json" "$EVIDENCE_DIR/image.syft.json"',
+    );
+    expect(sbomStep).toContain('rmdir "$syft_output_dir"');
+    expect(sbomStep).toContain("image.syft.json");
+    expect(sbomStep).toContain(
+      '.source.type == "directory"',
+    );
+    expect(sbomStep).toContain(".source.version == $source_version");
+    expect(sbomStep).toContain("post-scan-image-id.txt");
+    expect(sbomStep).toContain(
+      'sbom_mode: "mounted_rootfs_ci_vulnerability_inventory"',
+    );
+    expect(sbomStep).toContain("release_attestation: false");
+
+    const cleanupStep = workflow.slice(cleanup, vulnerabilityGate);
+    expect(cleanupStep).toContain('docker image rm --force "$local_image_id"');
+    expect(cleanupStep).toContain('docker image rm --force "$base_image_id"');
+    expect(cleanupStep).not.toContain("docker system prune");
+    expect(cleanupStep).not.toContain("docker image prune");
+  });
+
   it("keeps emergency disable source-immutable and free of enable authority", async () => {
     const admission = await text(".github/workflows/compute-admission.yml");
     const resolveStart = admission.indexOf("Resolve certified OFF version from Compute release evidence");

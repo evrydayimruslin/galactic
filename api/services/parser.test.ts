@@ -4,52 +4,53 @@
  * Covers: parseTypeScript, type conversion, JSDoc extraction, permission inference
  */
 
-import { assertEquals } from 'https://deno.land/std@0.210.0/assert/assert_equals.ts';
-import { assert } from 'https://deno.land/std@0.210.0/assert/assert.ts';
-import { parseTypeScript } from './parser.ts';
+import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
+import { assert } from "https://deno.land/std@0.210.0/assert/assert.ts";
+import { parseTypeScript } from "./parser.ts";
 
 // ============================================
 // Basic function extraction
 // ============================================
 
-Deno.test('parser: extracts export function declaration', async () => {
+Deno.test("parser: extracts export function declaration", async () => {
   const code = `export function greet(name: string): string { return name; }`;
   const result = await parseTypeScript(code);
   assertEquals(result.functions.length, 1);
-  assertEquals(result.functions[0].name, 'greet');
+  assertEquals(result.functions[0].name, "greet");
   assertEquals(result.functions[0].parameters.length, 1);
-  assertEquals(result.functions[0].parameters[0].name, 'name');
-  assertEquals(result.functions[0].parameters[0].type, 'string');
+  assertEquals(result.functions[0].parameters[0].name, "name");
+  assertEquals(result.functions[0].parameters[0].type, "string");
   assertEquals(result.functions[0].parameters[0].required, true);
-  assertEquals(result.functions[0].returns.type, 'string');
+  assertEquals(result.functions[0].returns.type, "string");
 });
 
-Deno.test('parser: extracts async function', async () => {
-  const code = `export async function fetchData(): Promise<string> { return ''; }`;
+Deno.test("parser: extracts async function", async () => {
+  const code =
+    `export async function fetchData(): Promise<string> { return ''; }`;
   const result = await parseTypeScript(code);
   assertEquals(result.functions.length, 1);
-  assertEquals(result.functions[0].name, 'fetchData');
+  assertEquals(result.functions[0].name, "fetchData");
   assertEquals(result.functions[0].isAsync, true);
 });
 
-Deno.test('parser: extracts export arrow function', async () => {
+Deno.test("parser: extracts export arrow function", async () => {
   const code = `export const add = (a: number, b: number): number => a + b;`;
   const result = await parseTypeScript(code);
   assertEquals(result.functions.length, 1);
-  assertEquals(result.functions[0].name, 'add');
+  assertEquals(result.functions[0].name, "add");
   assertEquals(result.functions[0].parameters.length, 2);
-  assertEquals(result.functions[0].parameters[0].name, 'a');
-  assertEquals(result.functions[0].parameters[1].name, 'b');
+  assertEquals(result.functions[0].parameters[0].name, "a");
+  assertEquals(result.functions[0].parameters[1].name, "b");
 });
 
-Deno.test('parser: ignores non-exported functions', async () => {
+Deno.test("parser: ignores non-exported functions", async () => {
   const code = `function internal() {} export function external() {}`;
   const result = await parseTypeScript(code);
   assertEquals(result.functions.length, 1);
-  assertEquals(result.functions[0].name, 'external');
+  assertEquals(result.functions[0].name, "external");
 });
 
-Deno.test('parser: handles multiple exports', async () => {
+Deno.test("parser: handles multiple exports", async () => {
   const code = `
     export function a(): void {}
     export function b(): void {}
@@ -57,164 +58,176 @@ Deno.test('parser: handles multiple exports', async () => {
   `;
   const result = await parseTypeScript(code);
   assertEquals(result.functions.length, 3);
-  assertEquals(result.functions.map(f => f.name).sort(), ['a', 'b', 'c']);
+  assertEquals(result.functions.map((f) => f.name).sort(), ["a", "b", "c"]);
 });
 
-Deno.test('parser: handles named exports (export { foo })', async () => {
+Deno.test("parser: handles named exports (export { foo })", async () => {
   const code = `
     function myFunc(x: number): number { return x; }
     export { myFunc };
   `;
   const result = await parseTypeScript(code);
   assertEquals(result.functions.length, 1);
-  assertEquals(result.functions[0].name, 'myFunc');
+  assertEquals(result.functions[0].name, "myFunc");
+});
+
+Deno.test("parser: treats named module re-exports as public entrypoints", async () => {
+  const result = await parseTypeScript(
+    'export { run as execute } from "./run.ts";',
+  );
+  assertEquals(result.functions.map((fn) => fn.name), ["execute"]);
 });
 
 // ============================================
 // Parameter parsing
 // ============================================
 
-Deno.test('parser: optional parameter', async () => {
+Deno.test("parser: optional parameter", async () => {
   const code = `export function greet(name?: string): void {}`;
   const result = await parseTypeScript(code);
   assertEquals(result.functions[0].parameters[0].required, false);
 });
 
-Deno.test('parser: parameter with default value (string)', async () => {
+Deno.test("parser: parameter with default value (string)", async () => {
   const code = `export function greet(name: string = 'world'): void {}`;
   const result = await parseTypeScript(code);
   assertEquals(result.functions[0].parameters[0].required, false);
-  assertEquals(result.functions[0].parameters[0].default, 'world');
+  assertEquals(result.functions[0].parameters[0].default, "world");
 });
 
-Deno.test('parser: parameter with default value (number)', async () => {
+Deno.test("parser: parameter with default value (number)", async () => {
   const code = `export function limit(count: number = 10): void {}`;
   const result = await parseTypeScript(code);
   assertEquals(result.functions[0].parameters[0].default, 10);
 });
 
-Deno.test('parser: parameter with default value (boolean)', async () => {
+Deno.test("parser: parameter with default value (boolean)", async () => {
   const code = `export function toggle(active: boolean = true): void {}`;
   const result = await parseTypeScript(code);
   assertEquals(result.functions[0].parameters[0].default, true);
 });
 
-Deno.test('parser: parameter with default value (null)', async () => {
+Deno.test("parser: parameter with default value (null)", async () => {
   const code = `export function reset(value: string | null = null): void {}`;
   const result = await parseTypeScript(code);
   assertEquals(result.functions[0].parameters[0].default, null);
 });
 
-Deno.test('parser: object parameter type', async () => {
-  const code = `export function create(opts: { name: string; age: number }): void {}`;
+Deno.test("parser: object parameter type", async () => {
+  const code =
+    `export function create(opts: { name: string; age: number }): void {}`;
   const result = await parseTypeScript(code);
   const param = result.functions[0].parameters[0];
-  assertEquals(param.schema.type, 'object');
+  assertEquals(param.schema.type, "object");
   assert(param.schema.properties?.name !== undefined);
   assert(param.schema.properties?.age !== undefined);
-  assertEquals(param.schema.properties?.name.type, 'string');
-  assertEquals(param.schema.properties?.age.type, 'number');
+  assertEquals(param.schema.properties?.name.type, "string");
+  assertEquals(param.schema.properties?.age.type, "number");
 });
 
-Deno.test('parser: object with optional property', async () => {
-  const code = `export function create(opts: { name: string; age?: number }): void {}`;
+Deno.test("parser: object with optional property", async () => {
+  const code =
+    `export function create(opts: { name: string; age?: number }): void {}`;
   const result = await parseTypeScript(code);
   const schema = result.functions[0].parameters[0].schema;
-  assertEquals(schema.required, ['name']);
+  assertEquals(schema.required, ["name"]);
 });
 
 // ============================================
 // Type conversion to JSON Schema
 // ============================================
 
-Deno.test('parser: string type → JSON schema', async () => {
+Deno.test("parser: string type → JSON schema", async () => {
   const code = `export function f(x: string): void {}`;
   const result = await parseTypeScript(code);
-  assertEquals(result.functions[0].parameters[0].schema.type, 'string');
+  assertEquals(result.functions[0].parameters[0].schema.type, "string");
 });
 
-Deno.test('parser: number type → JSON schema', async () => {
+Deno.test("parser: number type → JSON schema", async () => {
   const code = `export function f(x: number): void {}`;
   const result = await parseTypeScript(code);
-  assertEquals(result.functions[0].parameters[0].schema.type, 'number');
+  assertEquals(result.functions[0].parameters[0].schema.type, "number");
 });
 
-Deno.test('parser: boolean type → JSON schema', async () => {
+Deno.test("parser: boolean type → JSON schema", async () => {
   const code = `export function f(x: boolean): void {}`;
   const result = await parseTypeScript(code);
-  assertEquals(result.functions[0].parameters[0].schema.type, 'boolean');
+  assertEquals(result.functions[0].parameters[0].schema.type, "boolean");
 });
 
-Deno.test('parser: array type (T[]) → JSON schema', async () => {
+Deno.test("parser: array type (T[]) → JSON schema", async () => {
   const code = `export function f(x: string[]): void {}`;
   const result = await parseTypeScript(code);
-  assertEquals(result.functions[0].parameters[0].schema.type, 'array');
-  assertEquals(result.functions[0].parameters[0].schema.items?.type, 'string');
+  assertEquals(result.functions[0].parameters[0].schema.type, "array");
+  assertEquals(result.functions[0].parameters[0].schema.items?.type, "string");
 });
 
-Deno.test('parser: Array<T> generic → JSON schema', async () => {
+Deno.test("parser: Array<T> generic → JSON schema", async () => {
   const code = `export function f(x: Array<number>): void {}`;
   const result = await parseTypeScript(code);
-  assertEquals(result.functions[0].parameters[0].schema.type, 'array');
-  assertEquals(result.functions[0].parameters[0].schema.items?.type, 'number');
+  assertEquals(result.functions[0].parameters[0].schema.type, "array");
+  assertEquals(result.functions[0].parameters[0].schema.items?.type, "number");
 });
 
-Deno.test('parser: union type (string | number) → oneOf schema', async () => {
+Deno.test("parser: union type (string | number) → oneOf schema", async () => {
   const code = `export function f(x: string | number): void {}`;
   const result = await parseTypeScript(code);
   const schema = result.functions[0].parameters[0].schema;
   assert(schema.oneOf !== undefined);
-  assertEquals((schema.oneOf as Array<{type: string}>).length, 2);
+  assertEquals((schema.oneOf as Array<{ type: string }>).length, 2);
 });
 
-Deno.test('parser: nullable type (string | null) → nullable schema', async () => {
+Deno.test("parser: nullable type (string | null) → nullable schema", async () => {
   const code = `export function f(x: string | null): void {}`;
   const result = await parseTypeScript(code);
   const schema = result.functions[0].parameters[0].schema;
-  assertEquals(schema.type, 'string');
+  assertEquals(schema.type, "string");
   assertEquals(schema.nullable, true);
 });
 
-Deno.test('parser: string literal union → enum schema', async () => {
+Deno.test("parser: string literal union → enum schema", async () => {
   const code = `export function f(x: 'a' | 'b' | 'c'): void {}`;
   const result = await parseTypeScript(code);
   const schema = result.functions[0].parameters[0].schema;
-  assertEquals(schema.type, 'string');
-  assertEquals(schema.enum, ['a', 'b', 'c']);
+  assertEquals(schema.type, "string");
+  assertEquals(schema.enum, ["a", "b", "c"]);
 });
 
-Deno.test('parser: Record<K,V> → object with additionalProperties', async () => {
+Deno.test("parser: Record<K,V> → object with additionalProperties", async () => {
   const code = `export function f(x: Record<string, number>): void {}`;
   const result = await parseTypeScript(code);
   const schema = result.functions[0].parameters[0].schema;
-  assertEquals(schema.type, 'object');
-  assertEquals((schema.additionalProperties as { type: string })?.type, 'number');
+  assertEquals(schema.type, "object");
+  assertEquals(
+    (schema.additionalProperties as { type: string })?.type,
+    "number",
+  );
 });
 
-Deno.test('parser: Promise<T> unwrapped in return type', async () => {
+Deno.test("parser: Promise<T> unwrapped in return type", async () => {
   const code = `export async function f(): Promise<string> { return ''; }`;
   const result = await parseTypeScript(code);
-  assertEquals(result.functions[0].returns.schema.type, 'string');
+  assertEquals(result.functions[0].returns.schema.type, "string");
 });
 
-Deno.test('parser: Date type → string with date-time format', async () => {
+Deno.test("parser: Date type → string with date-time format", async () => {
   const code = `export function f(x: Date): void {}`;
   const result = await parseTypeScript(code);
-  assertEquals(result.functions[0].parameters[0].schema.type, 'string');
-  assertEquals(result.functions[0].parameters[0].schema.format, 'date-time');
+  assertEquals(result.functions[0].parameters[0].schema.type, "string");
+  assertEquals(result.functions[0].parameters[0].schema.format, "date-time");
 });
 
-Deno.test('parser: tuple type [string, number]', async () => {
+Deno.test("parser: tuple type [string, number]", async () => {
   const code = `export function f(x: [string, number]): void {}`;
   const result = await parseTypeScript(code);
   const schema = result.functions[0].parameters[0].schema;
-  assertEquals(schema.type, 'array');
+  assertEquals(schema.type, "array");
   assert(Array.isArray(schema.items));
-  assertEquals((schema.items as Array<{type: string}>)[0].type, 'string');
-  assertEquals((schema.items as Array<{type: string}>)[1].type, 'number');
+  assertEquals((schema.items as Array<{ type: string }>)[0].type, "string");
+  assertEquals((schema.items as Array<{ type: string }>)[1].type, "number");
 });
 
-Deno.test('parser: intersection type (A & B) → allOf', async () => {
+Deno.test("parser: intersection type (A & B) → allOf", async () => {
   const code = `
     type A = { a: string };
     type B = { b: number };
@@ -225,42 +238,45 @@ Deno.test('parser: intersection type (A & B) → allOf', async () => {
   assert(schema.allOf !== undefined);
 });
 
-Deno.test('parser: custom type reference → $ref', async () => {
+Deno.test("parser: custom type reference → $ref", async () => {
   const code = `
     interface User { name: string; }
     export function f(x: User): void {}
   `;
   const result = await parseTypeScript(code);
-  assertEquals(result.functions[0].parameters[0].schema.$ref, '#/definitions/User');
+  assertEquals(
+    result.functions[0].parameters[0].schema.$ref,
+    "#/definitions/User",
+  );
 });
 
-Deno.test('parser: any/unknown types → empty schema', async () => {
+Deno.test("parser: any/unknown types → empty schema", async () => {
   const code = `export function f(x: any, y: unknown): void {}`;
   const result = await parseTypeScript(code);
   assertEquals(Object.keys(result.functions[0].parameters[0].schema).length, 0);
   assertEquals(Object.keys(result.functions[0].parameters[1].schema).length, 0);
 });
 
-Deno.test('parser: void return type → null schema', async () => {
+Deno.test("parser: void return type → null schema", async () => {
   const code = `export function f(): void {}`;
   const result = await parseTypeScript(code);
-  assertEquals(result.functions[0].returns.schema.type, 'null');
+  assertEquals(result.functions[0].returns.schema.type, "null");
 });
 
 // ============================================
 // JSDoc extraction
 // ============================================
 
-Deno.test('parser: extracts function description from JSDoc', async () => {
+Deno.test("parser: extracts function description from JSDoc", async () => {
   const code = `
     /** Greets a person by name */
     export function greet(name: string): string { return name; }
   `;
   const result = await parseTypeScript(code);
-  assertEquals(result.functions[0].description, 'Greets a person by name');
+  assertEquals(result.functions[0].description, "Greets a person by name");
 });
 
-Deno.test('parser: extracts @param descriptions', async () => {
+Deno.test("parser: extracts @param descriptions", async () => {
   const code = `
     /**
      * Greets a person
@@ -270,11 +286,17 @@ Deno.test('parser: extracts @param descriptions', async () => {
     export function greet(name: string, greeting: string): string { return ''; }
   `;
   const result = await parseTypeScript(code);
-  assertEquals(result.functions[0].parameters[0].description, "The person's name");
-  assertEquals(result.functions[0].parameters[1].description, 'The greeting to use');
+  assertEquals(
+    result.functions[0].parameters[0].description,
+    "The person's name",
+  );
+  assertEquals(
+    result.functions[0].parameters[1].description,
+    "The greeting to use",
+  );
 });
 
-Deno.test('parser: extracts @returns description', async () => {
+Deno.test("parser: extracts @returns description", async () => {
   const code = `
     /**
      * Adds two numbers
@@ -283,10 +305,10 @@ Deno.test('parser: extracts @returns description', async () => {
     export function add(a: number, b: number): number { return a + b; }
   `;
   const result = await parseTypeScript(code);
-  assertEquals(result.functions[0].returns.description, 'The sum');
+  assertEquals(result.functions[0].returns.description, "The sum");
 });
 
-Deno.test('parser: extracts @example', async () => {
+Deno.test("parser: extracts @example", async () => {
   const code = `
     /**
      * Adds two numbers
@@ -296,10 +318,10 @@ Deno.test('parser: extracts @example', async () => {
   `;
   const result = await parseTypeScript(code);
   assertEquals(result.functions[0].examples.length, 1);
-  assert(result.functions[0].examples[0].includes('add(1, 2)'));
+  assert(result.functions[0].examples[0].includes("add(1, 2)"));
 });
 
-Deno.test('parser: extracts @permission tags', async () => {
+Deno.test("parser: extracts @permission tags", async () => {
   const code = `
     /**
      * Saves data
@@ -308,10 +330,10 @@ Deno.test('parser: extracts @permission tags', async () => {
     export function save(data: string): void {}
   `;
   const result = await parseTypeScript(code);
-  assertEquals(result.functions[0].permissions, ['storage:write']);
+  assertEquals(result.functions[0].permissions, ["storage:write"]);
 });
 
-Deno.test('parser: multi-line description', async () => {
+Deno.test("parser: multi-line description", async () => {
   const code = `
     /**
      * This is the first line
@@ -320,15 +342,15 @@ Deno.test('parser: multi-line description', async () => {
     export function greet(): void {}
   `;
   const result = await parseTypeScript(code);
-  assert(result.functions[0].description.includes('first line'));
-  assert(result.functions[0].description.includes('continues'));
+  assert(result.functions[0].description.includes("first line"));
+  assert(result.functions[0].description.includes("continues"));
 });
 
 // ============================================
 // Interface and type alias extraction
 // ============================================
 
-Deno.test('parser: extracts exported interface', async () => {
+Deno.test("parser: extracts exported interface", async () => {
   const code = `
     export interface User {
       name: string;
@@ -339,70 +361,90 @@ Deno.test('parser: extracts exported interface', async () => {
   `;
   const result = await parseTypeScript(code);
   assert(result.types.User !== undefined);
-  assertEquals(result.types.User.type, 'object');
+  assertEquals(result.types.User.type, "object");
   assert(result.types.User.properties?.name !== undefined);
   assert(result.types.User.properties?.age !== undefined);
   assert(result.types.User.properties?.email !== undefined);
-  assertEquals(result.types.User.required, ['name', 'age']);
+  assertEquals(result.types.User.required, ["name", "age"]);
 });
 
-Deno.test('parser: extracts exported type alias', async () => {
+Deno.test("parser: extracts exported type alias", async () => {
   const code = `
     export type Status = 'active' | 'inactive' | 'pending';
     export function f(): void {}
   `;
   const result = await parseTypeScript(code);
   assert(result.types.Status !== undefined);
-  assertEquals(result.types.Status.enum, ['active', 'inactive', 'pending']);
+  assertEquals(result.types.Status.enum, ["active", "inactive", "pending"]);
 });
 
 // ============================================
 // Permission inference from code patterns
 // ============================================
 
-Deno.test('parser: infers storage:write from ultralight.store', async () => {
-  const code = `export async function save() { await ultralight.store('key', 'val'); }`;
+Deno.test("parser: infers storage:write from ultralight.store", async () => {
+  const code =
+    `export async function save() { await ultralight.store('key', 'val'); }`;
   const result = await parseTypeScript(code);
-  assert(result.permissions.includes('storage:write'));
+  assert(result.permissions.includes("storage:write"));
 });
 
-Deno.test('parser: infers storage:read from ultralight.load', async () => {
-  const code = `export async function get() { return await ultralight.load('key'); }`;
-  const result = await parseTypeScript(code);
-  assert(result.permissions.includes('storage:read'));
+Deno.test("parser: ignores capability names in comments and inert literals", async () => {
+  const result = await parseTypeScript(`
+    // await galactic.store("key", value);
+    /* fetch("https://example.com") */
+    export function explain() {
+      const docs = "galactic.load('key')";
+      const pattern = /ultralight\\.remember/;
+      return docs + pattern.source;
+    }
+  `);
+  assertEquals(result.permissions, []);
 });
 
-Deno.test('parser: infers storage:delete from ultralight.remove', async () => {
-  const code = `export async function del() { await ultralight.remove('key'); }`;
+Deno.test("parser: infers storage:read from ultralight.load", async () => {
+  const code =
+    `export async function get() { return await ultralight.load('key'); }`;
   const result = await parseTypeScript(code);
-  assert(result.permissions.includes('storage:delete'));
+  assert(result.permissions.includes("storage:read"));
 });
 
-Deno.test('parser: infers memory:write from ultralight.remember', async () => {
-  const code = `export async function save() { await ultralight.remember('k', 'v'); }`;
+Deno.test("parser: infers storage:delete from ultralight.remove", async () => {
+  const code =
+    `export async function del() { await ultralight.remove('key'); }`;
   const result = await parseTypeScript(code);
-  assert(result.permissions.includes('memory:write'));
+  assert(result.permissions.includes("storage:delete"));
 });
 
-Deno.test('parser: infers memory:read from ultralight.recall', async () => {
-  const code = `export async function get() { return await ultralight.recall('k'); }`;
+Deno.test("parser: infers memory:write from ultralight.remember", async () => {
+  const code =
+    `export async function save() { await ultralight.remember('k', 'v'); }`;
   const result = await parseTypeScript(code);
-  assert(result.permissions.includes('memory:read'));
+  assert(result.permissions.includes("memory:write"));
 });
 
-Deno.test('parser: infers ai:call from ultralight.ai', async () => {
-  const code = `export async function ask() { return await ultralight.ai({ model: 'gpt-4o' }); }`;
+Deno.test("parser: infers memory:read from ultralight.recall", async () => {
+  const code =
+    `export async function get() { return await ultralight.recall('k'); }`;
   const result = await parseTypeScript(code);
-  assert(result.permissions.includes('ai:call'));
+  assert(result.permissions.includes("memory:read"));
 });
 
-Deno.test('parser: infers ai:embed from galactic.embed', async () => {
-  const code = `export async function index(text: string) { return await galactic.embed({ input: text }); }`;
+Deno.test("parser: infers ai:call from ultralight.ai", async () => {
+  const code =
+    `export async function ask() { return await ultralight.ai({ model: 'gpt-4o' }); }`;
   const result = await parseTypeScript(code);
-  assert(result.permissions.includes('ai:embed'));
+  assert(result.permissions.includes("ai:call"));
 });
 
-Deno.test('parser: derives compute:exec and precise usesCompute for callable galactic.compute', async () => {
+Deno.test("parser: infers ai:embed from galactic.embed", async () => {
+  const code =
+    `export async function index(text: string) { return await galactic.embed({ input: text }); }`;
+  const result = await parseTypeScript(code);
+  assert(result.permissions.includes("ai:embed"));
+});
+
+Deno.test("parser: derives compute:exec and precise usesCompute for callable galactic.compute", async () => {
   const result = await parseTypeScript(`
     export async function build() {
       return await galactic.compute({
@@ -414,18 +456,18 @@ Deno.test('parser: derives compute:exec and precise usesCompute for callable gal
     export function describe() { return "no body"; }
   `);
 
-  assert(result.permissions.includes('compute:exec'));
+  assert(result.permissions.includes("compute:exec"));
   assertEquals(
-    result.functions.find((fn) => fn.name === 'build')?.usesCompute,
+    result.functions.find((fn) => fn.name === "build")?.usesCompute,
     true,
   );
   assertEquals(
-    result.functions.find((fn) => fn.name === 'describe')?.usesCompute,
+    result.functions.find((fn) => fn.name === "describe")?.usesCompute,
     false,
   );
 });
 
-Deno.test('parser: recognizes ultralight.compute and transitive local helpers', async () => {
+Deno.test("parser: recognizes ultralight.compute and transitive local helpers", async () => {
   const result = await parseTypeScript(`
     async function runBody() {
       return await ultralight.compute({ argv: ["rg", "TODO"], tools: ["shell"] });
@@ -434,12 +476,18 @@ Deno.test('parser: recognizes ultralight.compute and transitive local helpers', 
     export function ping() { return "pong"; }
   `);
 
-  assert(result.permissions.includes('compute:exec'));
-  assertEquals(result.functions.find((fn) => fn.name === 'audit')?.usesCompute, true);
-  assertEquals(result.functions.find((fn) => fn.name === 'ping')?.usesCompute, false);
+  assert(result.permissions.includes("compute:exec"));
+  assertEquals(
+    result.functions.find((fn) => fn.name === "audit")?.usesCompute,
+    true,
+  );
+  assertEquals(
+    result.functions.find((fn) => fn.name === "ping")?.usesCompute,
+    false,
+  );
 });
 
-Deno.test('parser: compute with relative imports conservatively marks every function', async () => {
+Deno.test("parser: compute with relative imports conservatively marks every function", async () => {
   const result = await parseTypeScript(`
     import { format } from "./format.ts";
     export async function run() {
@@ -451,50 +499,52 @@ Deno.test('parser: compute with relative imports conservatively marks every func
   assertEquals(result.functions.map((fn) => fn.usesCompute), [true, true]);
 });
 
-Deno.test('parser: compute get/cancel require permission but do not claim a body start', async () => {
+Deno.test("parser: compute get/cancel require permission but do not claim a body start", async () => {
   const result = await parseTypeScript(`
     export async function inspect(id: string) { return galactic.compute.get(id); }
     export async function stop(id: string) { return galactic.compute.cancel(id); }
   `);
 
-  assert(result.permissions.includes('compute:exec'));
+  assert(result.permissions.includes("compute:exec"));
   assertEquals(result.functions.map((fn) => fn.usesCompute), [false, false]);
 });
 
-Deno.test('parser: aliased callable compute binding fails safe to all functions', async () => {
+Deno.test("parser: aliased callable compute binding fails safe to all functions", async () => {
   const result = await parseTypeScript(`
     const start = galactic.compute;
     export async function run() { return start({ argv: ["pwd"], tools: [] }); }
     export function local() { return "local"; }
   `);
 
-  assert(result.permissions.includes('compute:exec'));
+  assert(result.permissions.includes("compute:exec"));
   assertEquals(result.functions.map((fn) => fn.usesCompute), [true, true]);
 });
 
-Deno.test('parser: unrelated object compute method does not grant compute:exec', async () => {
+Deno.test("parser: unrelated object compute method does not grant compute:exec", async () => {
   const result = await parseTypeScript(`
     const local = { compute: () => 1 };
     export function run() { return local.compute(); }
   `);
 
-  assert(!result.permissions.includes('compute:exec'));
+  assert(!result.permissions.includes("compute:exec"));
   assertEquals(result.functions[0].usesCompute, false);
 });
 
-Deno.test('parser: infers net:fetch from fetch()', async () => {
-  const code = `export async function get() { return await fetch('https://api.example.com'); }`;
+Deno.test("parser: infers net:fetch from fetch()", async () => {
+  const code =
+    `export async function get() { return await fetch('https://api.example.com'); }`;
   const result = await parseTypeScript(code);
-  assert(result.permissions.includes('net:fetch'));
+  assert(result.permissions.includes("net:fetch"));
 });
 
-Deno.test('parser: no permissions for plain function', async () => {
-  const code = `export function add(a: number, b: number): number { return a + b; }`;
+Deno.test("parser: no permissions for plain function", async () => {
+  const code =
+    `export function add(a: number, b: number): number { return a + b; }`;
   const result = await parseTypeScript(code);
   assertEquals(result.permissions.length, 0);
 });
 
-Deno.test('parser: deduplicates permissions', async () => {
+Deno.test("parser: deduplicates permissions", async () => {
   const code = `
     export async function f() {
       await ultralight.store('a', 1);
@@ -502,7 +552,7 @@ Deno.test('parser: deduplicates permissions', async () => {
     }
   `;
   const result = await parseTypeScript(code);
-  const storageWrites = result.permissions.filter(p => p === 'storage:write');
+  const storageWrites = result.permissions.filter((p) => p === "storage:write");
   assertEquals(storageWrites.length, 1);
 });
 
@@ -510,28 +560,28 @@ Deno.test('parser: deduplicates permissions', async () => {
 // Error handling
 // ============================================
 
-Deno.test('parser: handles empty code', async () => {
-  const result = await parseTypeScript('');
+Deno.test("parser: handles empty code", async () => {
+  const result = await parseTypeScript("");
   assertEquals(result.functions.length, 0);
   assertEquals(result.parseErrors.length, 0);
 });
 
-Deno.test('parser: handles syntax errors gracefully', async () => {
+Deno.test("parser: handles syntax errors gracefully", async () => {
   const code = `export function broken(: void {}`;
   const result = await parseTypeScript(code);
   // Parser should not crash — it may produce warnings or empty results
   assert(result.parseErrors.length === 0 || result.parseWarnings.length >= 0);
 });
 
-Deno.test('parser: handles JavaScript (no types)', async () => {
+Deno.test("parser: handles JavaScript (no types)", async () => {
   const code = `export function greet(name) { return 'Hello ' + name; }`;
-  const result = await parseTypeScript(code, 'index.js');
+  const result = await parseTypeScript(code, "index.js");
   assertEquals(result.functions.length, 1);
-  assertEquals(result.functions[0].name, 'greet');
-  assertEquals(result.functions[0].parameters[0].type, 'unknown');
+  assertEquals(result.functions[0].name, "greet");
+  assertEquals(result.functions[0].parameters[0].type, "unknown");
 });
 
-Deno.test('parser: file-level JSDoc description', async () => {
+Deno.test("parser: file-level JSDoc description", async () => {
   const code = `
     /** This app provides weather data */
     export function getWeather(): void {}
@@ -539,7 +589,7 @@ Deno.test('parser: file-level JSDoc description', async () => {
   const result = await parseTypeScript(code);
   // File-level JSDoc is extracted from the first statement
   assert(
-    result.description === 'This app provides weather data' ||
-    result.functions[0].description === 'This app provides weather data'
+    result.description === "This app provides weather data" ||
+      result.functions[0].description === "This app provides weather data",
   );
 });
