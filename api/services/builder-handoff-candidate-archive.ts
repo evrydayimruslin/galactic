@@ -913,6 +913,17 @@ function compiledManifestSummary(
       secretNames: [...(manifest.compute.secrets ?? [])],
     }
     : null;
+  const rawPermissions = (manifest as unknown as JsonRecord).permissions;
+  if (
+    rawPermissions !== undefined &&
+    (!Array.isArray(rawPermissions) ||
+      rawPermissions.some((permission) => typeof permission !== "string"))
+  ) {
+    archiveFailure(
+      "Candidate archive compiled manifest permissions are invalid",
+    );
+  }
+  const permissions = (rawPermissions ?? []) as string[];
   return {
     manifest,
     release: {
@@ -925,7 +936,7 @@ function compiledManifestSummary(
       settings,
       network,
       compute,
-      permissions: [...(manifest.permissions ?? [])].sort(),
+      permissions: [...permissions].sort(),
     },
   };
 }

@@ -22,7 +22,10 @@ import {
   getBuilderHandoffCandidateInvitation,
   listBuilderHandoffCandidateInvitations,
 } from "./builder-handoff-deployments.ts";
-import type { BuilderHandoffSessionRecord } from "./builder-handoff-sessions.ts";
+import {
+  BuilderHandoffSessionError,
+  type BuilderHandoffSessionRecord,
+} from "./builder-handoff-sessions.ts";
 import { putReleaseExecutedBundle } from "./executed-bundle.ts";
 import { type FileUpload, StorageObjectNotFoundError } from "./storage.ts";
 import { sha256Hex } from "./trust.ts";
@@ -542,6 +545,92 @@ Deno.test("candidate invitations project owner-safe zero, one, and many uploaded
   assertEquals(snapshotLoads, 0);
 });
 
+Deno.test("candidate invitation lists isolate unexpected projection failures without leaking their details", async () => {
+  const broken = uploadedSession();
+  const healthy = uploadedSession({ id: SESSION_TWO_ID });
+  const secret = "database-password=must-never-reach-the-owner";
+  const options = invitationOptions({ sessions: [broken, healthy] });
+  options.loadInvitation = (_store, binding) => {
+    if (binding.sessionId === broken.id) {
+      return Promise.reject(new Error(secret));
+    }
+    return Promise.resolve(verifiedSummary(healthy));
+  };
+  const logged: unknown[][] = [];
+  const originalConsoleError = console.error;
+  console.error = (...values: unknown[]) => {
+    logged.push(values);
+  };
+
+  let invitations: Awaited<
+    ReturnType<typeof listBuilderHandoffCandidateInvitations>
+  > = [];
+  try {
+    invitations = await listBuilderHandoffCandidateInvitations(
+      OWNER_ID,
+      options,
+    );
+  } finally {
+    console.error = originalConsoleError;
+  }
+
+  assertEquals(
+    invitations.map((candidate) => [candidate.id, candidate.status]),
+    [
+      [broken.id, "blocked"],
+      [healthy.id, "ready"],
+    ],
+  );
+  assertEquals(invitations[0].deploymentReady, false);
+  assertEquals(invitations[0].deployment, null);
+  assertEquals(invitations[0].blocker, {
+    code: "candidate_details_unavailable",
+    message: "Candidate details are temporarily unavailable.",
+  });
+  assertEquals(invitations[1].deploymentReady, true);
+  assertEquals(logged, [[
+    "[LAUNCH] Candidate invitation projection failed:",
+    broken.id,
+  ]]);
+  assert(!JSON.stringify({ invitations, logged }).includes(secret));
+
+  await assertRejects(
+    () =>
+      getBuilderHandoffCandidateInvitation(
+        OWNER_ID,
+        broken.id,
+        { ...options, getSession: () => Promise.resolve(broken) },
+      ),
+    Error,
+    secret,
+  );
+});
+
+Deno.test("candidate invitation lists translate strict session persistence failures to a private service error", async () => {
+  for (const code of ["service_unavailable", "invalid_response"] as const) {
+    const options = invitationOptions({ sessions: [] });
+    options.listSessions = () =>
+      Promise.reject(
+        new BuilderHandoffSessionError(
+          code,
+          "database-password=must-never-reach-the-owner",
+        ),
+      );
+
+    const error = await assertRejects(
+      () => listBuilderHandoffCandidateInvitations(OWNER_ID, options),
+      BuilderHandoffDeploymentError,
+    ) as BuilderHandoffDeploymentError;
+    assertEquals(error.code, "service_unavailable");
+    assertEquals(error.status, 503);
+    assertEquals(
+      error.message,
+      "Candidate invitations are temporarily unavailable.",
+    );
+    assert(!error.message.includes("database-password"));
+  }
+});
+
 Deno.test("candidate invitations keep ready and recoverable work beside bounded recent deployment receipts", async () => {
   const ready = uploadedSession();
   const deploying = uploadedSession({
@@ -615,6 +704,25 @@ Deno.test("candidate invitations keep ready and recoverable work beside bounded 
     assert(!select.includes("idempotency_key"));
     assert(!select.includes("request_payload"));
   }
+});
+
+Deno.test("failed deployment invitations never project persisted operator diagnostics", async () => {
+  const session = uploadedSession();
+  const persisted = persistedDeploymentRow({ session });
+  persisted.status = "failed";
+  persisted.error_code = "candidate_deployment_failed";
+  persisted.error_message = "database-password=must-never-reach-the-owner";
+  const harness = fetchHarness({ deployments: [persisted] });
+  const options = invitationOptions({ session, fetch: harness });
+
+  const invitation = await candidateInvitation(session, options);
+
+  assertEquals(invitation.status, "blocked");
+  assertEquals(invitation.blocker, {
+    code: "candidate_deployment_failed",
+    message: "This deployment needs reconciliation before it can continue.",
+  });
+  assert(!JSON.stringify(invitation).includes("database-password"));
 });
 
 Deno.test("candidate detail recovers only a recent completed deployment with an exact durable receipt", async () => {
@@ -783,7 +891,9 @@ Deno.test("pre-M7 extension remains visible but cannot reach deployment", async 
         type: "mcp",
         entry: { functions: "index.ts" },
       },
-      version_metadata: [],
+      version_metadata: {
+        unexpected_legacy_shape: "database-password=must-not-be-projected",
+      },
       deleted_at: null,
       release_generation: 3,
     },
@@ -812,6 +922,11 @@ Deno.test("pre-M7 extension remains visible but cannot reach deployment", async 
       [session.id, "stale"],
       [healthy.id, "ready"],
     ],
+  );
+  assert(
+    !JSON.stringify(invitations).includes(
+      "database-password=must-not-be-projected",
+    ),
   );
 
   const invitation = await candidateInvitation(session, options);
@@ -1316,7 +1431,9 @@ Deno.test("failure before materialization is marked failed at the claimed bounda
     fetch: harness,
     randomUUID: () => INITIAL_LEASE_ID,
     loadSnapshot: () =>
-      Promise.reject(new Error("archive temporarily offline")),
+      Promise.reject(
+        new Error("archive temporarily offline; password=must-not-leak"),
+      ),
   });
   const invitation = await candidateInvitation(session, options);
   harness.rpcCalls.length = 0;
@@ -1335,6 +1452,7 @@ Deno.test("failure before materialization is marked failed at the claimed bounda
   );
   assertEquals(error.code, "materialization_failed");
   assertEquals(error.status, 503);
+  assertEquals(error.message, "Candidate deployment failed unexpectedly");
   assertEquals(harness.rpcCalls.map((call) => call.name), [
     "claim_builder_handoff_deployment",
     "fail_builder_handoff_deployment",
@@ -1342,6 +1460,11 @@ Deno.test("failure before materialization is marked failed at the claimed bounda
   assertEquals(failureRequests.length, 1);
   assertEquals(failureRequests[0].phase, "claimed");
   assertEquals(failureRequests[0].status, "failed");
+  assertEquals(
+    failureRequests[0].error_message,
+    "Candidate deployment failed unexpectedly",
+  );
+  assert(!JSON.stringify(failureRequests).includes("password=must-not-leak"));
 });
 
 Deno.test("failure after an artifacts fence is marked repair-required", async () => {
@@ -1406,6 +1529,121 @@ Deno.test("failure after an artifacts fence is marked repair-required", async ()
   assertEquals(failureRequests.length, 1);
   assertEquals(failureRequests[0].phase, "artifacts_started");
   assertEquals(failureRequests[0].status, "repair_required");
+});
+
+Deno.test("database setup failures never expose provider diagnostics", async () => {
+  const session = uploadedSession();
+  const summary = verifiedSummary(session);
+  const snapshot = await deploymentSnapshot(summary);
+  snapshot.migrations.push({
+    version: 1,
+    filename: "001_initial.sql",
+    sql: "CREATE TABLE notes (id TEXT PRIMARY KEY);",
+    checksum: "a".repeat(64),
+  });
+  const failureRequests: Record<string, unknown>[] = [];
+  const harness = fetchHarness({
+    rpc: (name, request) => {
+      if (name === "claim_builder_handoff_deployment") {
+        return deploymentState();
+      }
+      if (name === "fence_builder_handoff_deployment") {
+        return deploymentState({
+          code: "fenced",
+          phase: request.phase,
+        });
+      }
+      if (name === "fail_builder_handoff_deployment") {
+        failureRequests.push(request);
+        return { ok: true };
+      }
+      throw new Error(`Unexpected RPC ${name}`);
+    },
+  });
+  const options = invitationOptions({
+    session,
+    summary,
+    fetch: harness,
+    randomUUID: () => INITIAL_LEASE_ID,
+    loadSnapshot: () => Promise.resolve(snapshot),
+    provisionAndMigrate: () =>
+      Promise.resolve({
+        provisioned: true,
+        status: "failed",
+        migrations_applied: 0,
+        migrations_skipped: 0,
+        migration_errors: [],
+        error: "provider diagnostic; password=must-not-leak",
+      }),
+  });
+  const invitation = await candidateInvitation(session, options);
+  harness.rpcCalls.length = 0;
+
+  const previousEnv = globalThis.__env;
+  const releaseCode = new Map<
+    string,
+    { value: string; metadata: unknown }
+  >();
+  globalThis.__env = {
+    ENVIRONMENT: "test",
+    TRUST_SIGNING_SECRET: "test-trust-secret",
+    CODE_CACHE: {
+      get: (key: string) =>
+        Promise.resolve(releaseCode.get(key)?.value ?? null),
+      getWithMetadata: (key: string) => {
+        const entry = releaseCode.get(key);
+        return Promise.resolve(
+          entry
+            ? { value: entry.value, metadata: entry.metadata }
+            : { value: null, metadata: null },
+        );
+      },
+      put: (
+        key: string,
+        value: string,
+        putOptions?: { metadata?: unknown },
+      ) => {
+        releaseCode.set(key, {
+          value,
+          metadata: putOptions?.metadata ?? null,
+        });
+        return Promise.resolve();
+      },
+    },
+  } as unknown as typeof globalThis.__env;
+  try {
+    const error = await assertRejects(
+      () =>
+        deployBuilderHandoffCandidate({
+          ownerId: OWNER_ID,
+          candidateId: SESSION_ID,
+          idempotencyKey: "database-failure",
+          archiveDigest: ARCHIVE_DIGEST,
+          releaseDigest: RELEASE_DIGEST,
+          reviewRevision: invitation.reviewRevision,
+        }, options),
+      BuilderHandoffDeploymentError,
+    );
+    assertEquals(error.code, "repair_required");
+    assertEquals(error.status, 409);
+    assertEquals(error.message, "Database setup failed.");
+    assertEquals(failureRequests.length, 1);
+    assertEquals(failureRequests[0].phase, "migrations_started");
+    assertEquals(failureRequests[0].status, "repair_required");
+    assertEquals(failureRequests[0].error_message, "Database setup failed.");
+    assert(
+      !JSON.stringify({
+        error: {
+          code: error.code,
+          message: error.message,
+          status: error.status,
+        },
+        failureRequests,
+      }).includes("password=must-not-leak"),
+    );
+  } finally {
+    globalThis.__env = previousEnv;
+  }
 });
 
 Deno.test("a transient immutable-object read failure never falls through to overwrite", async () => {
