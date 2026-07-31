@@ -166,10 +166,65 @@ jobs:
       - name: Smoke actual image
         run: ./scripts/smoke-image.sh "$IMAGE_TAG"
 
-      - name: Generate SBOM and provenance evidence
+      - name: Prepare exact image for no-copy SBOM
         shell: bash
         run: |
           set -euo pipefail
+          docker image inspect "$IMAGE_TAG" > "$EVIDENCE_DIR/image-inspect.json"
+          local_image_id="$(docker image inspect --format '{{.Id}}' "$IMAGE_TAG")"
+          [[ "$local_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "Docker returned a malformed local image ID." >&2
+            exit 1
+          }
+          base_image_id="$(docker image inspect --format '{{.Id}}' "$SANDBOX_BASE_IMAGE")"
+          [[ "$base_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "Docker returned a malformed base image ID." >&2
+            exit 1
+          }
+          if [ "$base_image_id" = "$local_image_id" ]; then
+            echo "The built image unexpectedly equals its base image." >&2
+            exit 1
+          fi
+          printf '%s\n' "$local_image_id" > "$EVIDENCE_DIR/local-image-id.txt"
+          printf '%s\n' "$base_image_id" > "$EVIDENCE_DIR/base-image-id.txt"
+          ./scripts/hash-image-inputs.sh "$EVIDENCE_DIR/build-inputs.sha256"
+          node scripts/hash-migrations.mjs .. "$EVIDENCE_DIR/compute-migrations.sha256"
+          migration_manifest_sha256="$(sha256sum "$EVIDENCE_DIR/compute-migrations.sha256" | cut -d ' ' -f 1)"
+          printf '%s  compute-migrations.sha256\n' "$migration_manifest_sha256" \
+            > "$EVIDENCE_DIR/compute-migrations-manifest.sha256"
+
+          {
+            docker system df
+            echo
+            df -B1 / "$(docker info --format '{{.DockerRootDir}}')" \
+              "$RUNNER_TEMP" "$GITHUB_WORKSPACE"
+          } > "$EVIDENCE_DIR/pre-sbom-prune-disk.txt"
+
+          # BuildKit's completed cache is not an assurance input. Reclaim only
+          # that cache, then prove the exact tagged image survived unchanged.
+          # The next step scans the image's mounted root filesystem in place;
+          # it never asks Docker to export or duplicate the image.
+          docker builder prune --all --force \
+            | tee "$EVIDENCE_DIR/docker-builder-prune.txt"
+          test "$(docker image inspect --format '{{.Id}}' "$IMAGE_TAG")" \
+            = "$local_image_id"
+          {
+            docker system df
+            echo
+            df -B1 / "$(docker info --format '{{.DockerRootDir}}')" \
+              "$RUNNER_TEMP" "$GITHUB_WORKSPACE"
+          } > "$EVIDENCE_DIR/post-sbom-prune-disk.txt"
+
+      - name: Generate no-copy rootfs SBOM and provenance evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_image_id="$(cat "$EVIDENCE_DIR/local-image-id.txt")"
+          actual_image_id="$(docker image inspect --format '{{.Id}}' "$IMAGE_TAG")"
+          if [ "$actual_image_id" != "$expected_image_id" ]; then
+            echo "The exact image changed before the CI rootfs scan." >&2
+            exit 1
+          fi
           syft_version=1.44.0
           syft_archive="syft_${syft_version}_linux_amd64.tar.gz"
           syft_sha256=0e91737aee2b5baf1d255b959630194a302335d848ff97bb07921eb6205b5f5a
@@ -180,27 +235,125 @@ jobs:
             -o "$RUNNER_TEMP/$syft_archive"
           printf '%s  %s\n' "$syft_sha256" "$RUNNER_TEMP/$syft_archive" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/$syft_archive" -C "$syft_dir" syft
-          "$syft_dir/syft" "docker:$IMAGE_TAG" \
-            -o "spdx-json=$EVIDENCE_DIR/image.raw.spdx.json"
+          rm -f "$RUNNER_TEMP/$syft_archive"
+
+          # CI needs a complete vulnerability inventory, not a release
+          # attestation. Execute the pinned Syft binary inside the exact local
+          # image ID and scan its mounted root filesystem directly. The
+          # container cannot write that filesystem, reach a network, acquire
+          # capabilities, or inherit host credentials. Production deploy
+          # separately attests the immutable pushed registry manifest.
+          docker run --rm \
+            --name compute-ci-sbom-scan \
+            --read-only \
+            --network none \
+            --cap-drop ALL \
+            --security-opt no-new-privileges=true \
+            --user 0:0 \
+            --pids-limit 256 \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec,size=512m \
+            --mount "type=bind,src=$syft_dir/syft,dst=/__galactic_syft,readonly" \
+            --mount "type=bind,src=$EVIDENCE_DIR,dst=/__galactic_evidence" \
+            --env HOME=/tmp \
+            --env XDG_CACHE_HOME=/tmp/.cache \
+            --env SYFT_CHECK_FOR_APP_UPDATE=false \
+            --entrypoint /__galactic_syft \
+            "$expected_image_id" \
+            "dir:/" \
+            --source-name "$IMAGE_TAG" \
+            --source-version "$expected_image_id" \
+            --exclude './__galactic_syft' \
+            --exclude './__galactic_evidence/**' \
+            --exclude './dev/**' \
+            --exclude './proc/**' \
+            --exclude './sys/**' \
+            --exclude './run/**' \
+            --exclude './tmp/**' \
+            --exclude './etc/hostname' \
+            --exclude './etc/hosts' \
+            --exclude './etc/resolv.conf' \
+            -o "syft-json=/__galactic_evidence/image.syft.json" \
+            -o "spdx-json=/__galactic_evidence/image.raw.spdx.json"
+          sudo chown "$(id -u):$(id -g)" \
+            "$EVIDENCE_DIR/image.syft.json" \
+            "$EVIDENCE_DIR/image.raw.spdx.json"
+
+          post_scan_image_id="$(docker image inspect --format '{{.Id}}' "$IMAGE_TAG")"
+          printf '%s\n' "$post_scan_image_id" \
+            > "$EVIDENCE_DIR/post-scan-image-id.txt"
+          if [ "$post_scan_image_id" != "$expected_image_id" ]; then
+            echo "The exact image changed during the CI rootfs scan." >&2
+            exit 1
+          fi
+          jq -e \
+            --arg source_name "$IMAGE_TAG" \
+            --arg source_version "$expected_image_id" \
+            --arg syft_version "$syft_version" '
+              .source.type == "directory" and
+              .source.name == $source_name and
+              .source.version == $source_version and
+              .source.metadata.path == "/" and
+              .descriptor.name == "syft" and
+              .descriptor.version == $syft_version
+            ' "$EVIDENCE_DIR/image.syft.json" >/dev/null || {
+              echo "Syft did not produce the expected exact-image rootfs inventory." >&2
+              exit 1
+            }
           node scripts/normalize-syft-spdx.mjs \
             "$EVIDENCE_DIR/image.raw.spdx.json" \
             "$EVIDENCE_DIR/image.spdx.json" \
             "$EVIDENCE_DIR/sbom-corrections.json"
-
-          docker image inspect "$IMAGE_TAG" > "$EVIDENCE_DIR/image-inspect.json"
-          docker image inspect --format '{{.Id}}' "$IMAGE_TAG" > "$EVIDENCE_DIR/local-image-id.txt"
-          ./scripts/hash-image-inputs.sh "$EVIDENCE_DIR/build-inputs.sha256"
-          node scripts/hash-migrations.mjs .. "$EVIDENCE_DIR/compute-migrations.sha256"
-          migration_manifest_sha256="$(sha256sum "$EVIDENCE_DIR/compute-migrations.sha256" | cut -d ' ' -f 1)"
-          printf '%s  compute-migrations.sha256\n' "$migration_manifest_sha256" \
-            > "$EVIDENCE_DIR/compute-migrations-manifest.sha256"
           jq -n \
             --arg git_sha "$GITHUB_SHA" \
             --arg image_tag "$IMAGE_TAG" \
+            --arg local_image_id "$expected_image_id" \
             --arg base_image "$SANDBOX_BASE_IMAGE" \
+            --arg syft_version "$syft_version" \
             --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{schema_version: 1, git_sha: $git_sha, image_tag: $image_tag, base_image: $base_image, generated_at: $generated_at}' \
+            '{schema_version: 1, git_sha: $git_sha, image_tag: $image_tag,
+              local_image_id: $local_image_id, base_image: $base_image,
+              sbom_mode: "mounted_rootfs_ci_vulnerability_inventory",
+              release_attestation: false, syft_version: $syft_version,
+              generated_at: $generated_at}' \
             > "$EVIDENCE_DIR/provenance.json"
+          sha256sum \
+            "$EVIDENCE_DIR/image.syft.json" \
+            "$EVIDENCE_DIR/image.raw.spdx.json" \
+            "$EVIDENCE_DIR/image.spdx.json" \
+            "$EVIDENCE_DIR/sbom-corrections.json" \
+            "$EVIDENCE_DIR/local-image-id.txt" \
+            "$EVIDENCE_DIR/post-scan-image-id.txt" \
+            "$EVIDENCE_DIR/provenance.json" \
+            > "$EVIDENCE_DIR/sbom-files.sha256"
+
+      - name: Release exact CI image storage
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if docker container inspect compute-ci-sbom-scan >/dev/null 2>&1; then
+            docker rm --force compute-ci-sbom-scan >/dev/null
+          fi
+          if [ -s "$EVIDENCE_DIR/local-image-id.txt" ]; then
+            local_image_id="$(cat "$EVIDENCE_DIR/local-image-id.txt")"
+            if docker image inspect "$local_image_id" >/dev/null 2>&1; then
+              docker image rm --force "$local_image_id" \
+                | tee "$EVIDENCE_DIR/local-image-removal.txt"
+            fi
+          fi
+          if [ -s "$EVIDENCE_DIR/base-image-id.txt" ]; then
+            base_image_id="$(cat "$EVIDENCE_DIR/base-image-id.txt")"
+            if docker image inspect "$base_image_id" >/dev/null 2>&1; then
+              docker image rm --force "$base_image_id" \
+                | tee -a "$EVIDENCE_DIR/local-image-removal.txt"
+            fi
+          fi
+          {
+            docker system df
+            echo
+            df -B1 / "$(docker info --format '{{.DockerRootDir}}')" \
+              "$RUNNER_TEMP" "$GITHUB_WORKSPACE"
+          } > "$EVIDENCE_DIR/post-sbom-image-removal-disk.txt"
 
       - name: Gate all critical and fixable high image vulnerabilities
         shell: bash
