@@ -226,13 +226,13 @@ function extensionCopy(candidate: LaunchCandidateInvitation): string {
 }
 
 function statusCopy(candidate: LaunchCandidateInvitation): string {
+  if (candidate.blocker) return candidate.blocker.message;
   if (
     candidate.target.kind === "extension" &&
     candidate.target.lineageStatus === "stale"
   ) {
     return "Base release changed — rebuild and test this extension";
   }
-  if (candidate.blocker) return candidate.blocker.message;
   switch (candidate.status) {
     case "ready":
       return candidate.deploymentReady
