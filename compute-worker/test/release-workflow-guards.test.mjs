@@ -45,7 +45,7 @@ describe("Compute release workflow static guards", () => {
     const policy = JSON.parse(await text("release-policy.json"));
     expect(policy).toEqual({
       schema_version: 1,
-      release_tag: "v0.4.73",
+      release_tag: "v0.4.74",
       compute: {
         artifact: "deploy_exact_candidate",
         admission: "preserve_off",
@@ -796,6 +796,8 @@ describe("Compute release workflow static guards", () => {
     );
     expect(liveFence).toBeGreaterThan(evidence);
     expect(launchGate).toContain("environment: production");
+    expect(launchGate).toContain("node-version-file: api/.nvmrc");
+    expect(launchGate).not.toContain("node-version-file: .nvmrc");
     expect(launchGate).toContain(
       "verify-live-production-compute-state.mjs",
     );
