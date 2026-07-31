@@ -20,6 +20,8 @@ on:
       - 'scripts/release/production-launch-gate-runs.test.mjs'
       - 'scripts/release/verify-api-compute-deploy-state.mjs'
       - 'scripts/release/verify-api-compute-deploy-state.test.mjs'
+      - 'scripts/release/verify-api-compute-off-bridge.mjs'
+      - 'scripts/release/verify-api-compute-off-bridge.test.mjs'
       - 'scripts/release/verify-production-compute-release-evidence.mjs'
       - 'scripts/release/verify-production-compute-release-evidence.test.mjs'
       - 'scripts/smoke/compute-admitted-smoke.mjs'
@@ -57,6 +59,8 @@ on:
       - 'scripts/release/production-launch-gate-runs.test.mjs'
       - 'scripts/release/verify-api-compute-deploy-state.mjs'
       - 'scripts/release/verify-api-compute-deploy-state.test.mjs'
+      - 'scripts/release/verify-api-compute-off-bridge.mjs'
+      - 'scripts/release/verify-api-compute-off-bridge.test.mjs'
       - 'scripts/release/verify-production-compute-release-evidence.mjs'
       - 'scripts/release/verify-production-compute-release-evidence.test.mjs'
       - 'scripts/smoke/compute-admitted-smoke.mjs'
@@ -126,6 +130,11 @@ jobs:
 
       - name: Typecheck and test Worker
         run: npm run verify
+
+      - name: Test API/Compute OFF bridge state validator
+        run: >-
+          node --test
+          ../scripts/release/verify-api-compute-off-bridge.test.mjs
 
       - name: Verify local CLI compute-job mode
         shell: bash

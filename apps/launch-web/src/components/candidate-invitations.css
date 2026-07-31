@@ -177,6 +177,11 @@
   color: var(--success-text);
 }
 
+.neb-candidate-status.deploying {
+  border-color: color-mix(in srgb, var(--accent-text) 38%, var(--line));
+  color: var(--accent-text);
+}
+
 .neb-candidate-status.blocked {
   border-color: color-mix(in srgb, var(--danger) 30%, var(--line));
   color: var(--danger);

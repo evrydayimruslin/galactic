@@ -248,6 +248,137 @@ describe("Compute release workflow static guards", () => {
     expect(deploy).toContain("verify-container-readiness.mjs");
   });
 
+  it("creates a compatible admission-OFF rollback baseline before Compute mutation", async () => {
+    const deploy = await text(".github/workflows/compute-deploy.yml");
+    const inspect = deploy.indexOf(
+      "Inspect the current-source API and Compute pair",
+    );
+    const container = deploy.indexOf(
+      "Verify the current exact container before any API mutation",
+    );
+    const upload = deploy.indexOf(
+      "Upload and verify a no-traffic admission-OFF API bridge",
+    );
+    const promote = deploy.indexOf(
+      "Promote the exact verified admission-OFF API bridge",
+    );
+    const verify = deploy.indexOf(
+      "Verify the promoted admission-OFF API bridge",
+    );
+    const preflight = deploy.indexOf(
+      "Verify the admission-OFF binding path before Compute mutation",
+    );
+    const reassert = deploy.indexOf(
+      "Reassert the exact OFF bridge after an ambiguous promotion",
+    );
+    const capture = deploy.indexOf(
+      "Capture the stable API and Compute rollback pair before mutation",
+    );
+    const build = deploy.indexOf("Build and smoke exact image");
+    const inspectBlock = deploy.slice(inspect, container);
+    const uploadBlock = deploy.slice(upload, promote);
+    const promoteBlock = deploy.slice(promote, verify);
+    const verifyBlock = deploy.slice(verify, preflight);
+    const preflightBlock = deploy.slice(preflight, reassert);
+    const reassertBlock = deploy.slice(reassert, capture);
+
+    expect(inspect).toBeGreaterThan(0);
+    expect(container).toBeGreaterThan(inspect);
+    expect(upload).toBeGreaterThan(container);
+    expect(promote).toBeGreaterThan(upload);
+    expect(verify).toBeGreaterThan(promote);
+    expect(preflight).toBeGreaterThan(verify);
+    expect(reassert).toBeGreaterThan(preflight);
+    expect(capture).toBeGreaterThan(reassert);
+    expect(build).toBeGreaterThan(capture);
+    expect(inspectBlock).toContain("id: inspect_off_bridge");
+    expect(inspectBlock).toContain(
+      'current "$REQUESTED_TARGET" "api-$GITHUB_SHA"',
+    );
+    expect(inspectBlock).toContain(
+      'if [ "$REQUESTED_TARGET" = "production" ]',
+    );
+    expect(inspectBlock).toContain(
+      "Production must already have a current-source admission-OFF rollback pair.",
+    );
+    expect(uploadBlock).toContain("id: upload_off_bridge");
+    expect(uploadBlock).toContain("inputs.target == 'staging'");
+    expect(uploadBlock).toContain(
+      "steps.inspect_off_bridge.outputs.policy == 'global'",
+    );
+    expect(uploadBlock).toContain("npx wrangler versions upload");
+    expect(uploadBlock).toContain("WRANGLER_OUTPUT_FILE_PATH");
+    expect(uploadBlock).toContain('--tag "$bridge_tag"');
+    expect(uploadBlock).toContain("--var COMPUTE_ENABLED:0");
+    expect(uploadBlock).toContain(
+      '--var "COMPUTE_ENVIRONMENT_DIGEST:$CURRENT_COMPUTE_DIGEST"',
+    );
+    expect(uploadBlock).toContain("--var COMPUTE_ROLLOUT_MODE:canary");
+    expect(uploadBlock).toContain("--var COMPUTE_CANARY_ALLOWLIST:");
+    expect(uploadBlock).toContain("--keep-vars --strict");
+    expect(uploadBlock).toContain(
+      'uploaded "$REQUESTED_TARGET" "$current_state"',
+    );
+    expect(uploadBlock).toContain('echo "verified=true"');
+    expect(uploadBlock).not.toContain("npx wrangler deploy");
+    expect(promoteBlock).toContain("id: promote_off_bridge");
+    expect(promoteBlock).toContain(
+      'cmp --silent',
+    );
+    expect(promoteBlock).toContain(
+      'echo "attempted=true" >> "$GITHUB_OUTPUT"',
+    );
+    expect(promoteBlock).toContain(
+      'npx wrangler versions deploy "$BRIDGE_VERSION_ID@100%"',
+    );
+    expect(promoteBlock.indexOf('echo "attempted=true"')).toBeLessThan(
+      promoteBlock.indexOf(
+        'npx wrangler versions deploy "$BRIDGE_VERSION_ID@100%"',
+      ),
+    );
+    expect(verifyBlock).toContain(
+      'promoted "$REQUESTED_TARGET" "$bridge_state"',
+    );
+    expect(verifyBlock).toContain("for read_attempt in {1..12}");
+    expect(verifyBlock).toContain(
+      '.versions[0].version_id == $id',
+    );
+    expect(verifyBlock).toContain("verify-container-readiness.mjs");
+    expect(preflightBlock).toContain(
+      "compute-admitted-smoke.mjs --preflight-only",
+    );
+    expect(preflightBlock).toContain(
+      '.fixture_policy.enabled == false',
+    );
+    expect(reassertBlock).toContain(
+      "steps.upload_off_bridge.outputs.verified == 'true'",
+    );
+    expect(reassertBlock).toContain(
+      "steps.promote_off_bridge.outputs.attempted == 'true'",
+    );
+    expect(reassertBlock).toContain(
+      "steps.verify_off_binding_before_mutation.outcome != 'success'",
+    );
+    expect(reassertBlock).toContain(
+      'npx wrangler versions deploy "$BRIDGE_VERSION_ID@100%"',
+    );
+    expect(reassertBlock).toContain(
+      "for promotion_attempt in {1..3}",
+    );
+    expect(reassertBlock).toContain("set +e");
+    expect(reassertBlock).toContain('promotion_rc="${PIPESTATUS[0]}"');
+    expect(reassertBlock).toContain(
+      "CRITICAL: the exact admission-OFF API bridge could not be reasserted.",
+    );
+    expect(reassertBlock).toContain(
+      'promoted "$REQUESTED_TARGET"',
+    );
+    expect(reassertBlock).not.toContain("PRIOR_API_VERSION_ID");
+    expect(deploy.slice(inspect, capture)).not.toContain(
+      "--var COMPUTE_ENABLED:1",
+    );
+  });
+
   it("checks the exact Worker and Durable Object-derived Container application", async () => {
     const workflow = await text(".github/workflows/compute-deploy.yml");
     expect(workflow).toContain(

@@ -13,6 +13,7 @@ on:
       - 'scripts/checks/**'
       - 'scripts/release/**'
       - 'scripts/smoke/launch-web-pages-smoke.mjs'
+      - 'scripts/smoke/launch-web-pages-smoke.test.mjs'
       - 'scripts/smoke/launch-web-asset-integrity.mjs'
       - 'scripts/smoke/launch-web-asset-integrity.test.mjs'
       - 'scripts/smoke/owner-attention-probe.mjs'

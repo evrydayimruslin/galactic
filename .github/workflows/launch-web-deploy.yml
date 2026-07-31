@@ -11,6 +11,7 @@ on:
       - 'scripts/release/wait-for-workflow-run.mjs'
       - 'scripts/release/wait-for-workflow-run.test.mjs'
       - 'scripts/smoke/launch-web-pages-smoke.mjs'
+      - 'scripts/smoke/launch-web-pages-smoke.test.mjs'
       - 'scripts/smoke/launch-web-asset-integrity.mjs'
       - 'scripts/smoke/launch-web-asset-integrity.test.mjs'
       - 'scripts/smoke/wait-for-pages-deployment.mjs'
@@ -61,10 +62,13 @@ jobs:
         working-directory: .
         run: node --test scripts/release/wait-for-workflow-run.test.mjs
 
-      - name: Test launch-web asset-integrity smoke helper
+      - name: Test launch-web Pages smoke helpers
         working-directory: .
         run: |
-          node --test scripts/smoke/launch-web-asset-integrity.test.mjs
+          node --test \
+            scripts/smoke/launch-web-asset-integrity.test.mjs \
+            scripts/smoke/launch-web-pages-smoke.test.mjs
+          node --check scripts/smoke/launch-web-pages-smoke.mjs
           node --check scripts/smoke/wait-for-pages-deployment.mjs
 
       - name: Build staging bundle

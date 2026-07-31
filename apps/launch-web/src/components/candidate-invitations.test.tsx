@@ -341,6 +341,26 @@ describe("candidate invitations", () => {
     expect(markup).toContain("Deploy 1 selected Agent");
   });
 
+  it("renders a durable in-progress candidate as resumable instead of deploy-ready", () => {
+    const markup = renderToStaticMarkup(
+      <CandidateInvitations
+        location={{ pathname: "/connect", search: "?intent=agent&step=review" }}
+        navigate={vi.fn() as LaunchNavigate}
+        onReload={vi.fn()}
+        response={{
+          ...response(true),
+          candidates: [candidate({ status: "deploying" })],
+        }}
+        variant="funnel"
+      />,
+    );
+
+    expect(markup).toContain("Deployment in progress");
+    expect(markup).toContain("Resume Agent deployment");
+    expect(markup).toContain('disabled="" type="checkbox" checked=""');
+    expect(markup).not.toContain(">Deploy 1 selected Agent</button>");
+  });
+
   it("renders an actionable empty review instead of a blank funnel", () => {
     const markup = renderToStaticMarkup(
       <CandidateInvitations

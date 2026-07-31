@@ -21,9 +21,11 @@ import {
   getOrCreateMembershipCheckoutKey,
   hasActiveDeploymentMembership,
   isCandidateDeploymentEligible,
+  needsCandidateDeploymentReconciliation,
   persistMembershipCandidateSelection,
   restoreMembershipCandidateSelection,
   retainMembershipCheckoutKeyAfterFailure,
+  shouldReloadAfterCandidateDeployment,
 } from "../lib/candidate-deployment";
 import { markExternalReturnRevalidation } from "../lib/external-navigation";
 import type { LaunchNavigate } from "../lib/navigation";
@@ -37,6 +39,9 @@ export const MEMBERSHIP_ATTEMPT_STORAGE_KEY =
 const TERMINAL_CHECKOUT_STATUSES = new Set<
   LaunchSubscriptionCheckoutAttemptStatus
 >(["active", "cancelled", "failed", "expired"]);
+
+const DEPLOYMENT_RECONCILIATION_POLL_INTERVAL_MS = 1_500;
+const DEPLOYMENT_RECONCILIATION_POLL_LIMIT = 12;
 
 export interface CandidateManifestRow {
   label:
@@ -257,7 +262,7 @@ export function CandidateInvitations({
   error?: string;
   location: { pathname: string; search: string };
   navigate: LaunchNavigate;
-  onReload: () => void;
+  onReload: () => void | Promise<void>;
   response?: LaunchCandidateListResponse;
   variant?: "fleet" | "funnel";
 }): ReactElement | null {
@@ -275,6 +280,13 @@ export function CandidateInvitations({
     .filter(isCandidateDeploymentEligible)
     .map((candidate) => `${candidate.id}:${candidate.reviewRevision}`)
     .join("|");
+  const resumableSignature = candidates
+    .filter((candidate) =>
+      candidate.status === "deploying" &&
+      isCandidateDeploymentEligible(candidate)
+    )
+    .map((candidate) => candidate.id)
+    .join("|");
   const eligibleIds = useMemo(
     () =>
       new Set(
@@ -282,12 +294,17 @@ export function CandidateInvitations({
       ),
     [eligibleSignature],
   );
+  const resumableIds = useMemo(
+    () => new Set(resumableSignature ? resumableSignature.split("|") : []),
+    [resumableSignature],
+  );
   const [selected, setSelected] = useState<Set<string>>(
     () =>
       restoreMembershipCandidateSelection(
         browserSessionStorage(),
         eligibleSignature,
         eligibleIds,
+        resumableIds,
       ) ?? new Set(eligibleIds),
   );
   const [subscription, setSubscription] = useState<
@@ -297,6 +314,10 @@ export function CandidateInvitations({
   const [checkoutMessage, setCheckoutMessage] = useState("");
   const [deploying, setDeploying] = useState(false);
   const [results, setResults] = useState<Record<string, CandidateResult>>({});
+  const [
+    deploymentReconciliationRevision,
+    setDeploymentReconciliationRevision,
+  ] = useState(0);
 
   useEffect(() => {
     setSelected(
@@ -304,9 +325,10 @@ export function CandidateInvitations({
         browserSessionStorage(),
         eligibleSignature,
         eligibleIds,
+        resumableIds,
       ) ?? new Set(eligibleIds),
     );
-  }, [eligibleSignature]);
+  }, [eligibleSignature, resumableSignature]);
 
   useEffect(() => {
     setSubscription(response?.subscription);
@@ -402,9 +424,54 @@ export function CandidateInvitations({
     selected.has(candidate.id) && isCandidateDeploymentEligible(candidate)
   );
   const selectedNeedsReconciliation = selectedCandidates.some((candidate) =>
-    candidate.status === "deploying"
+    needsCandidateDeploymentReconciliation(
+      candidate,
+      results[candidate.id]?.state,
+    )
   );
+  const deploymentReconciliationSignature = candidates
+    .filter((candidate) =>
+      needsCandidateDeploymentReconciliation(
+        candidate,
+        results[candidate.id]?.state,
+      )
+    )
+    .map((candidate) => `${candidate.id}:${candidate.evidence.releaseDigest}`)
+    .join("|");
   const funnel = variant === "funnel";
+
+  useEffect(() => {
+    if (!deploymentReconciliationSignature || typeof window === "undefined") {
+      return;
+    }
+
+    let cancelled = false;
+    let reads = 0;
+    let timer: number | undefined;
+    const schedule = () => {
+      if (cancelled || reads >= DEPLOYMENT_RECONCILIATION_POLL_LIMIT) return;
+      timer = window.setTimeout(async () => {
+        reads += 1;
+        try {
+          await onReload();
+        } catch {
+          // The parent renders its load error; keep the bounded recovery poll
+          // alive in case the failure was transient.
+        } finally {
+          schedule();
+        }
+      }, DEPLOYMENT_RECONCILIATION_POLL_INTERVAL_MS);
+    };
+    schedule();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [
+    deploymentReconciliationRevision,
+    deploymentReconciliationSignature,
+    onReload,
+  ]);
 
   const toggle = (candidateId: string) => {
     setSelected((current) => {
@@ -461,6 +528,11 @@ export function CandidateInvitations({
       selectedCandidates.length === 0
     ) return;
     setDeploying(true);
+    persistMembershipCandidateSelection(
+      browserSessionStorage(),
+      eligibleSignature,
+      new Set(selectedCandidates.map((candidate) => candidate.id)),
+    );
     setResults((current) => {
       const next = { ...current };
       for (const candidate of selectedCandidates) {
@@ -535,7 +607,16 @@ export function CandidateInvitations({
       outcome.result.state === "completed" &&
       outcome.result.response?.agent?.setupRequired === true
     );
-    if (completed.length > 0) onReload();
+    if (
+      shouldReloadAfterCandidateDeployment(
+        outcomes.map((outcome) => outcome.result.state),
+      )
+    ) {
+      onReload();
+    }
+    if (outcomes.some((outcome) => outcome.result.state === "pending")) {
+      setDeploymentReconciliationRevision((current) => current + 1);
+    }
     if (outcomes.length === 1 && completed.length === 1) {
       const agent = completed[0]?.result.response?.agent;
       if (agent) {
@@ -675,13 +756,17 @@ export function CandidateInvitations({
         {candidates.map((candidate) => {
           const eligible = isCandidateDeploymentEligible(candidate);
           const result = results[candidate.id];
+          const needsReconciliation = needsCandidateDeploymentReconciliation(
+            candidate,
+            result?.state,
+          );
           return (
             <article className="neb-candidate-card" key={candidate.id}>
               <div className="neb-candidate-card-head">
                 <label className="neb-candidate-select">
                   <input
                     checked={selected.has(candidate.id) && eligible}
-                    disabled={!eligible || deploying}
+                    disabled={!eligible || deploying || needsReconciliation}
                     onChange={() => toggle(candidate.id)}
                     type="checkbox"
                   />
@@ -697,10 +782,16 @@ export function CandidateInvitations({
                 </div>
                 <span
                   className={`neb-candidate-status ${
-                    eligible ? "ready" : "blocked"
+                    needsReconciliation
+                      ? "deploying"
+                      : eligible
+                      ? "ready"
+                      : "blocked"
                   }`}
                 >
-                  {statusCopy(candidate)}
+                  {needsReconciliation
+                    ? "Deployment in progress"
+                    : statusCopy(candidate)}
                 </span>
               </div>
 

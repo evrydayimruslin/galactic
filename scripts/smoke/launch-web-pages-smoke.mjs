@@ -105,6 +105,30 @@ const outputMarkdownPath = join(smokeDir, "launch-web-pages.md");
 
 const pageRoutes = [
   { name: "page-home", path: "/", auth: false },
+  {
+    name: "page-auth-funnel",
+    path: "/connect?intent=agent",
+    auth: false,
+    preserveLocation: true,
+    expected:
+      "Pages returns the launch SPA shell at the unauthenticated membership-funnel deep link without redirecting",
+  },
+  {
+    name: "page-magic-link-confirmation",
+    path: "/auth/confirm",
+    auth: false,
+    preserveLocation: true,
+    expected:
+      "Pages returns the launch SPA shell at the token-free magic-link confirmation route without redirecting",
+  },
+  {
+    name: "page-auth-callback",
+    path: "/auth/callback",
+    auth: false,
+    preserveLocation: true,
+    expected:
+      "Pages returns the launch SPA shell at the token-free auth callback route without redirecting",
+  },
   { name: "page-agents", path: "/agents", auth: true },
   { name: "page-profile", path: "/account", auth: true },
   { name: "page-agent-home", path: `/agents/${encodeURIComponent(toolSlug)}`, auth: true },
@@ -260,20 +284,36 @@ function classifyPageProbe(raw, route) {
   const htmlOk = /text\/html/i.test(type);
   const shellOk = html.includes('id="root"') || html.includes("<!doctype html") ||
     html.includes("<!DOCTYPE html");
-  const passed = raw.ok && statusOk && htmlOk && shellOk;
+  let locationPreserved = true;
+  if (route.preserveLocation) {
+    try {
+      const expectedUrl = new URL(route.path, `${pagesBase}/`);
+      const finalUrl = new URL(raw.final_url);
+      locationPreserved = expectedUrl.href === finalUrl.href;
+    } catch {
+      locationPreserved = false;
+    }
+  }
+  const passed = raw.ok && statusOk && htmlOk && shellOk && locationPreserved;
   return {
     name: route.name,
     surface: "pages",
     route: route.path,
     auth_route: route.auth,
     status: passed ? "passed" : "failed",
-    failure_class: passed ? null : statusOk ? "pages-spa-shell" : "pages-routing",
-    expected: "Cloudflare Pages returns the launch SPA shell for the route",
+    failure_class: passed
+      ? null
+      : !statusOk || !locationPreserved
+      ? "pages-routing"
+      : "pages-spa-shell",
+    expected: route.expected ||
+      "Cloudflare Pages returns the launch SPA shell for the route",
     observed: {
       status_code: raw.status_code,
       content_type: type || null,
       final_url: raw.final_url,
       shell_detected: shellOk,
+      location_preserved: route.preserveLocation ? locationPreserved : null,
       error: raw.error || null,
     },
     request: raw.request,
@@ -678,6 +718,9 @@ function summarizeMarkdown(summary) {
       result.observed?.access_control_allow_origin
         ? `ACAO=${result.observed.access_control_allow_origin}`
         : null,
+      result.observed?.location_preserved === false
+        ? "deep-link=redirected"
+        : null,
       result.observed?.reason ? result.observed.reason : null,
       result.observed?.error ? `error=${result.observed.error}` : null,
     ].filter(Boolean).join("; ");
@@ -690,7 +733,7 @@ function summarizeMarkdown(summary) {
     "",
     "Failure classes:",
     "",
-    "- `pages-routing`: Cloudflare Pages did not return the SPA route.",
+    "- `pages-routing`: Cloudflare Pages did not preserve or return the SPA route.",
     "- `pages-spa-shell`: Pages responded, but not with the launch SPA shell.",
     "- `pages-asset-discovery`: root HTML omitted its module/stylesheet or referenced an unsafe asset URL.",
     "- `pages-asset-delivery`: a referenced client asset was missing, empty, or redirected off-origin.",

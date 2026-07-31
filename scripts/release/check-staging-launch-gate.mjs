@@ -79,6 +79,7 @@ const WORKFLOW_SPECS = [
       "scripts/release/wait-for-workflow-run.mjs",
       "scripts/release/wait-for-workflow-run.test.mjs",
       "scripts/smoke/launch-web-pages-smoke.mjs",
+      "scripts/smoke/launch-web-pages-smoke.test.mjs",
       "scripts/smoke/launch-web-asset-integrity.mjs",
       "scripts/smoke/launch-web-asset-integrity.test.mjs",
       "scripts/smoke/wait-for-pages-deployment.mjs",
