@@ -271,6 +271,7 @@ interface FetchHarness {
   fetchFn: typeof fetch;
   rpcCalls: RpcCall[];
   urls: URL[];
+  receivers: unknown[];
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -292,10 +293,16 @@ function fetchHarness(input: {
 } = {}): FetchHarness {
   const rpcCalls: RpcCall[] = [];
   const urls: URL[] = [];
-  const fetchFn = ((
+  const receivers: unknown[] = [];
+  const fetchFn = (function (
+    this: unknown,
     resource: Parameters<typeof fetch>[0],
     init?: RequestInit,
-  ): Promise<Response> => {
+  ): Promise<Response> {
+    receivers.push(this);
+    if (this !== undefined) {
+      throw new TypeError("Illegal invocation");
+    }
     const url = new URL(
       typeof resource === "string" || resource instanceof URL
         ? String(resource)
@@ -338,7 +345,7 @@ function fetchHarness(input: {
     }
     return Promise.reject(new Error(`Unexpected request: ${url}`));
   }) as typeof fetch;
-  return { fetchFn, rpcCalls, urls };
+  return { fetchFn, rpcCalls, urls, receivers };
 }
 
 function invitationOptions(input: {
@@ -704,6 +711,10 @@ Deno.test("candidate invitations keep ready and recoverable work beside bounded 
     assert(!select.includes("idempotency_key"));
     assert(!select.includes("request_payload"));
   }
+  assertEquals(
+    harness.receivers.every((receiver) => receiver === undefined),
+    true,
+  );
 });
 
 Deno.test("failed deployment invitations never project persisted operator diagnostics", async () => {
@@ -868,6 +879,10 @@ Deno.test("extension invitation becomes stale when current target lineage moved"
   assert(appRead);
   assertEquals(appRead.searchParams.get("owner_id"), `eq.${OWNER_ID}`);
   assertEquals(appRead.searchParams.get("id"), `eq.${EXISTING_AGENT_ID}`);
+  assertEquals(
+    harness.receivers.every((receiver) => receiver === undefined),
+    true,
+  );
 });
 
 Deno.test("pre-M7 extension remains visible but cannot reach deployment", async () => {
@@ -1045,6 +1060,7 @@ Deno.test("an already committed idempotent claim replays without rematerializing
   });
   const invitation = await candidateInvitation(session, options);
   harness.rpcCalls.length = 0;
+  harness.receivers.length = 0;
 
   const response = await deployBuilderHandoffCandidate({
     ownerId: OWNER_ID,
@@ -1071,6 +1087,10 @@ Deno.test("an already committed idempotent claim replays without rematerializing
   assertEquals(
     harness.rpcCalls[0].request.idempotency_key,
     "same-deploy-request",
+  );
+  assertEquals(
+    harness.receivers.every((receiver) => receiver === undefined),
+    true,
   );
   assertEquals(snapshotLoads, 0);
   assertEquals(store.writes, []);
