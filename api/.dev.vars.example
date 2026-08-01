@@ -34,6 +34,7 @@ DEEPSEEK_API_KEY=
 
 # Encryption key for user BYOK provider API keys.
 BYOK_ENCRYPTION_KEY=
+BYOK_VALIDATION_SIGNING_SECRET=
 
 # Platform trust signing key for app version manifests
 LIGHT_TRUST_SIGNING_SECRET=

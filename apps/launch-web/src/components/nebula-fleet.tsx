@@ -90,9 +90,7 @@ import {
   shouldRetainAgentHomeOverride,
   shouldRetainReleasePromotionAttempt,
 } from "../lib/nebula-release";
-import {
-  candidateInvitationHero,
-} from "../lib/candidate-deployment";
+import { candidateInvitationHero } from "../lib/candidate-deployment";
 import {
   readCachedFleetCount,
   writeCachedFleetCount,
@@ -178,6 +176,8 @@ import { OperatorRunInspector } from "./nebula/operator-run-inspector";
 import { SearchPanel } from "./nebula/search-panel";
 import { SettingsStudioPanel } from "./settings-studio-panel";
 import "./nebula-fleet.css";
+import { ByokCredentialForm } from "./byok-credential-form";
+import { FleetSetupPanel } from "./fleet-setup-panel";
 
 type SettingsPane =
   | "general"
@@ -904,8 +904,13 @@ export function NebulaFleetApp({
   const builtCandidateCount = live.data.candidates?.candidates.filter(
     (candidate) => candidate.status !== "deployed",
   ).length ?? 0;
+  const pendingSetupCount = live.data.fleetSetup?.pendingAgentCount ?? 0;
   const homeHeading = builtCandidateCount > 0
     ? candidateInvitationHero(builtCandidateCount)
+    : pendingSetupCount > 0
+    ? `${pendingSetupCount} ${
+      pendingSetupCount === 1 ? "Agent is" : "Agents are"
+    } ready to set up`
     : displayedFleetCount === undefined
     ? "Agents Working"
     : `${displayedFleetCount} ${
@@ -1480,13 +1485,24 @@ export function NebulaFleetApp({
           )
           : null}
 
+        {route.definition.key === "home" && !globalAlertsOpen && !searchOpen
+          ? (
+            <FleetSetupPanel
+              error={live.data.fleetSetupError}
+              navigate={navigate}
+              onChanged={live.reload}
+              setup={live.data.fleetSetup}
+            />
+          )
+          : null}
+
         {!settingsOpen
           ? (
             <FleetRoster
               behindWorkspace={workspaceOpen && atPageTop}
               error={live.status === "error" && agents.length === 0
                 ? live.error || "Fleet could not be loaded."
-                : fleetOrderError || undefined}
+                : fleetOrderError || live.data.fleetError || undefined}
               loading={showFleetLoader}
             >
               {displayedAgents.map((item) => (
@@ -2373,31 +2389,6 @@ function ProviderRow({
   setError: (value: string) => void;
 }): ReactElement {
   const [open, setOpen] = useState(false);
-  const [key, setKey] = useState("");
-  const [model, setModel] = useState(
-    provider.model ?? provider.defaultModel ?? "",
-  );
-  const [busy, setBusy] = useState(false);
-  const save = async () => {
-    if (!key.trim() || busy) return;
-    setBusy(true);
-    setError("");
-    try {
-      await launchApi.upsertByokProvider(provider.id, {
-        apiKey: key.trim(),
-        model: model.trim() || undefined,
-        validate: true,
-      });
-      await onRefresh();
-      setKey("");
-      setOpen(false);
-      sounds.confirm();
-    } catch (error) {
-      setError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  };
   return (
     <div className="neb-provider-row">
       <div className="neb-provider-head">
@@ -2465,27 +2456,18 @@ function ProviderRow({
       {open
         ? (
           <div className="neb-provider-editor">
-            <input
-              className="neb-edit-input"
-              onChange={(event) => setKey(event.currentTarget.value)}
-              placeholder="API key"
-              type="password"
-              value={key}
+            <ByokCredentialForm
+              initialProviderId={provider.id}
+              onCancel={() => setOpen(false)}
+              onSaved={async () => {
+                await onRefresh();
+                setOpen(false);
+                sounds.confirm();
+              }}
+              providerOptions={[provider]}
+              requiredOperations={provider.validation?.operations ??
+                ["generate"]}
             />
-            <input
-              className="neb-edit-input"
-              onChange={(event) => setModel(event.currentTarget.value)}
-              placeholder={provider.defaultModel ?? "Default model"}
-              value={model}
-            />
-            <button
-              className="neb-btn-sm"
-              disabled={busy || !key.trim()}
-              onClick={() => void save()}
-              type="button"
-            >
-              {busy ? "Validating…" : "Save"}
-            </button>
           </div>
         )
         : null}

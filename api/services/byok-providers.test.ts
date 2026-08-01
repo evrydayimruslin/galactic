@@ -1,63 +1,73 @@
-import { assert } from 'https://deno.land/std@0.210.0/assert/assert.ts';
-import { assertEquals } from 'https://deno.land/std@0.210.0/assert/assert_equals.ts';
+import { assert } from "https://deno.land/std@0.210.0/assert/assert.ts";
+import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
 import {
   ACTIVE_BYOK_PROVIDER_IDS,
   BYOK_PROVIDERS,
   isActiveBYOKProvider,
   isLegacyBYOKProvider,
-} from '../../shared/types/index.ts';
+} from "../../shared/types/index.ts";
 
-Deno.test('BYOK provider registry exposes first-tier OpenAI-compatible providers', () => {
+Deno.test("BYOK provider registry exposes first-tier OpenAI-compatible providers", () => {
   assertEquals(Object.keys(BYOK_PROVIDERS), [...ACTIVE_BYOK_PROVIDER_IDS]);
 
   for (const provider of Object.values(BYOK_PROVIDERS)) {
-    assertEquals(provider.protocol, 'openai-compatible');
-    assert(provider.baseUrl.startsWith('https://'));
+    assertEquals(provider.protocol, "openai-compatible");
+    assert(provider.baseUrl.startsWith("https://"));
     assert(provider.defaultModel.length > 0);
     assert(provider.models.length > 0);
     assert(provider.capabilities.chat);
+    assertEquals(typeof provider.capabilities.embeddings, "boolean");
     assert(provider.capabilities.streaming);
-    assertEquals(typeof provider.capabilities.realtime, 'boolean');
-    assertEquals(typeof provider.capabilities.webSearch, 'boolean');
+    assertEquals(typeof provider.capabilities.realtime, "boolean");
+    assertEquals(typeof provider.capabilities.webSearch, "boolean");
   }
 });
 
-Deno.test('BYOK provider registry marks only OpenAI as realtime-capable', () => {
+Deno.test("BYOK provider registry marks only OpenRouter as embedding-capable", () => {
+  assertEquals(BYOK_PROVIDERS.openrouter.capabilities.embeddings, true);
+  for (const provider of Object.values(BYOK_PROVIDERS)) {
+    if (provider.id !== "openrouter") {
+      assertEquals(provider.capabilities.embeddings, false);
+    }
+  }
+});
+
+Deno.test("BYOK provider registry marks only OpenAI as realtime-capable", () => {
   assertEquals(BYOK_PROVIDERS.openai.capabilities.realtime, true);
   for (const provider of Object.values(BYOK_PROVIDERS)) {
-    if (provider.id !== 'openai') {
+    if (provider.id !== "openai") {
       assertEquals(provider.capabilities.realtime, false);
     }
   }
 });
 
-Deno.test('BYOK provider registry marks OpenRouter and OpenAI as web-search capable', () => {
+Deno.test("BYOK provider registry marks OpenRouter and OpenAI as web-search capable", () => {
   assertEquals(BYOK_PROVIDERS.openrouter.capabilities.webSearch, true);
   assertEquals(BYOK_PROVIDERS.openai.capabilities.webSearch, true);
   for (const provider of Object.values(BYOK_PROVIDERS)) {
-    if (provider.id !== 'openrouter' && provider.id !== 'openai') {
+    if (provider.id !== "openrouter" && provider.id !== "openai") {
       assertEquals(provider.capabilities.webSearch, false);
     }
   }
 });
 
-Deno.test('BYOK provider registry exposes Moonshot Kimi and Z.ai as first-tier', () => {
-  assert('moonshot' in BYOK_PROVIDERS);
-  assert('zai' in BYOK_PROVIDERS);
-  assert(isActiveBYOKProvider('moonshot'));
-  assert(isActiveBYOKProvider('zai'));
+Deno.test("BYOK provider registry exposes Moonshot Kimi and Z.ai as first-tier", () => {
+  assert("moonshot" in BYOK_PROVIDERS);
+  assert("zai" in BYOK_PROVIDERS);
+  assert(isActiveBYOKProvider("moonshot"));
+  assert(isActiveBYOKProvider("zai"));
 });
 
-Deno.test('BYOK provider registry excludes legacy direct providers', () => {
-  assert(!('anthropic' in BYOK_PROVIDERS));
-  assert(isLegacyBYOKProvider('anthropic'));
+Deno.test("BYOK provider registry excludes legacy direct providers", () => {
+  assert(!("anthropic" in BYOK_PROVIDERS));
+  assert(isLegacyBYOKProvider("anthropic"));
 });
 
-Deno.test('BYOK active provider guard accepts only current first-tier providers', () => {
+Deno.test("BYOK active provider guard accepts only current first-tier providers", () => {
   for (const provider of ACTIVE_BYOK_PROVIDER_IDS) {
     assert(isActiveBYOKProvider(provider));
   }
 
-  assert(!isActiveBYOKProvider('anthropic'));
-  assert(!isActiveBYOKProvider('_platform_openrouter'));
+  assert(!isActiveBYOKProvider("anthropic"));
+  assert(!isActiveBYOKProvider("_platform_openrouter"));
 });

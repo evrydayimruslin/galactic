@@ -1,4 +1,7 @@
 import type {
+  ActiveBYOKProvider,
+  BYOKModel,
+  BYOKProviderCapabilities,
   HealthWindows,
   VersionTestQualificationMetadata,
 } from "../types/index.ts";
@@ -142,6 +145,7 @@ export const LAUNCH_API_ROUTES = [
   "GET /api/launch/candidates/:candidateId",
   "POST /api/launch/candidates/:candidateId/deploy",
   "GET /api/launch/byok",
+  "POST /api/launch/byok/validate",
   "PUT /api/launch/byok/:provider",
   "DELETE /api/launch/byok/:provider",
   "POST /api/launch/byok/primary",
@@ -153,6 +157,7 @@ export const LAUNCH_API_ROUTES = [
   "POST /api/launch/subscription/portal",
   "GET /api/launch/capacity",
   "GET /api/launch/fleet",
+  "GET /api/launch/fleet/setup",
   "GET /api/launch/fleet/preferences",
   "PATCH /api/launch/fleet/preferences",
   "PUT /api/launch/fleet/order",
@@ -1061,14 +1066,39 @@ export interface LaunchWalletFundingIntentResponse {
   generatedAt: string;
 }
 
+export const LAUNCH_INFERENCE_OPERATIONS = ["generate", "embed"] as const;
+export type LaunchInferenceOperation =
+  typeof LAUNCH_INFERENCE_OPERATIONS[number];
+
+export interface LaunchInferenceFunctionRequirement {
+  name: string;
+  operations: LaunchInferenceOperation[];
+}
+
+export interface LaunchReleaseInferenceRequirements {
+  required: boolean;
+  operations: LaunchInferenceOperation[];
+  functions: LaunchInferenceFunctionRequirement[];
+}
+
+export interface LaunchByokValidationProjection {
+  policyVersion: string;
+  model: string | null;
+  operations: LaunchInferenceOperation[];
+  validatedAt: string;
+}
+
 export interface LaunchByokProviderOption {
-  id: string;
+  id: ActiveBYOKProvider;
   name: string;
   description?: string;
   configured: boolean;
   primary: boolean;
   defaultModel?: string | null;
   model?: string | null;
+  models: BYOKModel[];
+  capabilities: BYOKProviderCapabilities;
+  validation: LaunchByokValidationProjection | null;
   apiKeyPrefix?: string | null;
   apiKeyUrl?: string | null;
   docsUrl?: string | null;
@@ -1084,7 +1114,27 @@ export interface LaunchByokSummaryResponse {
 export interface LaunchByokUpsertRequest {
   apiKey: string;
   model?: string;
+  operations?: LaunchInferenceOperation[];
+  validationReceipt?: string;
+  setPrimary?: boolean;
+  /** @deprecated Compatibility-only. False no longer bypasses validation. */
   validate?: boolean;
+}
+
+export interface LaunchByokValidationRequest {
+  provider: ActiveBYOKProvider;
+  apiKey: string;
+  model?: string;
+  operations: LaunchInferenceOperation[];
+}
+
+export interface LaunchByokValidationResponse {
+  valid: true;
+  provider: ActiveBYOKProvider;
+  model: string | null;
+  operations: LaunchInferenceOperation[];
+  validationReceipt: string;
+  expiresAt: string;
 }
 
 export interface LaunchByokMutationResponse {
@@ -1566,6 +1616,8 @@ export interface LaunchAgentHomeRequirement {
   group: string | null;
   destination: string | null;
   updatedAt: string | null;
+  /** Present for the account-scoped BYOK requirement only. */
+  inferenceOperations?: LaunchInferenceOperation[];
   actions: Array<"set" | "replace" | "remove" | "approve" | "promote">;
 }
 
@@ -2845,6 +2897,14 @@ export interface LaunchFleetPreferencesUpdateRequest {
 
 export interface LaunchFleetAgentSummary {
   agent: LaunchAgentSummary;
+  deploymentState?:
+    | "legacy"
+    | "materializing"
+    | "setup_required"
+    | "ready"
+    | "disabled";
+  activeReleaseDigest?: string | null;
+  setupRequiredAt?: string | null;
   state: LaunchFleetAgentState;
   health: LaunchFleetAgentHealth;
   routineCount: number;
@@ -2879,6 +2939,48 @@ export interface LaunchFleetResponse {
   accountCapacity: LaunchCapacityResponse;
   workingSummary?: LaunchFleetWorkingSummary;
   fleetRevision?: string;
+  generatedAt: string;
+}
+
+export type LaunchFleetInferenceReadiness =
+  | "not_required"
+  | "missing"
+  | "needs_validation"
+  | "unsupported"
+  | "ready";
+
+export interface LaunchFleetSetupAgent {
+  agent: Pick<LaunchAgentSummary, "id" | "slug" | "name">;
+  deploymentState: "setup_required";
+  activeReleaseDigest: string | null;
+  homeRevision: string | null;
+  requirements: LaunchAgentHomeRequirement[];
+  canActivate: boolean;
+  syncing: boolean;
+  unavailableReason: string | null;
+}
+
+export interface LaunchFleetInferenceGroup {
+  id: "account:byok";
+  required: true;
+  operations: LaunchInferenceOperation[];
+  functions: Array<{
+    agentId: string;
+    agentSlug: string;
+    agentName: string;
+    functionName: string;
+    operations: LaunchInferenceOperation[];
+  }>;
+  compatibleProviderIds: ActiveBYOKProvider[];
+  configuredProviderId: ActiveBYOKProvider | null;
+  readiness: LaunchFleetInferenceReadiness;
+}
+
+export interface LaunchFleetSetupResponse {
+  agents: LaunchFleetSetupAgent[];
+  inference: LaunchFleetInferenceGroup | null;
+  pendingAgentCount: number;
+  readyToActivateCount: number;
   generatedAt: string;
 }
 

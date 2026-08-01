@@ -402,6 +402,8 @@ crons = [
 #   OPENROUTER_API_KEY
 #   DEEPSEEK_API_KEY
 #   BYOK_ENCRYPTION_KEY
+#   BYOK_VALIDATION_SIGNING_SECRET — dedicated HMAC secret for short-lived
+#     BYOK validation receipts. Keep distinct across staging and production.
 #   DATA_TENANT_SECRET — per-tenant proof signing secret for the ultralight-data
 #     worker. MUST be identical to the data worker's DATA_TENANT_SECRET and be a
 #     non-default value, or the data worker refuses to serve in production

@@ -58,6 +58,8 @@ export interface Env {
   OPENROUTER_API_KEY: string;
   DEEPSEEK_API_KEY: string;
   BYOK_ENCRYPTION_KEY: string;
+  /** Optional dedicated HMAC secret for five-minute BYOK validation receipts. */
+  BYOK_VALIDATION_SIGNING_SECRET: string;
   RUNPOD_API_KEY: string;
   RUNPOD_TEMPLATE_ID: string;
   RUNPOD_BASE_IMAGE: string;

@@ -1,6 +1,10 @@
 name: Production Launch Gate
 run-name: Production launch gate (${{ github.event.inputs.release_tag || github.ref_name }})
 
+# Ordinary release tags promote and verify the database, API, gx.test session,
+# Interfaces Worker, and launch web. Compute has its own explicitly dispatched
+# release workflow and is not evidence for an unrelated product release.
+
 on:
   push:
     tags:
@@ -20,7 +24,7 @@ jobs:
   gate:
     name: Evaluate production candidate
     runs-on: ubuntu-latest
-    timeout-minutes: 220
+    timeout-minutes: 90
     environment: production
 
     steps:
@@ -56,30 +60,6 @@ jobs:
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "candidate_sha=$CANDIDATE_SHA" >> "$GITHUB_OUTPUT"
 
-      - name: Validate immutable release policy
-        id: policy
-        shell: bash
-        env:
-          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
-        run: |
-          set -euo pipefail
-          jq -e \
-            --arg release_tag "$RELEASE_TAG" '
-              type == "object" and
-              keys == ["compute", "release_tag", "schema_version"] and
-              .schema_version == 1 and
-              .release_tag == $release_tag and
-              (.compute | type == "object") and
-              (.compute | keys == ["admission", "artifact"]) and
-              .compute.artifact == "deploy_exact_candidate" and
-              (.compute.admission == "preserve_off" or .compute.admission == "enable_global")
-            ' release-policy.json >/dev/null || {
-              echo "release-policy.json does not exactly describe this tagged release." >&2
-              exit 1
-            }
-          echo "admission_mode=$(jq -er '.compute.admission' release-policy.json)" \
-            >> "$GITHUB_OUTPUT"
-
       - name: Evaluate required workflow runs
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -89,45 +69,15 @@ jobs:
             --tag "${{ steps.release.outputs.release_tag }}" \
             --sha "${{ steps.release.outputs.candidate_sha }}" \
             --poll-until-complete \
-            --timeout-seconds 12600 \
+            --timeout-seconds 4800 \
             --poll-interval-seconds 20 \
             --write-json /tmp/production-launch-gate-summary.json \
             --write-md /tmp/production-launch-gate-summary.md
 
-      - name: Verify exact-tag Compute release evidence
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          compute_run_id="$(
-            jq -er '
-              [.workflows[] |
-                select(.workflow == "Compute Deploy" and .status == "passed") |
-                .run_id] as $ids
-              | if ($ids | length) == 1 then $ids[0]
-                else error("expected exactly one passed Compute Deploy run")
-                end
-            ' /tmp/production-launch-gate-summary.json
-          )"
-          evidence_dir="$RUNNER_TEMP/production-compute-release-evidence"
-          mkdir -p "$evidence_dir"
-          gh run download "$compute_run_id" \
-            --repo "$GITHUB_REPOSITORY" \
-            --name "compute-production-release-${{ steps.release.outputs.candidate_sha }}" \
-            --dir "$evidence_dir"
-          node scripts/release/verify-production-compute-release-evidence.mjs \
-            "$evidence_dir" \
-            "${{ steps.release.outputs.candidate_sha }}" \
-            "${{ steps.release.outputs.release_tag }}" \
-            "$compute_run_id" \
-            "${{ steps.policy.outputs.admission_mode }}" \
-            | tee /tmp/production-compute-release-verification.json
-
       - name: Install API toolchain for the final live Worker fence
         run: npm --prefix api ci
 
-      - name: Verify exact live API, Compute, and gx.test session versions after every deploy
+      - name: Verify exact live API and gx.test session versions
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -136,25 +86,23 @@ jobs:
           set -euo pipefail
           api_status="$RUNNER_TEMP/production-live-api-status.json"
           api_version="$RUNNER_TEMP/production-live-api-version.json"
-          compute_status="$RUNNER_TEMP/production-live-compute-status.json"
-          compute_version="$RUNNER_TEMP/production-live-compute-version.json"
-          container_list="$RUNNER_TEMP/production-live-container-list.json"
           session_status="$RUNNER_TEMP/production-live-gx-test-session-status.json"
           session_version="$RUNNER_TEMP/production-live-gx-test-session-version.json"
-          expected_api_id="$(
-            jq -er '.active_api_version_id' \
-              /tmp/production-compute-release-verification.json
-          )"
-          expected_compute_id="$(
-            jq -er '.active_compute_version_id' \
-              /tmp/production-compute-release-verification.json
-          )"
 
           pushd api >/dev/null
-          npx wrangler versions view "$expected_api_id" \
+          npx wrangler deployments status \
+            --name ultralight-api --json > "$api_status"
+          api_version_id="$(
+            jq -er '
+              if (.versions | length) == 1 and
+                 ((.versions[0].percentage | tonumber) == 100)
+              then .versions[0].version_id
+              else error("production API is not one stable 100% version")
+              end
+            ' "$api_status"
+          )"
+          npx wrangler versions view "$api_version_id" \
             --name ultralight-api --json > "$api_version"
-          npx wrangler versions view "$expected_compute_id" \
-            --name galactic-compute --json > "$compute_version"
           npx wrangler deployments status \
             --name galactic-gx-test-session --json > "$session_status"
           session_version_id="$(
@@ -173,45 +121,16 @@ jobs:
           npx wrangler deployments status \
             --name ultralight-api --json > "$api_status"
           npx wrangler deployments status \
-            --name galactic-compute --json > "$compute_status"
-          npx wrangler deployments status \
             --name galactic-gx-test-session --json > "$session_status"
-          npx wrangler containers list --json > "$container_list"
           popd >/dev/null
 
-          node scripts/release/verify-live-production-compute-state.mjs \
+          node scripts/release/verify-production-api-release-state.mjs \
             "$api_status" \
             "$api_version" \
-            "$compute_status" \
-            "$compute_version" \
-            "$container_list" \
             "$session_status" \
             "$session_version" \
-            /tmp/production-compute-release-verification.json \
             "${{ steps.release.outputs.candidate_sha }}" \
-            "${{ steps.policy.outputs.admission_mode }}" \
-            | tee /tmp/production-live-compute-state-verification.json
-
-      - name: Verify final production Compute artifact privacy
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          managed_domain=/tmp/production-compute-r2-managed-domain.json
-          custom_domains=/tmp/production-compute-r2-custom-domains.json
-          curl -fsS --retry 3 \
-            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/galactic-compute-artifacts/domains/managed" \
-            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            > "$managed_domain"
-          curl -fsS --retry 3 \
-            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/galactic-compute-artifacts/domains/custom" \
-            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            > "$custom_domains"
-          node compute-worker/scripts/verify-r2-private.mjs \
-            "$managed_domain" "$custom_domains" \
-            | tee /tmp/production-compute-r2-private-verification.txt
+            | tee /tmp/production-api-release-verification.json
 
       - name: Verify final production gx.test containment
         env:
@@ -240,11 +159,7 @@ jobs:
           path: |
             /tmp/production-launch-gate-summary.json
             /tmp/production-launch-gate-summary.md
-            /tmp/production-compute-release-verification.json
-            /tmp/production-live-compute-state-verification.json
-            /tmp/production-compute-r2-managed-domain.json
-            /tmp/production-compute-r2-custom-domains.json
-            /tmp/production-compute-r2-private-verification.txt
+            /tmp/production-api-release-verification.json
             /tmp/production-gx-test-containment.json
           if-no-files-found: error
 

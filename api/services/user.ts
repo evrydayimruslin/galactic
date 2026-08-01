@@ -1,10 +1,16 @@
 // User Service
 // Handles user settings, BYOK configuration, and preferences
 
-import type { BYOKProvider, BYOKConfig, User } from '../../shared/types/index.ts';
-import { isActiveBYOKProvider } from '../../shared/types/index.ts';
-import { getEnv } from '../lib/env.ts';
-import { decryptApiKey, encryptApiKey } from './api-key-crypto.ts';
+import type {
+  ActiveBYOKProvider,
+  BYOKConfig,
+  BYOKProvider,
+  BYOKValidationMetadata,
+  User,
+} from "../../shared/types/index.ts";
+import { isActiveBYOKProvider } from "../../shared/types/index.ts";
+import { getEnv } from "../lib/env.ts";
+import { decryptApiKey, encryptApiKey } from "./api-key-crypto.ts";
 
 // ============================================
 // USER SERVICE
@@ -13,15 +19,38 @@ import { decryptApiKey, encryptApiKey } from './api-key-crypto.ts';
 export interface UserService {
   // User profile
   getUser(userId: string): Promise<UserProfile | null>;
-  updateUser(userId: string, updates: Partial<UserProfile>): Promise<UserProfile>;
+  updateUser(
+    userId: string,
+    updates: Partial<UserProfile>,
+  ): Promise<UserProfile>;
 
   // BYOK management
   getBYOKConfigs(userId: string): Promise<BYOKConfig[]>;
-  addBYOKProvider(userId: string, provider: BYOKProvider, apiKey: string, model?: string): Promise<BYOKConfig>;
-  updateBYOKProvider(userId: string, provider: BYOKProvider, updates: { apiKey?: string; model?: string }): Promise<BYOKConfig>;
+  addBYOKProvider(
+    userId: string,
+    provider: BYOKProvider,
+    apiKey: string,
+    model?: string,
+  ): Promise<BYOKConfig>;
+  updateBYOKProvider(
+    userId: string,
+    provider: BYOKProvider,
+    updates: { apiKey?: string; model?: string },
+  ): Promise<BYOKConfig>;
+  saveValidatedBYOKProvider(
+    userId: string,
+    provider: ActiveBYOKProvider,
+    apiKey: string,
+    model: string | undefined,
+    validation: BYOKValidationMetadata,
+    setPrimary: boolean,
+  ): Promise<BYOKConfig>;
   removeBYOKProvider(userId: string, provider: BYOKProvider): Promise<void>;
   setPrimaryProvider(userId: string, provider: BYOKProvider): Promise<void>;
-  getDecryptedApiKey(userId: string, provider: BYOKProvider): Promise<string | null>;
+  getDecryptedApiKey(
+    userId: string,
+    provider: BYOKProvider,
+  ): Promise<string | null>;
 }
 
 export interface UserProfile {
@@ -43,6 +72,14 @@ export interface UserProfile {
 }
 
 // Database row structure
+interface RawByokEntry {
+  encrypted_key?: string;
+  model?: string;
+  added_at?: string;
+  validation?: unknown;
+  [key: string]: unknown;
+}
+
 interface UserRow {
   id: string;
   email: string;
@@ -54,18 +91,21 @@ interface UserRow {
   profile_slug: string | null;
   byok_enabled: boolean;
   byok_provider: string | null;
-  byok_keys: Record<string, { encrypted_key?: string; model?: string; added_at?: string; [key: string]: unknown }> | null;
+  byok_keys: Record<string, RawByokEntry> | null;
   balance_light: number | null;
 }
 
-function isKnownByokProvider(provider: string): provider is BYOKProvider {
+function isKnownByokProvider(
+  provider: string,
+): provider is ActiveBYOKProvider {
   return isActiveBYOKProvider(provider);
 }
 
 function hasUsableByokKey(
-  entry: { encrypted_key?: string; [key: string]: unknown } | undefined,
+  entry: RawByokEntry | undefined,
 ): boolean {
-  return typeof entry?.encrypted_key === 'string' && entry.encrypted_key.length > 0;
+  return typeof entry?.encrypted_key === "string" &&
+    entry.encrypted_key.length > 0;
 }
 
 export function createUserService(): UserService {
@@ -73,13 +113,15 @@ export function createUserService(): UserService {
 
   async function getUser(userId: string): Promise<UserProfile | null> {
     const response = await fetch(
-      `${getEnv('SUPABASE_URL')}/rest/v1/users?id=eq.${userId}&select=id,email,display_name,avatar_url,tier,country,featured_app_id,profile_slug,byok_enabled,byok_provider,byok_keys,balance_light`,
+      `${
+        getEnv("SUPABASE_URL")
+      }/rest/v1/users?id=eq.${userId}&select=id,email,display_name,avatar_url,tier,country,featured_app_id,profile_slug,byok_enabled,byok_provider,byok_keys,balance_light`,
       {
         headers: {
-          'apikey': getEnv('SUPABASE_SERVICE_ROLE_KEY'),
-          'Authorization': `Bearer ${getEnv('SUPABASE_SERVICE_ROLE_KEY')}`,
+          "apikey": getEnv("SUPABASE_SERVICE_ROLE_KEY"),
+          "Authorization": `Bearer ${getEnv("SUPABASE_SERVICE_ROLE_KEY")}`,
         },
-      }
+      },
     );
 
     if (!response.ok) {
@@ -91,26 +133,28 @@ export function createUserService(): UserService {
 
     const user = users[0];
     const byokConfigs = parseByokConfigs(user.byok_keys);
-    const platformModelEntry = user.byok_keys?.['_platform_model'];
+    const platformModelEntry = user.byok_keys?.["_platform_model"];
     const platformInferenceModel =
-      typeof platformModelEntry?.model === 'string' && platformModelEntry.model.trim()
+      typeof platformModelEntry?.model === "string" &&
+        platformModelEntry.model.trim()
         ? platformModelEntry.model.trim()
         : null;
     const configProviders = new Set(
       byokConfigs
-        .filter(config => config.has_key)
-        .map(config => config.provider),
+        .filter((config) => config.has_key)
+        .map((config) => config.provider),
     );
-    const primaryProvider = user.byok_provider && configProviders.has(user.byok_provider as BYOKProvider)
+    const primaryProvider = user.byok_provider &&
+        configProviders.has(user.byok_provider as BYOKProvider)
       ? user.byok_provider as BYOKProvider
-      : byokConfigs.find(config => config.has_key)?.provider || null;
+      : byokConfigs.find((config) => config.has_key)?.provider || null;
 
     return {
       id: user.id,
       email: user.email,
       display_name: user.display_name,
       avatar_url: user.avatar_url,
-      tier: user.tier || 'free',
+      tier: user.tier || "free",
       country: user.country || null,
       featured_app_id: user.featured_app_id || null,
       profile_slug: user.profile_slug || null,
@@ -118,26 +162,31 @@ export function createUserService(): UserService {
       byok_provider: primaryProvider,
       byok_configs: byokConfigs,
       platform_inference_model: platformInferenceModel,
-      balance_light: typeof user.balance_light === 'number' ? user.balance_light : 0,
+      balance_light: typeof user.balance_light === "number"
+        ? user.balance_light
+        : 0,
     };
   }
 
-  async function updateUser(userId: string, updates: Partial<UserProfile>): Promise<UserProfile> {
+  async function updateUser(
+    userId: string,
+    updates: Partial<UserProfile>,
+  ): Promise<UserProfile> {
     const response = await fetch(
-      `${getEnv('SUPABASE_URL')}/rest/v1/users?id=eq.${userId}`,
+      `${getEnv("SUPABASE_URL")}/rest/v1/users?id=eq.${userId}`,
       {
-        method: 'PATCH',
+        method: "PATCH",
         headers: {
-          'apikey': getEnv('SUPABASE_SERVICE_ROLE_KEY'),
-          'Authorization': `Bearer ${getEnv('SUPABASE_SERVICE_ROLE_KEY')}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'return=representation',
+          "apikey": getEnv("SUPABASE_SERVICE_ROLE_KEY"),
+          "Authorization": `Bearer ${getEnv("SUPABASE_SERVICE_ROLE_KEY")}`,
+          "Content-Type": "application/json",
+          "Prefer": "return=representation",
         },
         body: JSON.stringify({
           ...updates,
           updated_at: new Date().toISOString(),
         }),
-      }
+      },
     );
 
     if (!response.ok) {
@@ -145,7 +194,7 @@ export function createUserService(): UserService {
     }
 
     const user = await getUser(userId);
-    if (!user) throw new Error('User not found after update');
+    if (!user) throw new Error("User not found after update");
     return user;
   }
 
@@ -158,7 +207,7 @@ export function createUserService(): UserService {
     userId: string,
     provider: BYOKProvider,
     apiKey: string,
-    model?: string
+    model?: string,
   ): Promise<BYOKConfig> {
     // Encrypt the API key
     const encryptedKey = await encryptApiKey(apiKey);
@@ -180,16 +229,17 @@ export function createUserService(): UserService {
 
     // Update user with new config
     // If this is the first provider, set it as primary
-    const isPrimaryUpdate = !user?.byok_provider || !isKnownByokProvider(user.byok_provider);
+    const isPrimaryUpdate = !user?.byok_provider ||
+      !isKnownByokProvider(user.byok_provider);
 
     const response = await fetch(
-      `${getEnv('SUPABASE_URL')}/rest/v1/users?id=eq.${userId}`,
+      `${getEnv("SUPABASE_URL")}/rest/v1/users?id=eq.${userId}`,
       {
-        method: 'PATCH',
+        method: "PATCH",
         headers: {
-          'apikey': getEnv('SUPABASE_SERVICE_ROLE_KEY'),
-          'Authorization': `Bearer ${getEnv('SUPABASE_SERVICE_ROLE_KEY')}`,
-          'Content-Type': 'application/json',
+          "apikey": getEnv("SUPABASE_SERVICE_ROLE_KEY"),
+          "Authorization": `Bearer ${getEnv("SUPABASE_SERVICE_ROLE_KEY")}`,
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           byok_keys: newKeys,
@@ -197,7 +247,7 @@ export function createUserService(): UserService {
           ...(isPrimaryUpdate ? { byok_provider: provider } : {}),
           updated_at: new Date().toISOString(),
         }),
-      }
+      },
     );
     if (!response.ok) {
       throw new Error(`Failed to add BYOK provider: ${await response.text()}`);
@@ -214,7 +264,7 @@ export function createUserService(): UserService {
   async function updateBYOKProvider(
     userId: string,
     provider: BYOKProvider,
-    updates: { apiKey?: string; model?: string }
+    updates: { apiKey?: string; model?: string },
   ): Promise<BYOKConfig> {
     const currentKeys = await getRawByokKeys(userId);
 
@@ -229,9 +279,16 @@ export function createUserService(): UserService {
 
     const updatedConfig = {
       ...currentKeys[provider],
-      ...(trimmedApiKey ? { encrypted_key: await encryptApiKey(trimmedApiKey) } : {}),
+      ...(trimmedApiKey
+        ? { encrypted_key: await encryptApiKey(trimmedApiKey) }
+        : {}),
       ...(updates.model !== undefined ? { model: updates.model } : {}),
     };
+    // Any unvalidated key/model mutation invalidates prior proof. The launch
+    // funnel uses saveValidatedBYOKProvider for an atomic validated write.
+    if (trimmedApiKey || updates.model !== undefined) {
+      delete updatedConfig.validation;
+    }
 
     const newKeys = {
       ...currentKeys,
@@ -239,22 +296,24 @@ export function createUserService(): UserService {
     };
 
     const response = await fetch(
-      `${getEnv('SUPABASE_URL')}/rest/v1/users?id=eq.${userId}`,
+      `${getEnv("SUPABASE_URL")}/rest/v1/users?id=eq.${userId}`,
       {
-        method: 'PATCH',
+        method: "PATCH",
         headers: {
-          'apikey': getEnv('SUPABASE_SERVICE_ROLE_KEY'),
-          'Authorization': `Bearer ${getEnv('SUPABASE_SERVICE_ROLE_KEY')}`,
-          'Content-Type': 'application/json',
+          "apikey": getEnv("SUPABASE_SERVICE_ROLE_KEY"),
+          "Authorization": `Bearer ${getEnv("SUPABASE_SERVICE_ROLE_KEY")}`,
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           byok_keys: newKeys,
           updated_at: new Date().toISOString(),
         }),
-      }
+      },
     );
     if (!response.ok) {
-      throw new Error(`Failed to update BYOK provider: ${await response.text()}`);
+      throw new Error(
+        `Failed to update BYOK provider: ${await response.text()}`,
+      );
     }
 
     return {
@@ -265,7 +324,55 @@ export function createUserService(): UserService {
     };
   }
 
-  async function removeBYOKProvider(userId: string, provider: BYOKProvider): Promise<void> {
+  async function saveValidatedBYOKProvider(
+    userId: string,
+    provider: ActiveBYOKProvider,
+    apiKey: string,
+    model: string | undefined,
+    validation: BYOKValidationMetadata,
+    setPrimary: boolean,
+  ): Promise<BYOKConfig> {
+    const encryptedKey = await encryptApiKey(apiKey);
+    const response = await fetch(
+      `${
+        getEnv("SUPABASE_URL")
+      }/rest/v1/rpc/save_validated_launch_byok_provider`,
+      {
+        method: "POST",
+        headers: {
+          "apikey": getEnv("SUPABASE_SERVICE_ROLE_KEY"),
+          "Authorization": `Bearer ${getEnv("SUPABASE_SERVICE_ROLE_KEY")}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          p_user_id: userId,
+          p_provider: provider,
+          p_encrypted_key: encryptedKey,
+          p_model: model ?? null,
+          p_validation: validation,
+          p_set_primary: setPrimary,
+        }),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(
+        `Failed to save validated BYOK provider: ${await response.text()}`,
+      );
+    }
+    const addedAt = new Date().toISOString();
+    return {
+      provider,
+      has_key: true,
+      model,
+      added_at: addedAt,
+      validation,
+    };
+  }
+
+  async function removeBYOKProvider(
+    userId: string,
+    provider: BYOKProvider,
+  ): Promise<void> {
     const currentKeys = await getRawByokKeys(userId);
     const user = await getUser(userId);
 
@@ -274,34 +381,43 @@ export function createUserService(): UserService {
 
     // If this was the primary provider, clear it or set a new one
     const remainingProviders = Object.entries(currentKeys)
-      .filter(([provider, config]) => isKnownByokProvider(provider) && hasUsableByokKey(config))
+      .filter(([provider, config]) =>
+        isKnownByokProvider(provider) && hasUsableByokKey(config)
+      )
       .map(([provider]) => provider as BYOKProvider);
     const newPrimary = remainingProviders[0] || null;
     const byokEnabled = remainingProviders.length > 0;
 
     const response = await fetch(
-      `${getEnv('SUPABASE_URL')}/rest/v1/users?id=eq.${userId}`,
+      `${getEnv("SUPABASE_URL")}/rest/v1/users?id=eq.${userId}`,
       {
-        method: 'PATCH',
+        method: "PATCH",
         headers: {
-          'apikey': getEnv('SUPABASE_SERVICE_ROLE_KEY'),
-          'Authorization': `Bearer ${getEnv('SUPABASE_SERVICE_ROLE_KEY')}`,
-          'Content-Type': 'application/json',
+          "apikey": getEnv("SUPABASE_SERVICE_ROLE_KEY"),
+          "Authorization": `Bearer ${getEnv("SUPABASE_SERVICE_ROLE_KEY")}`,
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           byok_keys: Object.keys(currentKeys).length > 0 ? currentKeys : null,
-          byok_provider: user?.byok_provider === provider ? newPrimary : user?.byok_provider,
+          byok_provider: user?.byok_provider === provider
+            ? newPrimary
+            : user?.byok_provider,
           byok_enabled: byokEnabled,
           updated_at: new Date().toISOString(),
         }),
-      }
+      },
     );
     if (!response.ok) {
-      throw new Error(`Failed to remove BYOK provider: ${await response.text()}`);
+      throw new Error(
+        `Failed to remove BYOK provider: ${await response.text()}`,
+      );
     }
   }
 
-  async function setPrimaryProvider(userId: string, provider: BYOKProvider): Promise<void> {
+  async function setPrimaryProvider(
+    userId: string,
+    provider: BYOKProvider,
+  ): Promise<void> {
     const currentKeys = await getRawByokKeys(userId);
 
     if (!hasUsableByokKey(currentKeys[provider])) {
@@ -309,26 +425,31 @@ export function createUserService(): UserService {
     }
 
     const response = await fetch(
-      `${getEnv('SUPABASE_URL')}/rest/v1/users?id=eq.${userId}`,
+      `${getEnv("SUPABASE_URL")}/rest/v1/users?id=eq.${userId}`,
       {
-        method: 'PATCH',
+        method: "PATCH",
         headers: {
-          'apikey': getEnv('SUPABASE_SERVICE_ROLE_KEY'),
-          'Authorization': `Bearer ${getEnv('SUPABASE_SERVICE_ROLE_KEY')}`,
-          'Content-Type': 'application/json',
+          "apikey": getEnv("SUPABASE_SERVICE_ROLE_KEY"),
+          "Authorization": `Bearer ${getEnv("SUPABASE_SERVICE_ROLE_KEY")}`,
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           byok_provider: provider,
           updated_at: new Date().toISOString(),
         }),
-      }
+      },
     );
     if (!response.ok) {
-      throw new Error(`Failed to set primary BYOK provider: ${await response.text()}`);
+      throw new Error(
+        `Failed to set primary BYOK provider: ${await response.text()}`,
+      );
     }
   }
 
-  async function getDecryptedApiKey(userId: string, provider: BYOKProvider): Promise<string | null> {
+  async function getDecryptedApiKey(
+    userId: string,
+    provider: BYOKProvider,
+  ): Promise<string | null> {
     const currentKeys = await getRawByokKeys(userId);
     const config = currentKeys[provider];
 
@@ -339,33 +460,73 @@ export function createUserService(): UserService {
     try {
       return await decryptApiKey(config.encrypted_key);
     } catch (error) {
-      console.error('Failed to decrypt API key:', error);
+      console.error("Failed to decrypt API key:", error);
       return null;
     }
   }
 
   // Helper to get raw byok_keys from database
-  async function getRawByokKeys(userId: string): Promise<Record<string, { encrypted_key?: string; model?: string; added_at?: string; [key: string]: unknown }>> {
+  async function getRawByokKeys(
+    userId: string,
+  ): Promise<Record<string, RawByokEntry>> {
     const response = await fetch(
-      `${getEnv('SUPABASE_URL')}/rest/v1/users?id=eq.${userId}&select=byok_keys`,
+      `${
+        getEnv("SUPABASE_URL")
+      }/rest/v1/users?id=eq.${userId}&select=byok_keys`,
       {
         headers: {
-          'apikey': getEnv('SUPABASE_SERVICE_ROLE_KEY'),
-          'Authorization': `Bearer ${getEnv('SUPABASE_SERVICE_ROLE_KEY')}`,
+          "apikey": getEnv("SUPABASE_SERVICE_ROLE_KEY"),
+          "Authorization": `Bearer ${getEnv("SUPABASE_SERVICE_ROLE_KEY")}`,
         },
-      }
+      },
     );
 
     if (!response.ok) {
       throw new Error(`Failed to get user: ${await response.text()}`);
     }
 
-    const users = await response.json() as { byok_keys: Record<string, { encrypted_key?: string; model?: string; added_at?: string; [key: string]: unknown }> | null }[];
+    const users = await response.json() as {
+      byok_keys: Record<string, RawByokEntry> | null;
+    }[];
     return users[0]?.byok_keys || {};
   }
 
   // Helper to parse byok_keys into BYOKConfig array
-  function parseByokConfigs(byokKeys: Record<string, { encrypted_key?: string; model?: string; added_at?: string; [key: string]: unknown }> | null): BYOKConfig[] {
+  function parseValidation(
+    provider: ActiveBYOKProvider,
+    value: unknown,
+  ): BYOKValidationMetadata | undefined {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return undefined;
+    }
+    const record = value as Record<string, unknown>;
+    const operations = Array.isArray(record.operations)
+      ? record.operations.filter((
+        operation,
+      ): operation is "generate" | "embed" =>
+        operation === "generate" || operation === "embed"
+      )
+      : [];
+    if (
+      record.provider !== provider ||
+      typeof record.policy_version !== "string" ||
+      typeof record.key_version !== "string" ||
+      typeof record.validated_at !== "string" ||
+      operations.length === 0
+    ) return undefined;
+    return {
+      policy_version: record.policy_version,
+      key_version: record.key_version,
+      provider,
+      ...(typeof record.model === "string" ? { model: record.model } : {}),
+      operations,
+      validated_at: record.validated_at,
+    };
+  }
+
+  function parseByokConfigs(
+    byokKeys: Record<string, RawByokEntry> | null,
+  ): BYOKConfig[] {
     if (!byokKeys) return [];
 
     return Object.entries(byokKeys)
@@ -375,6 +536,10 @@ export function createUserService(): UserService {
         has_key: hasUsableByokKey(config),
         model: config.model,
         added_at: config.added_at || new Date(0).toISOString(),
+        validation: parseValidation(
+          provider as ActiveBYOKProvider,
+          config.validation,
+        ),
       }));
   }
 
@@ -384,6 +549,7 @@ export function createUserService(): UserService {
     getBYOKConfigs,
     addBYOKProvider,
     updateBYOKProvider,
+    saveValidatedBYOKProvider,
     removeBYOKProvider,
     setPrimaryProvider,
     getDecryptedApiKey,

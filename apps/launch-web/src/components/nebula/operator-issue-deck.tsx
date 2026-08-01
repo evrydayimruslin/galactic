@@ -9,7 +9,7 @@ import {
 
 import type {
   LaunchAgentHomeResponse,
-  LaunchByokProviderOption,
+  LaunchInferenceOperation,
   LaunchOperatorAttentionAction,
   LaunchOperatorAttentionEntry,
   LaunchOperatorAttentionProjection,
@@ -17,15 +17,16 @@ import type {
   LaunchOperatorRoutineRunDetail,
 } from "../../../../../shared/contracts/launch.ts";
 import {
+  type OperatorAttentionAgent,
   operatorAttentionAgentMap,
   operatorAttentionEntryMatches,
   operatorRemediationHref,
-  type OperatorAttentionAgent,
   resolveOperatorAttentionEntry,
 } from "../../lib/operator-attention";
 import { launchApi, LaunchApiRequestError } from "../../lib/api";
 import type { LaunchNavigate } from "../../lib/navigation";
 import { Glyph } from "./glyph";
+import { ByokCredentialForm } from "../byok-credential-form";
 
 const SNOOZE_DURATION_MS = 60 * 60 * 1_000;
 
@@ -88,72 +89,31 @@ function InlineProviderRemediation({
     ? remediation.target
     : null;
   const [open, setOpen] = useState(false);
-  const [providers, setProviders] = useState<LaunchByokProviderOption[]>([]);
-  const [providerId, setProviderId] = useState(target?.provider ?? "");
-  const [apiKey, setApiKey] = useState("");
-  const [model, setModel] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [operations, setOperations] = useState<LaunchInferenceOperation[]>([
+    "generate",
+  ]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [saved, setSaved] = useState(false);
+  const [loadError, setLoadError] = useState("");
 
-  const expand = async () => {
+  const toggle = async () => {
     if (open) {
       setOpen(false);
-      setApiKey("");
       return;
     }
     setOpen(true);
-    setSaved(false);
-    if (providers.length > 0) return;
     setLoading(true);
-    setError("");
+    setLoadError("");
     try {
-      const response = await launchApi.byok();
-      setProviders(response.providers);
-      const preferred = target?.provider
-        ? response.providers.find(({ id }) => id === target.provider)
-        : response.providers.find(({ configured }) => !configured) ??
-          response.providers[0];
-      if (preferred) {
-        setProviderId(preferred.id);
-        setModel(preferred.model ?? preferred.defaultModel ?? "");
-      }
+      const setup = await launchApi.fleetSetup();
+      setOperations(setup.inference?.operations ?? ["generate"]);
     } catch (reason) {
-      setError(
+      setLoadError(
         reason instanceof Error
           ? reason.message
-          : "Inference providers could not be loaded.",
+          : "Exact inference requirements could not be loaded.",
       );
     } finally {
       setLoading(false);
-    }
-  };
-
-  const selected = providers.find(({ id }) => id === providerId) ?? null;
-  const save = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!providerId || !apiKey.trim() || busy) return;
-    setBusy(true);
-    setError("");
-    setSaved(false);
-    try {
-      await launchApi.upsertByokProvider(providerId, {
-        apiKey: apiKey.trim(),
-        model: model.trim() || undefined,
-        validate: true,
-      });
-      setApiKey("");
-      setSaved(true);
-      await finishRemediation(onChanged);
-    } catch (reason) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : "The provider could not be configured.",
-      );
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -161,82 +121,31 @@ function InlineProviderRemediation({
     <div className="neb-operator-remediation-inline">
       <button
         className="neb-btn-sm primary"
-        onClick={() => void expand()}
+        onClick={() => void toggle()}
         type="button"
       >
         {remediation.label}
       </button>
       {open
         ? (
-          <form className="neb-operator-inline-form" onSubmit={save}>
+          <div className="neb-operator-inline-form">
             {loading
-              ? <span className="neb-ov-note">Loading providers…</span>
-              : providers.length === 0
               ? (
-                <span className="neb-error-note">
-                  No supported inference providers are available.
+                <span className="neb-ov-note">
+                  Loading exact Agent requirements…
                 </span>
               )
+              : loadError
+              ? <span className="neb-error-note">{loadError}</span>
               : (
-                <>
-                  <label>
-                    Provider
-                    <select
-                      className="neb-edit-input"
-                      onChange={(event) => {
-                        const next = event.currentTarget.value;
-                        setProviderId(next);
-                        const option = providers.find(({ id }) => id === next);
-                        setModel(option?.model ?? option?.defaultModel ?? "");
-                      }}
-                      value={providerId}
-                    >
-                      {providers.map((provider) => (
-                        <option key={provider.id} value={provider.id}>
-                          {provider.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    API key
-                    <input
-                      autoComplete="off"
-                      className="neb-edit-input"
-                      onChange={(event) => setApiKey(event.currentTarget.value)}
-                      placeholder={selected
-                        ? `${selected.name} API key`
-                        : "Provider API key"}
-                      type="password"
-                      value={apiKey}
-                    />
-                  </label>
-                  <label>
-                    Model
-                    <input
-                      className="neb-edit-input"
-                      onChange={(event) => setModel(event.currentTarget.value)}
-                      placeholder={selected?.defaultModel ?? "Default model"}
-                      value={model}
-                    />
-                  </label>
-                  <button
-                    className="neb-btn-sm primary"
-                    disabled={busy || !providerId || !apiKey.trim()}
-                    type="submit"
-                  >
-                    {busy ? "Validating…" : "Save and recheck"}
-                  </button>
-                </>
+                <ByokCredentialForm
+                  initialProviderId={target?.provider}
+                  onSaved={() => finishRemediation(onChanged)}
+                  requiredOperations={operations}
+                  saveLabel="Save and recheck"
+                />
               )}
-            <span className="neb-operator-write-only">
-              The key is write-only and is cleared from this form after saving.
-            </span>
-            {saved
-              ? <span className="neb-success-note">Provider configured.</span>
-              : null}
-            {error ? <span className="neb-error-note">{error}</span> : null}
-          </form>
+          </div>
         )
         : null}
     </div>
@@ -728,7 +637,9 @@ function RunOnceRemediation({
                 ? "Run succeeded. Scheduled runs are still paused."
                 : routineStatus === "active"
                 ? "Run succeeded. Scheduled runs are already active."
-                : `Run succeeded. The routine is ${routineStatus ?? "not active"}.`}
+                : `Run succeeded. The routine is ${
+                  routineStatus ?? "not active"
+                }.`}
             </span>
             {routineStatus === "paused"
               ? (
@@ -738,9 +649,7 @@ function RunOnceRemediation({
                   onClick={() => void resume()}
                   type="button"
                 >
-                  {phase === "resuming"
-                    ? "Resuming…"
-                    : "Resume scheduled runs"}
+                  {phase === "resuming" ? "Resuming…" : "Resume scheduled runs"}
                 </button>
               )
               : null}
@@ -926,7 +835,9 @@ function OperatorIssueCard({
             : item.requiresDecision
             ? "Decision needed"
             : "Open"}
-          {detectedAt ? <time dateTime={item.detectedAt}>{detectedAt}</time> : null}
+          {detectedAt
+            ? <time dateTime={item.detectedAt}>{detectedAt}</time>
+            : null}
         </span>
       </header>
       <div className="neb-operator-issue-copy">
@@ -955,21 +866,22 @@ function OperatorIssueCard({
             <div>
               {affected.map((agent) => (
                 <a
-                  href={`/agents/${encodeURIComponent(agent.slug)}?pane=alerts&item=${
-                    encodeURIComponent(item.id)
-                  }`}
+                  href={`/agents/${
+                    encodeURIComponent(agent.slug)
+                  }?pane=alerts&item=${encodeURIComponent(item.id)}`}
                   key={agent.id}
                   onClick={(event) => {
                     event.preventDefault();
                     onNavigate(
-                      `/agents/${encodeURIComponent(agent.slug)}?pane=alerts&item=${
-                        encodeURIComponent(item.id)
-                      }`,
+                      `/agents/${
+                        encodeURIComponent(agent.slug)
+                      }?pane=alerts&item=${encodeURIComponent(item.id)}`,
                       { scroll: "preserve" },
                     );
                   }}
                 >
-                  {agent.name}{agent.blocking ? " · blocked" : ""}
+                  {agent.name}
+                  {agent.blocking ? " · blocked" : ""}
                 </a>
               ))}
             </div>
@@ -1076,7 +988,9 @@ export function OperatorIssueDeck({
       return new Set([...current].filter((id) => available.has(id)));
     });
   }, [projection.items]);
-  const entries = projection.items.filter(({ item }) => !hiddenIds.has(item.id));
+  const entries = projection.items.filter(({ item }) =>
+    !hiddenIds.has(item.id)
+  );
   const deepLinked = resolveOperatorAttentionEntry(entries, itemId);
   useEffect(() => {
     if (!deepLinked || !targetRef.current) return;
@@ -1151,19 +1065,19 @@ export function OperatorIssueDeck({
           </div>
         )
         : visible.map((entry) => (
-        <OperatorIssueCard
-          agents={agents}
-          compact={compact}
-          deepLinked={deepLinked?.item.id === entry.item.id}
-          entry={entry}
-          key={entry.item.id}
-          onAttentionAction={act}
-          onChanged={onChanged}
-          onNavigate={onNavigate}
-          read={Boolean(entry.attention.readAt) || readIds.has(entry.item.id)}
-          showAffectedAgents={showAffectedAgents}
-          targetRef={targetRef}
-        />
+          <OperatorIssueCard
+            agents={agents}
+            compact={compact}
+            deepLinked={deepLinked?.item.id === entry.item.id}
+            entry={entry}
+            key={entry.item.id}
+            onAttentionAction={act}
+            onChanged={onChanged}
+            onNavigate={onNavigate}
+            read={Boolean(entry.attention.readAt) || readIds.has(entry.item.id)}
+            showAffectedAgents={showAffectedAgents}
+            targetRef={targetRef}
+          />
         ))}
       {!staleDeepLink && visible.length === 0
         ? (

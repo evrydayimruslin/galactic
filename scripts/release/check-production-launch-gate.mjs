@@ -20,11 +20,6 @@ const REQUIRED_RUNS = [
   },
   { name: "API Deploy", category: "production", allowedEvents: ["push"] },
   {
-    name: "Compute Deploy",
-    category: "production",
-    allowedEvents: ["workflow_dispatch"],
-  },
-  {
     name: "Launch Web Deploy",
     category: "production",
     allowedEvents: ["push"],

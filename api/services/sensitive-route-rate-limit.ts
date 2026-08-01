@@ -18,6 +18,7 @@ export type SensitiveRoute =
   | "user:marketplace_buy"
   | "user:marketplace_metrics_visibility"
   | "user:byok_create"
+  | "user:byok_validate"
   | "user:byok_update"
   | "user:byok_delete"
   | "user:byok_primary"
@@ -236,6 +237,16 @@ export const SENSITIVE_ROUTE_RATE_LIMITS: Record<
     unavailableMessage:
       "BYOK setup is temporarily unavailable while protection controls recover. Please try again shortly.",
   },
+  "user:byok_validate": {
+    endpoint: "user:byok_validate",
+    limit: 12,
+    windowMinutes: 10,
+    resource: "POST /api/launch/byok/validate",
+    limitMessage:
+      "Too many credential test attempts. Please wait and try again.",
+    unavailableMessage:
+      "Credential testing is temporarily unavailable while protection controls recover. Please try again shortly.",
+  },
   "user:byok_update": {
     endpoint: "user:byok_update",
     limit: 20,
@@ -269,8 +280,7 @@ export const SENSITIVE_ROUTE_RATE_LIMITS: Record<
     limit: 20,
     windowMinutes: 10,
     resource: "PUT /api/launch/platform-model",
-    limitMessage:
-      "Too many platform model changes. Please wait and try again.",
+    limitMessage: "Too many platform model changes. Please wait and try again.",
     unavailableMessage:
       "Platform model changes are temporarily unavailable while protection controls recover. Please try again shortly.",
   },

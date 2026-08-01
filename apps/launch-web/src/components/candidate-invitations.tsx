@@ -70,7 +70,8 @@ function listValue(values: string[], empty = "Not requested"): string {
 }
 
 function isInferenceDeclaration(value: string): boolean {
-  return /inference|model|llm|^ai:(?:call|embed)$/iu.test(value);
+  return value === "ai:call" || value === "ai:embed" ||
+    value === "inference.generate" || value === "inference.embed";
 }
 
 export function candidateManifestRows(
@@ -620,9 +621,7 @@ export function CandidateInvitations({
     if (outcomes.length === 1 && completed.length === 1) {
       const agent = completed[0]?.result.response?.agent;
       if (agent) {
-        navigate(
-          `/agents/${encodeURIComponent(agent.slug)}`,
-        );
+        navigate("/?setup=1");
       }
     }
   };
@@ -905,14 +904,7 @@ export function CandidateInvitations({
                     {result.state === "completed" && result.response?.agent
                       ? (
                         <button
-                          onClick={() =>
-                            navigate(
-                              `/agents/${
-                                encodeURIComponent(
-                                  result.response!.agent!.slug,
-                                )
-                              }`,
-                            )}
+                          onClick={() => navigate("/?setup=1")}
                           type="button"
                         >
                           Continue setup
@@ -1000,10 +992,7 @@ function DeploymentReceipts({
               </p>
             </div>
             <button
-              onClick={() =>
-                navigate(
-                  `/agents/${encodeURIComponent(receipt.agent.slug)}`,
-                )}
+              onClick={() => navigate("/?setup=1")}
               type="button"
             >
               Continue setup

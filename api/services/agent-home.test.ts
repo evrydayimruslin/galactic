@@ -127,7 +127,7 @@ function input(
       permissions: ["ai:call", "app:call", "notify:owner"],
     },
     effectivePermissions: ["ai:call", "app:call", "notify:owner"],
-    byokConfigured: true,
+    inference: { operations: ["generate"], configured: true },
     ignoredPermissions: [],
     functions,
     dependencies: [{ app: "archive", functions: ["store"], access: "write" }],

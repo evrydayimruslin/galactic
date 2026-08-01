@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { pickLatestWorkflowRun } from "./production-launch-gate-runs.mjs";
@@ -40,31 +41,15 @@ test("production evidence must come from the release tag push", () => {
   assert.equal(picked.id, 22);
 });
 
-test("accepts an exact-tag manual production Compute release", () => {
-  const spec = {
-    name: "Compute Deploy",
-    category: "production",
-    allowedEvents: ["workflow_dispatch"],
-  };
-  const picked = pickLatestWorkflowRun({
-    spec,
-    releaseTag,
-    runs: [
-      {
-        id: 23,
-        name: spec.name,
-        event: "workflow_dispatch",
-        head_branch: "main",
-      },
-      {
-        id: 24,
-        name: spec.name,
-        event: "workflow_dispatch",
-        head_branch: releaseTag,
-      },
-    ],
-  });
-  assert.equal(picked.id, 24);
+test("ordinary production releases do not require a Compute deployment", async () => {
+  const gate = await readFile(
+    new URL("./check-production-launch-gate.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(gate, /name:\s*['"]Compute Deploy['"]/u);
+  assert.match(gate, /name:\s*['"]API Deploy['"]/u);
+  assert.match(gate, /name:\s*['"]Supabase Production DB['"]/u);
+  assert.match(gate, /name:\s*['"]Launch Web Deploy['"]/u);
 });
 
 test("returns null when only manual or wrong-ref production runs exist", () => {

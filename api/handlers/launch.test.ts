@@ -1543,6 +1543,10 @@ Deno.test("launch facade: status exposes self-describing agent links", async () 
     );
     assertEquals(body.apiRoutes.includes("GET /api/launch/byok"), true);
     assertEquals(
+      body.apiRoutes.includes("POST /api/launch/byok/validate"),
+      true,
+    );
+    assertEquals(
       body.apiRoutes.includes("PUT /api/launch/byok/:provider"),
       true,
     );
@@ -1556,6 +1560,10 @@ Deno.test("launch facade: status exposes self-describing agent links", async () 
     );
     assertEquals(
       body.apiRoutes.includes("GET /api/launch/inference-options"),
+      true,
+    );
+    assertEquals(
+      body.apiRoutes.includes("GET /api/launch/fleet/setup"),
       true,
     );
     assertEquals(body.endpoints.widgetRender, undefined);
@@ -1665,9 +1673,11 @@ Deno.test("launch facade: openapi documents curated launch and MCP paths", async
       false,
     );
     assertEquals(Boolean(spec.paths["/api/launch/byok"]), true);
+    assertEquals(Boolean(spec.paths["/api/launch/byok/validate"]), true);
     assertEquals(Boolean(spec.paths["/api/launch/byok/{provider}"]), true);
     assertEquals(Boolean(spec.paths["/api/launch/byok/primary"]), true);
     assertEquals(Boolean(spec.paths["/api/launch/inference-options"]), true);
+    assertEquals(Boolean(spec.paths["/api/launch/fleet/setup"]), true);
     assertEquals(
       Object.keys(spec.paths).some((path) => path.includes("/widgets")),
       false,
@@ -3612,6 +3622,18 @@ Deno.test({
         const attempts: Array<{ path: string; init?: RequestInit }> = [
           { path: "/api/launch/byok" },
           {
+            path: "/api/launch/byok/validate",
+            init: {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                provider: "openrouter",
+                apiKey: "sk-or-test",
+                operations: ["generate"],
+              }),
+            },
+          },
+          {
             path: "/api/launch/byok/openrouter",
             init: {
               method: "PUT",
@@ -3711,6 +3733,7 @@ Deno.test({
         const attempts: Array<
           { path: string; method: string; body?: unknown }
         > = [
+          { path: "/api/launch/fleet/setup", method: "GET" },
           { path: "/api/launch/agents/private-helper/home", method: "GET" },
           {
             path:
@@ -5209,6 +5232,189 @@ Deno.test("launch facade: byok summary lists providers without key material", as
         },
       },
     })),
+  );
+});
+
+Deno.test("launch facade: BYOK Test returns a short-lived key-bound receipt without saving", async () => {
+  let providerCalls = 0;
+  let saveCalls = 0;
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(
+        new Request("https://ultralight.test/api/launch/byok/validate", {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer browser-session-token",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            provider: "openrouter",
+            apiKey: "sk-or-private-test-key",
+            model: "openai/gpt-4o-mini",
+            operations: ["generate"],
+          }),
+        }),
+      );
+      const body = await response.json() as {
+        valid?: boolean;
+        validationReceipt?: string;
+        expiresAt?: string;
+        operations?: string[];
+      };
+      assertEquals(response.status, 200);
+      assertEquals(body.valid, true);
+      assertEquals(body.operations, ["generate"]);
+      assertEquals(body.validationReceipt?.split(".").length, 2);
+      assertEquals(Number.isFinite(Date.parse(body.expiresAt || "")), true);
+      assertEquals(providerCalls, 1);
+      assertEquals(saveCalls, 0);
+    },
+    async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === "https://supabase.test/auth/v1/user") {
+        return jsonResponse({
+          id: "user-1",
+          email: "founder@example.com",
+          user_metadata: {},
+        });
+      }
+      if (url.includes("/rest/v1/users?") && url.includes("select=id")) {
+        return jsonResponse([{ id: "user-1" }]);
+      }
+      if (url.includes("/rest/v1/users?") && url.includes("select=tier")) {
+        return jsonResponse([{ tier: "free" }]);
+      }
+      if (url.endsWith("/rest/v1/rpc/check_rate_limit")) {
+        return jsonResponse(true);
+      }
+      if (url === "https://openrouter.ai/api/v1/chat/completions") {
+        providerCalls += 1;
+        return jsonResponse({ choices: [{ message: { content: "OK" } }] });
+      }
+      if (url.endsWith("/rest/v1/rpc/save_validated_launch_byok_provider")) {
+        saveCalls += 1;
+        return jsonResponse({});
+      }
+      return jsonResponse([]);
+    },
+    { BYOK_VALIDATION_SIGNING_SECRET: "test-validation-signing-secret" },
+  );
+});
+
+Deno.test("launch facade: Save atomically persists the exact tested BYOK proof without retesting", async () => {
+  const apiKey = "sk-or-private-save-key";
+  let providerCalls = 0;
+  let savedBody: Record<string, unknown> | null = null;
+  await withLaunchEnv(
+    async () => {
+      const tested = await handleLaunch(
+        new Request("https://ultralight.test/api/launch/byok/validate", {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer browser-session-token",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            provider: "openrouter",
+            apiKey,
+            model: "openai/gpt-4o-mini",
+            operations: ["generate"],
+          }),
+        }),
+      );
+      const proof = await tested.json() as { validationReceipt: string };
+      assertEquals(tested.status, 200);
+
+      const saved = await handleLaunch(
+        new Request("https://ultralight.test/api/launch/byok/openrouter", {
+          method: "PUT",
+          headers: {
+            Authorization: "Bearer browser-session-token",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            apiKey,
+            model: "openai/gpt-4o-mini",
+            operations: ["generate"],
+            validationReceipt: proof.validationReceipt,
+            setPrimary: true,
+          }),
+        }),
+      );
+      assertEquals(saved.status, 200);
+      assertEquals(providerCalls, 1);
+      assertEquals(savedBody?.p_provider, "openrouter");
+      assertEquals(savedBody?.p_model, "openai/gpt-4o-mini");
+      assertEquals(savedBody?.p_set_primary, true);
+      assertEquals(savedBody?.p_encrypted_key === apiKey, false);
+      const validation = savedBody?.p_validation as
+        | Record<string, unknown>
+        | undefined;
+      assertEquals(validation?.policy_version, "launch-byok-v1");
+      assertEquals(validation?.provider, "openrouter");
+      assertEquals(validation?.operations, ["generate"]);
+    },
+    async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === "https://supabase.test/auth/v1/user") {
+        return jsonResponse({
+          id: "user-1",
+          email: "founder@example.com",
+          user_metadata: {},
+        });
+      }
+      if (url.includes("/rest/v1/users?") && url.includes("byok_keys")) {
+        return jsonResponse([byokUserRow()]);
+      }
+      if (url.includes("/rest/v1/users?") && url.includes("select=id")) {
+        return jsonResponse([{ id: "user-1" }]);
+      }
+      if (url.includes("/rest/v1/users?") && url.includes("select=tier")) {
+        return jsonResponse([{ tier: "free" }]);
+      }
+      if (url.endsWith("/rest/v1/rpc/check_rate_limit")) {
+        return jsonResponse(true);
+      }
+      if (url === "https://openrouter.ai/api/v1/chat/completions") {
+        providerCalls += 1;
+        return jsonResponse({ choices: [{ message: { content: "OK" } }] });
+      }
+      if (url.endsWith("/rest/v1/rpc/save_validated_launch_byok_provider")) {
+        savedBody = JSON.parse(String(init?.body || "{}"));
+        return jsonResponse({});
+      }
+      return jsonResponse([]);
+    },
+    {
+      BYOK_ENCRYPTION_KEY: "test-byok-encryption-secret",
+      BYOK_VALIDATION_SIGNING_SECRET: "test-validation-signing-secret",
+    },
+  );
+});
+
+Deno.test("launch Fleet setup: an account with no pending Agents gets an empty private plan", async () => {
+  await withLaunchEnv(
+    async () => {
+      const response = await handleLaunch(
+        new Request("https://ultralight.test/api/launch/fleet/setup", {
+          headers: { Authorization: "Bearer browser-session-token" },
+        }),
+      );
+      const body = await response.json() as {
+        agents: unknown[];
+        inference: unknown;
+        pendingAgentCount: number;
+        readyToActivateCount: number;
+      };
+      assertEquals(response.status, 200);
+      assertEquals(response.headers.get("cache-control"), "private, no-store");
+      assertEquals(response.headers.get("vary"), "Cookie, Authorization");
+      assertEquals(body.agents, []);
+      assertEquals(body.inference, null);
+      assertEquals(body.pendingAgentCount, 0);
+      assertEquals(body.readyToActivateCount, 0);
+    },
+    byokSessionMock(byokUserRow()),
   );
 });
 

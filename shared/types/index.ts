@@ -54,6 +54,16 @@ export interface BYOKConfig {
   has_key: boolean; // Never expose actual key to frontend
   model?: string; // Default model for this provider
   added_at: string;
+  validation?: BYOKValidationMetadata;
+}
+
+export interface BYOKValidationMetadata {
+  policy_version: string;
+  key_version: string;
+  provider: ActiveBYOKProvider;
+  model?: string;
+  operations: Array<"generate" | "embed">;
+  validated_at: string;
 }
 
 export interface User {
@@ -1922,6 +1932,8 @@ export interface BYOKProviderInfo {
 
 export interface BYOKProviderCapabilities {
   chat: boolean;
+  /** Galactic's current host-side embedding binding accepts this provider's key. */
+  embeddings: boolean;
   streaming: boolean;
   tools: boolean;
   jsonMode: boolean;
@@ -1949,6 +1961,7 @@ export interface BYOKModel {
 
 const OPENAI_COMPAT_TEXT_CAPABILITIES: BYOKProviderCapabilities = {
   chat: true,
+  embeddings: false,
   streaming: true,
   tools: true,
   jsonMode: true,
@@ -2008,6 +2021,7 @@ export const BYOK_PROVIDERS: Record<ActiveBYOKProvider, BYOKProviderInfo> = {
     ],
     capabilities: {
       ...OPENAI_COMPAT_TEXT_CAPABILITIES,
+      embeddings: true,
       multimodal: true,
       webSearch: true,
     },
