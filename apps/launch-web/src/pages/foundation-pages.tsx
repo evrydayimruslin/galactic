@@ -40,8 +40,7 @@ import {
   type LaunchWalletSummary,
   type LaunchWalletTransaction,
 } from "../../../../shared/contracts/launch.ts";
-import {
-} from "../../../../shared/types/index.ts";
+import { BYOK_PROVIDERS } from "../../../../shared/types/index.ts";
 import type { LaunchPageProps } from "../App";
 import {
   hasLaunchAuthToken,
@@ -522,6 +521,9 @@ const byokProviderFixtures: LaunchByokProviderOption[] = [
     id: "openrouter",
     name: "OpenRouter",
     primary: false,
+    models: BYOK_PROVIDERS.openrouter.models,
+    capabilities: BYOK_PROVIDERS.openrouter.capabilities,
+    validation: null,
   },
   {
     apiKeyPrefix: "sk-",
@@ -531,6 +533,9 @@ const byokProviderFixtures: LaunchByokProviderOption[] = [
     id: "openai",
     name: "OpenAI",
     primary: false,
+    models: BYOK_PROVIDERS.openai.models,
+    capabilities: BYOK_PROVIDERS.openai.capabilities,
+    validation: null,
   },
 ];
 

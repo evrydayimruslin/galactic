@@ -112,6 +112,7 @@ import {
   type LaunchByokMutationResponse,
   type LaunchByokProviderOption,
   type LaunchByokSummaryResponse,
+  type LaunchByokValidationResponse,
   type LaunchCallerFunctionPermissionsResponse,
   type LaunchCallerFunctionPermissionsUpdateRequest,
   type LaunchCandidateDeployRequest,
@@ -124,6 +125,7 @@ import {
   type LaunchFleetPreferencesResponse,
   type LaunchFleetPreferencesUpdateRequest,
   type LaunchFleetResponse,
+  type LaunchFleetSetupResponse,
   type LaunchFleetShortcutMap,
   type LaunchFolder,
   type LaunchFullTimeDisclosure,
@@ -135,6 +137,7 @@ import {
   type LaunchHandoffCreateRequest,
   type LaunchHandoffCreateResponse,
   type LaunchHandoffIntent,
+  type LaunchInferenceOperation,
   type LaunchInferenceOptionsResponse,
   type LaunchInstallInstruction,
   type LaunchInstallResponse,
@@ -188,7 +191,17 @@ import type {
   VersionMetadata,
 } from "../../shared/types/index.ts";
 import { createUserService } from "../services/user.ts";
-import { validateAPIKey } from "../services/ai.ts";
+import {
+  BYOK_VALIDATION_POLICY_VERSION,
+  ByokValidationError,
+  validateByokCredential,
+  verifyByokValidationReceipt,
+} from "../services/byok-validation.ts";
+import {
+  deriveReleaseInferenceRequirements,
+  providerSupportsInferenceOperations,
+} from "../services/release-inference-requirements.ts";
+import { buildFleetSetupResponse } from "../services/fleet-setup.ts";
 import { checkChatBalance } from "../services/chat-billing.ts";
 import {
   CHAT_MIN_BALANCE_LIGHT,
@@ -507,6 +520,8 @@ const APP_SELECT = [
   "current_version_promoted_at",
   "release_generation",
   "deployment_state",
+  "active_release_digest",
+  "setup_required_at",
   "versions",
   "manifest",
   "exports",
@@ -561,6 +576,8 @@ interface LaunchAppRow {
   current_version_promoted_at?: string | null;
   release_generation?: number | string | null;
   deployment_state?: string | null;
+  active_release_digest?: string | null;
+  setup_required_at?: string | null;
   versions?: string[] | null;
   manifest?: unknown;
   exports?: string[] | null;
@@ -1434,6 +1451,11 @@ export async function handleLaunch(
       return await handleLaunchFleetPreferences(request, method);
     }
 
+    if (path === "/api/launch/fleet/setup") {
+      if (method !== "GET") return error("Method not allowed", 405);
+      return await privateLaunchRoute(() => handleLaunchFleetSetup(request));
+    }
+
     if (path === "/api/launch/search") {
       return await handleLaunchSearch(request, method);
     }
@@ -2105,7 +2127,7 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
           operationId: "upsertLaunchByokProvider",
           summary: "Add or update a BYOK provider API key",
           description:
-            "Account-session endpoint. Stores the provider API key encrypted server-side. The key is validated against the provider unless validate is false.",
+            "Account-session endpoint. Stores the provider API key encrypted server-side only after a matching short-lived validation receipt is verified. Legacy clients without a receipt are validated inline; validate:false never bypasses testing.",
           security: [{ bearerAuth: [] }],
           parameters: [{
             name: "provider",
@@ -2153,6 +2175,28 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             "400": { description: "Invalid provider" },
             "401": { description: "Authentication required" },
             "403": { description: "Account session required" },
+          },
+        },
+      },
+      "/api/launch/byok/validate": {
+        post: {
+          operationId: "validateLaunchByokProvider",
+          summary: "Test a BYOK key without saving it",
+          description:
+            "Runs the exact requested generate/embed checks and returns a five-minute receipt bound to the account, provider, model, operations, and key fingerprint.",
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: jsonContent({
+              $ref: "#/components/schemas/ByokValidationRequest",
+            }),
+          },
+          responses: {
+            "200": { description: "Key tested; short-lived receipt issued" },
+            "400": { description: "Key rejected" },
+            "422": { description: "Model or operation unsupported" },
+            "429": { description: "Provider or Galactic rate limit" },
+            "502": { description: "Provider temporarily unavailable" },
           },
         },
       },
@@ -3558,7 +3602,15 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
         },
         ByokProviderOption: {
           type: "object",
-          required: ["id", "name", "configured", "primary"],
+          required: [
+            "id",
+            "name",
+            "configured",
+            "primary",
+            "models",
+            "capabilities",
+            "validation",
+          ],
           properties: {
             id: { type: "string" },
             name: { type: "string" },
@@ -3567,6 +3619,9 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             primary: { type: "boolean" },
             defaultModel: { type: ["string", "null"] },
             model: { type: ["string", "null"] },
+            models: { type: "array", items: { type: "object" } },
+            capabilities: { type: "object" },
+            validation: { type: ["object", "null"] },
             apiKeyPrefix: { type: ["string", "null"] },
             apiKeyUrl: { type: ["string", "null"] },
             docsUrl: { type: ["string", "null"] },
@@ -3591,7 +3646,34 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
           properties: {
             apiKey: { type: "string", minLength: 1 },
             model: { type: "string" },
-            validate: { type: "boolean", default: true },
+            operations: {
+              type: "array",
+              uniqueItems: true,
+              items: { type: "string", enum: ["generate", "embed"] },
+            },
+            validationReceipt: { type: "string" },
+            setPrimary: { type: "boolean" },
+            validate: {
+              type: "boolean",
+              deprecated: true,
+              description:
+                "Compatibility-only; false does not bypass validation.",
+            },
+          },
+        },
+        ByokValidationRequest: {
+          type: "object",
+          required: ["provider", "apiKey", "operations"],
+          properties: {
+            provider: { type: "string" },
+            apiKey: { type: "string", minLength: 1 },
+            model: { type: "string" },
+            operations: {
+              type: "array",
+              minItems: 1,
+              uniqueItems: true,
+              items: { type: "string", enum: ["generate", "embed"] },
+            },
           },
         },
         ByokMutation: {
@@ -4566,6 +4648,19 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             "Batched Agent state, activity, Alerts, and shared capacity",
         },
         "401": { description: "Authentication required" },
+      },
+    },
+  };
+  publicSpec.paths["/api/launch/fleet/setup"] = {
+    get: {
+      operationId: "getLaunchFleetSetup",
+      summary: "Get the canonical post-deployment setup plan",
+      description:
+        "Composes each private setup_required Agent Home plus one account-level, release-derived inference requirement.",
+      security: [{ bearerAuth: [] }],
+      responses: {
+        "200": { description: "Fleet setup plan and activation readiness" },
+        "403": { description: "Owner account session required" },
       },
     },
   };
@@ -6021,14 +6116,8 @@ async function handleLaunchApiKeys(
 }
 
 function launchAppUsesInference(row: LaunchAppRow): boolean {
-  const manifest = typeof row.manifest === "string"
-    ? row.manifest
-    : row.manifest
-    ? JSON.stringify(row.manifest)
-    : null;
-  const permissions =
-    resolveStrictManifestPermissions({ manifest }).permissions;
-  return permissions.includes("ai:call") || permissions.includes("ai:embed");
+  return deriveReleaseInferenceRequirements(parseManifest(row.manifest))
+    .required;
 }
 
 async function scheduleLaunchAccountByokReconciliation(
@@ -6044,20 +6133,51 @@ async function scheduleLaunchAccountByokReconciliation(
         fetchOwnedApps(userId),
       ]);
       if (!profile) throw new Error("Account profile is unavailable");
-      const configured = Boolean(
-        profile.byok_enabled && profile.byok_provider &&
-          profile.byok_configs.some((config) =>
-            config.provider === profile.byok_provider && config.has_key
-          ),
+      const inferenceApps = apps.filter((row) =>
+        row.visibility === "private" && launchAppUsesInference(row)
       );
-      const affectedAgents = apps
-        .filter((row) =>
-          row.visibility === "private" && launchAppUsesInference(row)
+      const pendingInferenceApps = inferenceApps.filter((row) =>
+        row.deployment_state === "setup_required"
+      );
+      const primary = profile.byok_provider &&
+          isActiveBYOKProvider(profile.byok_provider)
+        ? profile.byok_provider
+        : null;
+      const primaryConfig = primary
+        ? profile.byok_configs.find((config) =>
+          config.provider === primary && config.has_key
         )
-        .map((row) => ({
-          id: row.id,
-          name: row.name || row.slug || row.id,
-        }));
+        : null;
+      const requiredOperations = [
+        ...new Set(
+          pendingInferenceApps.flatMap((row) =>
+            deriveReleaseInferenceRequirements(parseManifest(row.manifest))
+              .operations
+          ),
+        ),
+      ];
+      const configured = Boolean(
+        profile.byok_enabled && primary && primaryConfig &&
+          (requiredOperations.length === 0 ||
+            (primaryConfig.validation?.policy_version ===
+                BYOK_VALIDATION_POLICY_VERSION &&
+              providerSupportsInferenceOperations(
+                primary,
+                requiredOperations,
+              ) &&
+              requiredOperations.every((operation) =>
+                primaryConfig.validation?.operations.includes(operation)
+              ) &&
+              (!requiredOperations.includes("generate") ||
+                (primaryConfig.model || "") ===
+                  (primaryConfig.validation.model || "")))),
+      );
+      const affectedAgents =
+        (pendingInferenceApps.length > 0 ? pendingInferenceApps : inferenceApps)
+          .map((row) => ({
+            id: row.id,
+            name: row.name || row.slug || row.id,
+          }));
       await reconcileAccountByokOperatorItem({
         userId,
         configured,
@@ -6443,6 +6563,13 @@ async function handleLaunchByok(
     return error("Method not allowed for launch BYOK primary provider", 405);
   }
 
+  if (path === "/api/launch/byok/validate") {
+    if (method !== "POST") {
+      return error("Method not allowed for launch BYOK validation", 405);
+    }
+    return await handleLaunchByokValidation(request, user);
+  }
+
   const providerMatch = path.match(/^\/api\/launch\/byok\/([^/]+)$/);
   if (providerMatch) {
     const providerEntry = resolveLaunchByokProvider(
@@ -6489,6 +6616,79 @@ async function handleLaunchByok(
   return error("Launch BYOK endpoint not found", 404);
 }
 
+function normalizeLaunchInferenceOperations(
+  value: unknown,
+  fallback: LaunchInferenceOperation[] = ["generate"],
+): LaunchInferenceOperation[] {
+  if (value === undefined) return [...fallback];
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new RequestValidationError(
+      "At least one inference operation is required",
+      400,
+    );
+  }
+  const operations = value.map((operation) => {
+    if (operation !== "generate" && operation !== "embed") {
+      throw new RequestValidationError(
+        "Inference operations must be generate or embed",
+        400,
+      );
+    }
+    return operation;
+  });
+  return [...new Set(operations)];
+}
+
+function launchByokValidationError(errorValue: unknown): Response {
+  if (errorValue instanceof ByokValidationError) {
+    return privateLaunchJson({
+      error: errorValue.message,
+      code: errorValue.code,
+      ...(errorValue.details ? { details: errorValue.details } : {}),
+    }, errorValue.status);
+  }
+  console.error("[LAUNCH] BYOK validation failed:", errorValue);
+  return privateLaunchJson({
+    error: "Credential validation is temporarily unavailable",
+    code: "provider_unavailable",
+  }, 503);
+}
+
+async function handleLaunchByokValidation(
+  request: Request,
+  user: AuthUser,
+): Promise<Response> {
+  const body = asRecord(await readJsonBody<unknown>(request)) || {};
+  const providerEntry = resolveLaunchByokProvider(body.provider);
+  if (!providerEntry) return error("Invalid provider", 400);
+  const apiKeyValue = body.apiKey ?? body.api_key;
+  if (typeof apiKeyValue !== "string" || apiKeyValue.trim().length === 0) {
+    return error("API key is required", 400);
+  }
+  const model = normalizeLaunchByokModel(body.model);
+  const operations = normalizeLaunchInferenceOperations(body.operations);
+
+  return await withSensitiveRouteRateLimit(
+    user.id,
+    "user:byok_validate",
+    async () => {
+      try {
+        return privateLaunchJson(
+          await validateByokCredential({
+            userId: user.id,
+            provider: providerEntry.provider,
+            apiKey: apiKeyValue.trim(),
+            model,
+            operations,
+          }) satisfies LaunchByokValidationResponse,
+        );
+      } catch (validationError) {
+        return launchByokValidationError(validationError);
+      }
+    },
+  );
+}
+
 async function handleLaunchByokUpsert(
   request: Request,
   user: AuthUser,
@@ -6504,7 +6704,11 @@ async function handleLaunchByokUpsert(
   }
   const apiKey = apiKeyValue.trim();
   const model = normalizeLaunchByokModel(body.model);
-  const validate = body.validate !== false;
+  const operations = normalizeLaunchInferenceOperations(body.operations);
+  const validationReceipt = typeof body.validationReceipt === "string"
+    ? body.validationReceipt.trim()
+    : "";
+  const setPrimary = body.setPrimary === true;
 
   const profile = await userService.getUser(user.id);
   if (!profile) {
@@ -6519,35 +6723,41 @@ async function handleLaunchByokUpsert(
     configured ? "user:byok_update" : "user:byok_create",
     async () => {
       try {
-        if (validate) {
-          try {
-            await validateAPIKey(providerEntry.provider, apiKey);
-          } catch (validationErr) {
-            return error(
-              `API key validation failed: ${
-                validationErr instanceof Error
-                  ? validationErr.message
-                  : "Invalid key"
-              }`,
-              400,
-            );
-          }
-        }
-
-        if (configured) {
-          await userService.updateBYOKProvider(
-            user.id,
-            providerEntry.provider,
-            { apiKey, model },
-          );
-        } else {
-          await userService.addBYOKProvider(
-            user.id,
-            providerEntry.provider,
+        let receipt = validationReceipt;
+        // Compatibility for existing clients: Save still validates, but never
+        // honors the old validate:false bypass. New UI uses explicit Test then
+        // Save and supplies the short-lived receipt to avoid a second charge.
+        if (!receipt) {
+          receipt = (await validateByokCredential({
+            userId: user.id,
+            provider: providerEntry.provider,
             apiKey,
             model,
-          );
+            operations,
+          })).validationReceipt;
         }
+        const validation = await verifyByokValidationReceipt(receipt, {
+          userId: user.id,
+          provider: providerEntry.provider,
+          apiKey,
+          model,
+          operations,
+        });
+        await userService.saveValidatedBYOKProvider(
+          user.id,
+          providerEntry.provider,
+          apiKey,
+          validation.model ?? undefined,
+          {
+            policy_version: validation.policyVersion,
+            key_version: crypto.randomUUID(),
+            provider: validation.provider,
+            ...(validation.model ? { model: validation.model } : {}),
+            operations: validation.operations,
+            validated_at: validation.validatedAt,
+          },
+          setPrimary || !profile.byok_provider,
+        );
 
         await scheduleLaunchAccountByokReconciliation(user.id);
         return json(
@@ -6558,6 +6768,9 @@ async function handleLaunchByokUpsert(
           } satisfies LaunchByokMutationResponse,
         );
       } catch (err) {
+        if (err instanceof ByokValidationError) {
+          return launchByokValidationError(err);
+        }
         console.error("[LAUNCH] BYOK provider upsert failed:", err);
         if (err instanceof Error && err.message.includes("not configured")) {
           return error(err.message, 400);
@@ -7127,6 +7340,16 @@ async function buildLaunchByokSummary(
         primary: configured && profile.byok_provider === info.id,
         defaultModel: info.defaultModel ?? null,
         model: config?.model ?? null,
+        models: info.models,
+        capabilities: info.capabilities,
+        validation: config?.validation
+          ? {
+            policyVersion: config.validation.policy_version,
+            model: config.validation.model ?? null,
+            operations: config.validation.operations,
+            validatedAt: config.validation.validated_at,
+          }
+          : null,
         apiKeyPrefix: info.apiKeyPrefix ?? null,
         apiKeyUrl: info.apiKeyUrl ?? null,
         docsUrl: info.docsUrl ?? null,
@@ -8276,6 +8499,15 @@ async function handleLaunchFleet(request: Request): Promise<Response> {
           viewerId: user.id,
           installedIds,
         }),
+        deploymentState: row.deployment_state === "legacy" ||
+            row.deployment_state === "materializing" ||
+            row.deployment_state === "setup_required" ||
+            row.deployment_state === "ready" ||
+            row.deployment_state === "disabled"
+          ? row.deployment_state
+          : undefined,
+        activeReleaseDigest: row.active_release_digest || null,
+        setupRequiredAt: row.setup_required_at || null,
         state: projection.state,
         health: projection.health,
         routineCount: projection.routineCount,
@@ -8308,6 +8540,77 @@ async function handleLaunchFleet(request: Request): Promise<Response> {
     generatedAt,
   };
   return privateLaunchJson(response);
+}
+
+async function mapWithConcurrency<T, U>(
+  values: readonly T[],
+  concurrency: number,
+  operation: (value: T) => Promise<U>,
+): Promise<U[]> {
+  const results = new Array<U>(values.length);
+  let nextIndex = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+      while (nextIndex < values.length) {
+        const index = nextIndex++;
+        results[index] = await operation(values[index]);
+      }
+    }),
+  );
+  return results;
+}
+
+async function handleLaunchFleetSetup(request: Request): Promise<Response> {
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForAgentHome(user);
+  const [ownedRows, profile] = await Promise.all([
+    fetchOwnedApps(user.id),
+    userService.getUser(user.id),
+  ]);
+  if (!profile) throw new RequestValidationError("User not found", 404);
+
+  const pending = ownedRows.filter((row) =>
+    row.visibility === "private" && row.deployment_state === "setup_required"
+  );
+  const agents = await mapWithConcurrency(pending, 4, async (row) => {
+    let home: LaunchAgentHomeResponse | null = null;
+    let unavailableReason: string | null = null;
+    try {
+      home = await buildLaunchAgentHomeSnapshot(user, row);
+    } catch (snapshotError) {
+      unavailableReason = "Setup status is temporarily unavailable";
+      console.error(
+        `[LAUNCH] Fleet setup snapshot unavailable for ${row.id}:`,
+        snapshotError,
+      );
+    }
+    return {
+      id: row.id,
+      slug: row.slug || row.id,
+      name: row.name || row.slug || row.id,
+      deploymentState: row.deployment_state || null,
+      activeReleaseDigest: row.active_release_digest || null,
+      inference: deriveReleaseInferenceRequirements(
+        parseManifest(row.manifest),
+      ),
+      home,
+      unavailableReason,
+    };
+  });
+
+  return privateLaunchJson(
+    buildFleetSetupResponse({
+      agents,
+      byok: {
+        enabled: profile.byok_enabled,
+        primaryProvider: profile.byok_provider &&
+            isActiveBYOKProvider(profile.byok_provider)
+          ? profile.byok_provider
+          : null,
+        configs: profile.byok_configs,
+      },
+    }) satisfies LaunchFleetSetupResponse,
+  );
 }
 
 function toLaunchAgentCapacityResponse(
@@ -9132,6 +9435,32 @@ async function buildLaunchAgentHomeSnapshotAttempt(
   const candidatePreflightReady = Boolean(candidateManifest) &&
     row.runtime !== "gpu";
   const networkDisclosure = buildAppNetworkDisclosure(manifest, connectedKeys);
+  const inference = deriveReleaseInferenceRequirements(manifest);
+  const activePrimaryProvider = profile?.byok_provider &&
+      isActiveBYOKProvider(profile.byok_provider)
+    ? profile.byok_provider
+    : null;
+  const primaryByok = activePrimaryProvider
+    ? profile?.byok_configs.find((config) =>
+      config.provider === activePrimaryProvider && config.has_key
+    ) ?? null
+    : null;
+  const inferenceConfigured = Boolean(
+    !inference.required ||
+      (profile?.byok_enabled && activePrimaryProvider &&
+        primaryByok?.validation &&
+        primaryByok.validation.policy_version ===
+          BYOK_VALIDATION_POLICY_VERSION &&
+        providerSupportsInferenceOperations(
+          activePrimaryProvider,
+          inference.operations,
+        ) &&
+        inference.operations.every((operation) =>
+          primaryByok.validation?.operations.includes(operation)
+        ) &&
+        (!inference.operations.includes("generate") ||
+          (primaryByok.model || "") === (primaryByok.validation.model || ""))),
+  );
 
   const home = buildAgentHomeResponse({
     now,
@@ -9162,12 +9491,9 @@ async function buildLaunchAgentHomeSnapshotAttempt(
         row.deployment_state === "disabled"
       ? row.deployment_state
       : undefined,
-    byokConfigured: Boolean(
-      profile?.byok_enabled && profile.byok_provider &&
-        profile.byok_configs.some((config) =>
-          config.provider === profile.byok_provider && config.has_key
-        ),
-    ),
+    inference: inference.required
+      ? { operations: inference.operations, configured: inferenceConfigured }
+      : undefined,
     release: {
       versions,
       currentVersion: row.current_version || null,

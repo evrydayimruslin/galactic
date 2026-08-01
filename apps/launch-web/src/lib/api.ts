@@ -7,34 +7,70 @@ import type {
   AgentWiringView,
 } from "../../../../shared/contracts/agent-grants.ts";
 import type {
-  LaunchAgentAdminSummary,
   LaunchAgentActivityResponse,
+  LaunchAgentAdminSummary,
   LaunchAgentAttentionActionRequest,
   LaunchAgentAttentionActionResponse,
   LaunchAgentAttentionProjection,
-  LaunchAgentFunctionsResponse,
   LaunchAgentCapacityResponse,
   LaunchAgentCapacityUpdateRequest,
+  LaunchAgentFunctionsResponse,
   LaunchAgentHomeActionRequest,
   LaunchAgentHomeIdentityUpdateRequest,
   LaunchAgentHomeResponse,
   LaunchAgentHomeRoutineUpdateRequest,
   LaunchAgentHomeSettingsUpdateRequest,
-  LaunchAgentRoutineActionRequest,
   LaunchAgentManagedRoutineActionRequest,
   LaunchAgentManagedRoutineUpdateRequest,
   LaunchAgentPreferencesResponse,
   LaunchAgentPreferencesUpdateRequest,
+  LaunchAgentRoutineActionRequest,
   LaunchAgentRoutineResponse,
   LaunchAgentRoutinesResponse,
   LaunchAgentRoutineUpdateRequest,
+  LaunchAgentSearchRequest,
+  LaunchAgentSearchResponse,
   LaunchAgentSummary,
   LaunchApiKeyCreateRequest,
   LaunchApiKeyCreateResponse,
   LaunchApiKeyDeleteResponse,
   LaunchApiKeyListResponse,
   LaunchByokMutationResponse,
+  LaunchByokPrimaryRequest,
+  LaunchByokSummaryResponse,
+  LaunchByokUpsertRequest,
+  LaunchByokValidationRequest,
+  LaunchByokValidationResponse,
   LaunchCallerFunctionPermissionsResponse,
+  LaunchCallerFunctionPermissionsUpdateRequest,
+  LaunchCandidateDeployRequest,
+  LaunchCandidateDeployResponse,
+  LaunchCandidateDetailResponse,
+  LaunchCandidateListResponse,
+  LaunchDiscoveryRequest,
+  LaunchDiscoveryResponse,
+  LaunchFleetOrderResponse,
+  LaunchFleetOrderUpdateRequest,
+  LaunchFleetPreferencesResponse,
+  LaunchFleetPreferencesUpdateRequest,
+  LaunchFleetResponse,
+  LaunchFleetSetupResponse,
+  LaunchFolderMemberMutationResponse,
+  LaunchFolderMutationResponse,
+  LaunchFunctionInferenceOverrideRequest,
+  LaunchFunctionInferenceResponse,
+  LaunchFunctionRunRequest,
+  LaunchFunctionRunResponse,
+  LaunchGlobalAttentionResponse,
+  LaunchHandoffCreateRequest,
+  LaunchHandoffCreateResponse,
+  LaunchInferenceOptionsResponse,
+  LaunchInstallInstruction,
+  LaunchInstallResponse,
+  LaunchJobStatusResponse,
+  LaunchLeaderboardKind,
+  LaunchLeaderboardResponse,
+  LaunchLibraryResponse,
   LaunchNotificationsMarkReadResponse,
   LaunchNotificationsResponse,
   LaunchOperatorAttentionActionRequest,
@@ -43,49 +79,16 @@ import type {
   LaunchOperatorItemActionResponse,
   LaunchOperatorRoutineRunDetail,
   LaunchOperatorRoutineRunLogExcerpt,
-  LaunchCallerFunctionPermissionsUpdateRequest,
-  LaunchFunctionInferenceOverrideRequest,
-  LaunchFunctionInferenceResponse,
-  LaunchByokPrimaryRequest,
-  LaunchByokSummaryResponse,
-  LaunchByokUpsertRequest,
-  LaunchCandidateDeployRequest,
-  LaunchCandidateDeployResponse,
-  LaunchCandidateDetailResponse,
-  LaunchCandidateListResponse,
-  LaunchDiscoveryRequest,
-  LaunchDiscoveryResponse,
-  LaunchFunctionRunRequest,
-  LaunchFunctionRunResponse,
-  LaunchGlobalAttentionResponse,
-  LaunchHandoffCreateRequest,
-  LaunchHandoffCreateResponse,
-  LaunchInferenceOptionsResponse,
   LaunchPlatformModelRequest,
   LaunchPlatformModelResponse,
-  LaunchInstallInstruction,
-  LaunchInstallResponse,
-  LaunchJobStatusResponse,
-  LaunchLeaderboardKind,
-  LaunchLeaderboardResponse,
-  LaunchFolderMemberMutationResponse,
-  LaunchFolderMutationResponse,
-  LaunchFleetOrderResponse,
-  LaunchFleetOrderUpdateRequest,
-  LaunchFleetPreferencesResponse,
-  LaunchFleetPreferencesUpdateRequest,
-  LaunchFleetResponse,
-  LaunchLibraryResponse,
   LaunchPlatformPrimitiveSuggestion,
   LaunchStoreRequest,
   LaunchStoreResponse,
-  LaunchAgentSearchRequest,
-  LaunchAgentSearchResponse,
-  LaunchSubscriptionResponse,
   LaunchSubscriptionCheckoutAttemptResponse,
   LaunchSubscriptionCheckoutRequest,
   LaunchSubscriptionCheckoutResponse,
   LaunchSubscriptionRedirectResponse,
+  LaunchSubscriptionResponse,
   LaunchTrustCard,
   LaunchWalletDetailKind,
   LaunchWalletDetailResponse,
@@ -103,8 +106,8 @@ import {
   refreshLaunchSessionIfAvailable,
 } from "./auth";
 import type {
-  LaunchComputeRunSummary,
   LaunchComputeRunsResponse,
+  LaunchComputeRunSummary,
   LaunchComputeSettingsResponse,
   LaunchComputeSettingsUpdateRequest,
 } from "./compute";
@@ -470,9 +473,9 @@ export class LaunchApiClient {
     runId: string,
   ): Promise<LaunchOperatorRoutineRunDetail> {
     return this.fetchJson(
-      `/api/launch/agents/${
-        encodeURIComponent(idOrSlug)
-      }/routine-runs/${encodeURIComponent(runId)}`,
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/routine-runs/${
+        encodeURIComponent(runId)
+      }`,
     );
   }
 
@@ -482,11 +485,9 @@ export class LaunchApiClient {
     receiptId: string,
   ): Promise<LaunchOperatorRoutineRunLogExcerpt> {
     return this.fetchJson(
-      `/api/launch/agents/${
-        encodeURIComponent(idOrSlug)
-      }/routine-runs/${encodeURIComponent(runId)}/logs/${
-        encodeURIComponent(receiptId)
-      }`,
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/routine-runs/${
+        encodeURIComponent(runId)
+      }/logs/${encodeURIComponent(receiptId)}`,
     );
   }
 
@@ -600,7 +601,9 @@ export class LaunchApiClient {
     routineId: string,
   ): Promise<LaunchAgentRoutineResponse> {
     return this.fetchJson(
-      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/routines/${encodeURIComponent(routineId)}`,
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/routines/${
+        encodeURIComponent(routineId)
+      }`,
     );
   }
 
@@ -610,7 +613,9 @@ export class LaunchApiClient {
     request: LaunchAgentManagedRoutineUpdateRequest,
   ): Promise<LaunchAgentRoutineResponse> {
     return this.fetchJson(
-      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/routines/${encodeURIComponent(routineId)}`,
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/routines/${
+        encodeURIComponent(routineId)
+      }`,
       { method: "PATCH", body: JSON.stringify(request) },
     );
   }
@@ -621,7 +626,9 @@ export class LaunchApiClient {
     request: LaunchAgentManagedRoutineActionRequest,
   ): Promise<LaunchAgentRoutineResponse> {
     return this.fetchJson(
-      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/routines/${encodeURIComponent(routineId)}/actions`,
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/routines/${
+        encodeURIComponent(routineId)
+      }/actions`,
       { method: "POST", body: JSON.stringify(request) },
     );
   }
@@ -1044,6 +1051,15 @@ export class LaunchApiClient {
     return this.fetchJson("/api/launch/byok");
   }
 
+  validateByok(
+    request: LaunchByokValidationRequest,
+  ): Promise<LaunchByokValidationResponse> {
+    return this.fetchJson("/api/launch/byok/validate", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  }
+
   upsertByokProvider(
     provider: string,
     request: LaunchByokUpsertRequest,
@@ -1072,6 +1088,10 @@ export class LaunchApiClient {
       method: "POST",
       body: JSON.stringify(request),
     });
+  }
+
+  fleetSetup(): Promise<LaunchFleetSetupResponse> {
+    return this.fetchJson("/api/launch/fleet/setup");
   }
 
   inferenceOptions(): Promise<LaunchInferenceOptionsResponse> {
@@ -1248,9 +1268,7 @@ export class LaunchApiClient {
     agentIdOrSlug?: string | null,
   ): Promise<LaunchHandoffCreateResponse> {
     const path = agentIdOrSlug
-      ? `/api/launch/agents/${
-        encodeURIComponent(agentIdOrSlug)
-      }/handoffs`
+      ? `/api/launch/agents/${encodeURIComponent(agentIdOrSlug)}/handoffs`
       : "/api/launch/handoffs";
     return this.fetchJson(path, {
       method: "POST",
@@ -1294,9 +1312,7 @@ export class LaunchApiClient {
     request: LaunchOperatorAttentionActionRequest,
   ): Promise<LaunchOperatorAttentionActionResponse> {
     return this.fetchJson(
-      `/api/launch/operator-items/${
-        encodeURIComponent(itemId)
-      }/attention`,
+      `/api/launch/operator-items/${encodeURIComponent(itemId)}/attention`,
       {
         method: "PATCH",
         body: JSON.stringify(request),
@@ -1331,9 +1347,7 @@ export class LaunchApiClient {
     request: LaunchAgentAttentionActionRequest,
   ): Promise<LaunchAgentAttentionActionResponse> {
     return this.fetchJson(
-      `/api/launch/notifications/${
-        encodeURIComponent(notificationId)
-      }/actions`,
+      `/api/launch/notifications/${encodeURIComponent(notificationId)}/actions`,
       {
         method: "POST",
         body: JSON.stringify(request),

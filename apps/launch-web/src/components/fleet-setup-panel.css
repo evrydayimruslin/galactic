@@ -1,0 +1,30 @@
+.fleet-setup-panel { position: relative; z-index: 2; margin: 0 0 38px; padding: 28px; border: 1px solid var(--line-2); background: color-mix(in srgb, var(--surface, #151515) 94%, var(--accent) 6%); }
+.fleet-setup-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 22px; }
+.fleet-setup-heading h2 { margin: 3px 0 7px; font: 32px/1.08 var(--serif); }
+.fleet-setup-heading p, .fleet-setup-agent p, .fleet-setup-shared-step p { margin: 0; color: var(--ink-3); font-size: 12px; line-height: 1.55; }
+.fleet-setup-heading > span { padding: 6px 9px; border: 1px solid var(--line); color: var(--ink-3); font: 9px var(--mono); text-transform: uppercase; }
+.fleet-setup-kicker { color: var(--accent); font: 9px var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+.fleet-setup-shared-step { display: grid; grid-template-columns: 34px 1fr; gap: 14px; margin-bottom: 16px; padding: 18px; border: 1px solid color-mix(in srgb, var(--accent) 44%, var(--line)); background: rgba(0,0,0,.12); }
+.fleet-setup-step-number { display: grid; width: 27px; height: 27px; place-items: center; border: 1px solid var(--accent); color: var(--accent); font: 10px var(--mono); }
+.fleet-setup-shared-step h3, .fleet-setup-agent h3 { margin: 0 0 5px; font: 18px/1.2 var(--serif); }
+.fleet-setup-shared-step .galactic-byok-form { margin-top: 16px; }
+.fleet-setup-shared-complete { margin-bottom: 16px; padding: 11px 14px; border: 1px solid color-mix(in srgb, var(--green, #74a78d) 45%, var(--line)); color: var(--green, #74a78d); font: 10px var(--mono); }
+.fleet-setup-agent-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 390px), 1fr)); gap: 12px; }
+.fleet-setup-agent { padding: 18px; border: 1px solid var(--line); background: rgba(0,0,0,.1); }
+.fleet-setup-agent > header, .fleet-setup-agent > footer { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.fleet-setup-agent > header > span { color: var(--ink-3); font: 9px var(--mono); text-transform: uppercase; }
+.fleet-setup-agent > header > span.ready { color: var(--green, #74a78d); }
+.fleet-setup-requirements { display: grid; gap: 9px; margin: 16px 0; }
+.fleet-setup-requirement { display: grid; grid-template-columns: 18px 1fr; gap: 8px; padding-top: 9px; border-top: 1px solid var(--line); }
+.fleet-setup-requirement strong { font-size: 11px; }
+.fleet-setup-requirement.complete { opacity: .65; }
+.fleet-setup-check { color: var(--accent); font: 12px var(--mono); }
+.fleet-setup-control { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: 8px; }
+.fleet-setup-control input { min-width: 190px; flex: 1; padding: 8px 9px; border: 1px solid var(--line-2); outline: none; background: rgba(0,0,0,.14); color: var(--ink); font: 11px var(--mono); }
+.fleet-setup-control button, .fleet-setup-agent > footer button { min-height: 31px; padding: 0 11px; border: 1px solid var(--line-2); background: transparent; color: var(--ink); font: 9.5px var(--mono); cursor: pointer; }
+.fleet-setup-control button:disabled, .fleet-setup-agent > footer button:disabled { cursor: not-allowed; opacity: .4; }
+.fleet-setup-control small { width: 100%; color: var(--ink-3); font-size: 9px; }
+.fleet-setup-agent > footer { align-items: center; margin-top: 14px; }
+.fleet-setup-agent > footer .fleet-setup-activate { border-color: var(--accent); background: var(--accent); color: var(--bg, #090909); }
+.fleet-setup-error { color: var(--red, #d78078) !important; font-size: 10.5px; }
+@media (max-width: 700px) { .fleet-setup-panel { padding: 18px; } .fleet-setup-heading { flex-direction: column; } .fleet-setup-heading h2 { font-size: 27px; } .fleet-setup-shared-step { grid-template-columns: 1fr; } }

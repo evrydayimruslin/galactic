@@ -13,6 +13,7 @@ import {
   type LaunchAgentRoutineOverview,
   type LaunchCapacityResponse,
   type LaunchFunctionSummary,
+  type LaunchInferenceOperation,
   type LaunchNetworkDisclosure,
 } from "../../shared/contracts/launch.ts";
 import type { AppManifest } from "../../shared/contracts/manifest.ts";
@@ -87,7 +88,10 @@ export interface AgentHomeBuildInput {
   budgetUsage: AgentHomeBudgetUsage | null;
   callsByRun: ReadonlyMap<string, number>;
   capacity?: LaunchCapacityResponse | null;
-  byokConfigured?: boolean;
+  inference?: {
+    operations: LaunchInferenceOperation[];
+    configured: boolean;
+  };
   deploymentState?:
     | "legacy"
     | "materializing"
@@ -496,9 +500,7 @@ function setupRequirements(
     updatedAt: null,
     actions: [],
   });
-  const usesInference = input.effectivePermissions.includes("ai:call") ||
-    input.effectivePermissions.includes("ai:embed");
-  if (usesInference) {
+  if (input.inference && input.inference.operations.length > 0) {
     requirements.push({
       id: "inference:byok",
       actionId: null,
@@ -507,8 +509,8 @@ function setupRequirements(
       description:
         "This Agent uses AI and needs one of your configured provider API keys. Galactic never supplies a model key.",
       required: true,
-      configured: input.byokConfigured === true,
-      blocking: input.byokConfigured !== true,
+      configured: input.inference.configured,
+      blocking: !input.inference.configured,
       secret: true,
       settingKey: null,
       settingScope: null,
@@ -518,6 +520,7 @@ function setupRequirements(
       group: "Inference",
       destination: "/account",
       updatedAt: null,
+      inferenceOperations: input.inference.operations,
       actions: [],
     });
   }

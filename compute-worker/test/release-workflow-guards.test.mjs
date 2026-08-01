@@ -37,10 +37,13 @@ describe("Compute release workflow static guards", () => {
     expect(deploy).toContain("schema-workflow-job.json");
   });
 
-  it("locks production Compute admission to the immutable release policy", async () => {
+  it("keeps Compute releases explicit and separate from ordinary release tags", async () => {
     const deploy = await text(".github/workflows/compute-deploy.yml");
     const launchGate = await text(
       ".github/workflows/launch-gate-production.yml",
+    );
+    const launchGateHelper = await text(
+      "scripts/release/check-production-launch-gate.mjs",
     );
     const policy = JSON.parse(await text("release-policy.json"));
     expect(policy).toEqual({
@@ -51,6 +54,7 @@ describe("Compute release workflow static guards", () => {
         admission: "preserve_off",
       },
     });
+    expect(deploy).toMatch(/on:\n\s+workflow_dispatch:/u);
     expect(deploy).toMatch(
       /admission_mode:\n\s+description:[^\n]+\n\s+required: true\n\s+default: preserve_off\n\s+type: choice\n\s+options:\n\s+- preserve_off\n\s+- enable_global/u,
     );
@@ -70,12 +74,11 @@ describe("Compute release workflow static guards", () => {
     expect(deploy).toContain(
       'sha256sum "$EVIDENCE_DIR/release-policy.json"',
     );
-    expect(launchGate).toContain("Validate immutable release policy");
-    expect(launchGate).toContain(
-      '${{ steps.policy.outputs.admission_mode }}',
-    );
-    expect(launchGate).toContain("--timeout-seconds 12600");
-    expect(launchGate).toContain("timeout-minutes: 220");
+    expect(launchGate).not.toContain("Validate immutable release policy");
+    expect(launchGate).not.toContain("Verify exact-tag Compute release evidence");
+    expect(launchGateHelper).not.toMatch(/name:\s*['"]Compute Deploy['"]/u);
+    expect(launchGate).toContain("--timeout-seconds 4800");
+    expect(launchGate).toContain("timeout-minutes: 90");
   });
 
   it("rolls back the dedicated gx.test session Worker with a failed API rollout", async () => {
@@ -781,53 +784,40 @@ describe("Compute release workflow static guards", () => {
     expect(fixtureScript).not.toMatch(/method:\s*'DELETE'/u);
   });
 
-  it("launch gate fences exact live API, Compute, and gx.test evidence after every deploy", async () => {
+  it("ordinary launch tags fence the API and gx.test session without mutating Compute", async () => {
     const launchGate = await text(
       ".github/workflows/launch-gate-production.yml",
     );
     const gateHelper = await text(
       "scripts/release/check-production-launch-gate.mjs",
     );
-    const evidence = launchGate.indexOf(
-      "Verify exact-tag Compute release evidence",
-    );
     const liveFence = launchGate.indexOf(
-      "Verify exact live API, Compute, and gx.test session versions after every deploy",
+      "Verify exact live API and gx.test session versions",
     );
-    expect(liveFence).toBeGreaterThan(evidence);
+    expect(liveFence).toBeGreaterThan(0);
     expect(launchGate).toContain("environment: production");
     expect(launchGate).toContain("node-version-file: api/.nvmrc");
     expect(launchGate).not.toContain("node-version-file: .nvmrc");
     expect(launchGate).toContain(
-      "verify-live-production-compute-state.mjs",
+      "verify-production-api-release-state.mjs",
     );
     expect(launchGate).toContain(
-      "/tmp/production-live-compute-state-verification.json",
+      "/tmp/production-api-release-verification.json",
     );
     expect(launchGate).toContain(
       "--name galactic-gx-test-session --json",
     );
-    expect(launchGate).toContain(
-      'npx wrangler containers list --json > "$container_list"',
-    );
+    expect(launchGate).not.toContain("npx wrangler containers list");
     expect(launchGate).toContain(
       "Verify final production gx.test containment",
     );
     expect(launchGate).toContain(
       "/tmp/production-gx-test-containment.json",
     );
-    expect(launchGate).toContain(
-      "Verify final production Compute artifact privacy",
-    );
-    expect(launchGate).toContain(
-      "compute-worker/scripts/verify-r2-private.mjs",
-    );
-    expect(launchGate).toContain(
-      "/r2/buckets/galactic-compute-artifacts/domains/managed",
-    );
-    expect(launchGate).toContain(
-      "/r2/buckets/galactic-compute-artifacts/domains/custom",
-    );
-    expect(gateHelper).toContain('name: "Interfaces Worker Deploy"');
+    expect(launchGate).not.toContain("Verify final production Compute artifact privacy");
+    expect(launchGate).not.toContain("verify-live-production-compute-state.mjs");
+    expect(launchGate).not.toContain("galactic-compute");
+    expect(gateHelper).not.toMatch(/name:\s*['"]Compute Deploy['"]/u);
+    expect(gateHelper).toMatch(/name:\s*['"]Interfaces Worker Deploy['"]/u);
   });
 });

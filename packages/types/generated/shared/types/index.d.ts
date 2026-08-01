@@ -15,6 +15,15 @@ export interface BYOKConfig {
     has_key: boolean;
     model?: string;
     added_at: string;
+    validation?: BYOKValidationMetadata;
+}
+export interface BYOKValidationMetadata {
+    policy_version: string;
+    key_version: string;
+    provider: ActiveBYOKProvider;
+    model?: string;
+    operations: Array<"generate" | "embed">;
+    validated_at: string;
 }
 export interface User {
     id: string;
@@ -1381,6 +1390,8 @@ export interface BYOKProviderInfo {
 }
 export interface BYOKProviderCapabilities {
     chat: boolean;
+    /** Galactic's current host-side embedding binding accepts this provider's key. */
+    embeddings: boolean;
     streaming: boolean;
     tools: boolean;
     jsonMode: boolean;

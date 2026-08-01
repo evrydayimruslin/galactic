@@ -20,6 +20,8 @@ on:
       - 'scripts/release/check-production-launch-gate.mjs'
       - 'scripts/release/production-launch-gate-runs.mjs'
       - 'scripts/release/production-launch-gate-runs.test.mjs'
+      - 'scripts/release/verify-production-api-release-state.mjs'
+      - 'scripts/release/verify-production-api-release-state.test.mjs'
       - 'scripts/release/verify-api-compute-bootstrap-history.mjs'
       - 'scripts/release/verify-api-compute-bootstrap-history.test.mjs'
       - 'scripts/release/verify-api-compute-deploy-state.mjs'
@@ -73,6 +75,8 @@ on:
       - 'scripts/release/check-production-launch-gate.mjs'
       - 'scripts/release/production-launch-gate-runs.mjs'
       - 'scripts/release/production-launch-gate-runs.test.mjs'
+      - 'scripts/release/verify-production-api-release-state.mjs'
+      - 'scripts/release/verify-production-api-release-state.test.mjs'
       - 'scripts/release/verify-api-compute-bootstrap-history.mjs'
       - 'scripts/release/verify-api-compute-bootstrap-history.test.mjs'
       - 'scripts/release/verify-api-compute-deploy-state.mjs'
@@ -165,6 +169,7 @@ jobs:
             scripts/release/classify-cloudflare-worker-lookup.test.mjs \
             scripts/release/parse-cloudflare-worker-version-inventory.test.mjs \
             scripts/release/production-launch-gate-runs.test.mjs \
+            scripts/release/verify-production-api-release-state.test.mjs \
             scripts/release/verify-api-compute-bootstrap-history.test.mjs \
             scripts/release/verify-api-compute-deploy-state.test.mjs \
             scripts/release/verify-attention-shadow-evidence.test.mjs \

@@ -8,9 +8,10 @@ import type {
   LaunchAgentRoutinesResponse,
   LaunchApiKeyListResponse,
   LaunchByokSummaryResponse,
-  LaunchCandidateListResponse,
   LaunchCallerFunctionPermissionsResponse,
+  LaunchCandidateListResponse,
   LaunchFleetResponse,
+  LaunchFleetSetupResponse,
   LaunchInferenceOptionsResponse,
   LaunchInstallResponse,
   LaunchLeaderboardResponse,
@@ -49,6 +50,9 @@ export interface LaunchRouteLiveData {
   feeLeaderboard?: LaunchLeaderboardResponse;
   library?: LaunchLibraryResponse;
   fleet?: LaunchFleetResponse;
+  fleetError?: string;
+  fleetSetup?: LaunchFleetSetupResponse;
+  fleetSetupError?: string;
   candidates?: LaunchCandidateListResponse;
   candidatesError?: string;
   agent?: LaunchAgentResponse;
@@ -345,17 +349,27 @@ async function loadRouteData(
   switch (route.definition.key) {
     case "home": {
       if (hasLaunchAuthToken()) {
-        const [fleet, candidateResult] = await Promise.all([
-          launchApi.fleet(),
+        const [fleetResult, candidateResult, setupResult] = await Promise.all([
+          attempted(
+            () => launchApi.fleet(),
+            "Fleet status could not be loaded.",
+          ),
           attempted(
             () => launchApi.candidates(),
             "Built Agents could not be loaded.",
+          ),
+          attempted(
+            () => launchApi.fleetSetup(),
+            "Agent setup could not be loaded.",
           ),
         ]);
         return {
           candidates: candidateResult.value,
           candidatesError: candidateResult.error,
-          fleet,
+          fleet: fleetResult.value,
+          fleetError: fleetResult.error,
+          fleetSetup: setupResult.value,
+          fleetSetupError: setupResult.error,
           subscription: candidateResult.value?.subscription,
         };
       }

@@ -13,11 +13,8 @@ on:
       - 'api/src/bindings/compute-*.ts'
       - 'api/src/compute-control-plane-entrypoint.ts'
       - 'api/wrangler.toml'
-      - 'supabase/migrations/**'
+      - 'supabase/migrations/*compute*.sql'
       - 'scripts/supabase/**'
-      - 'scripts/release/check-production-launch-gate.mjs'
-      - 'scripts/release/production-launch-gate-runs.mjs'
-      - 'scripts/release/production-launch-gate-runs.test.mjs'
       - 'scripts/release/verify-api-compute-deploy-state.mjs'
       - 'scripts/release/verify-api-compute-deploy-state.test.mjs'
       - 'scripts/release/verify-api-compute-off-bridge.mjs'
@@ -38,7 +35,6 @@ on:
       - '.github/workflows/compute-deploy.yml'
       - '.github/workflows/compute-admission.yml'
       - '.github/workflows/api-deploy.yml'
-      - '.github/workflows/launch-gate-production.yml'
   push:
     branches: [main]
     paths:
@@ -52,11 +48,8 @@ on:
       - 'api/src/bindings/compute-*.ts'
       - 'api/src/compute-control-plane-entrypoint.ts'
       - 'api/wrangler.toml'
-      - 'supabase/migrations/**'
+      - 'supabase/migrations/*compute*.sql'
       - 'scripts/supabase/**'
-      - 'scripts/release/check-production-launch-gate.mjs'
-      - 'scripts/release/production-launch-gate-runs.mjs'
-      - 'scripts/release/production-launch-gate-runs.test.mjs'
       - 'scripts/release/verify-api-compute-deploy-state.mjs'
       - 'scripts/release/verify-api-compute-deploy-state.test.mjs'
       - 'scripts/release/verify-api-compute-off-bridge.mjs'
@@ -77,7 +70,6 @@ on:
       - '.github/workflows/compute-deploy.yml'
       - '.github/workflows/compute-admission.yml'
       - '.github/workflows/api-deploy.yml'
-      - '.github/workflows/launch-gate-production.yml'
   workflow_dispatch: {}
 
 permissions:
