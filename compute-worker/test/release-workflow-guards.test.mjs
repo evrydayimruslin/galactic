@@ -45,7 +45,7 @@ describe("Compute release workflow static guards", () => {
     const policy = JSON.parse(await text("release-policy.json"));
     expect(policy).toEqual({
       schema_version: 1,
-      release_tag: "v0.4.79",
+      release_tag: "v0.4.80",
       compute: {
         artifact: "deploy_exact_candidate",
         admission: "preserve_off",

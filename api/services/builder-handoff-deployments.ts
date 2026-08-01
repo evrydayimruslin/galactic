@@ -567,9 +567,12 @@ async function callRpc(
   deps: BuilderHandoffDeploymentDependencies,
 ): Promise<Record<string, unknown>> {
   const config = serviceConfig(options);
+  // Cloudflare's global fetch must be invoked receiver-free after being stored
+  // on the dependency object.
+  const fetchFn = deps.fetchFn;
   let response: Response;
   try {
-    response = await deps.fetchFn(
+    response = await fetchFn(
       `${config.supabaseUrl}/rest/v1/rpc/${name}`,
       {
         method: "POST",
@@ -771,6 +774,7 @@ async function readTargetApp(
   deps: BuilderHandoffDeploymentDependencies,
 ): Promise<CandidateTargetAppRow | null> {
   const config = serviceConfig(options);
+  const fetchFn = deps.fetchFn;
   const query = new URLSearchParams({
     id: `eq.${appId}`,
     owner_id: `eq.${ownerId}`,
@@ -780,7 +784,7 @@ async function readTargetApp(
   });
   let response: Response;
   try {
-    response = await deps.fetchFn(
+    response = await fetchFn(
       `${config.supabaseUrl}/rest/v1/apps?${query.toString()}`,
       { headers: serviceHeaders(config.serviceRoleKey) },
     );
@@ -810,6 +814,7 @@ async function readCandidateDeployment(
   deps: BuilderHandoffDeploymentDependencies,
 ): Promise<CandidateDeploymentRow | null> {
   const config = serviceConfig(options);
+  const fetchFn = deps.fetchFn;
   const query = new URLSearchParams({
     session_id: `eq.${session.id}`,
     owner_id: `eq.${session.ownerId}`,
@@ -819,7 +824,7 @@ async function readCandidateDeployment(
   });
   let response: Response;
   try {
-    response = await deps.fetchFn(
+    response = await fetchFn(
       `${config.supabaseUrl}/rest/v1/builder_handoff_deployments?${query.toString()}`,
       { headers: serviceHeaders(config.serviceRoleKey) },
     );

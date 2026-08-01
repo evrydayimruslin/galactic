@@ -182,6 +182,26 @@ function parseFetchBody(
   >;
 }
 
+function receiverSensitiveFetch(
+  receivers: unknown[],
+  handler: (
+    input: Parameters<typeof fetch>[0],
+    init?: Parameters<typeof fetch>[1],
+  ) => Response | Promise<Response>,
+): typeof fetch {
+  return (function (
+    this: unknown,
+    input: Parameters<typeof fetch>[0],
+    init?: Parameters<typeof fetch>[1],
+  ): Promise<Response> {
+    receivers.push(this);
+    if (this !== undefined) {
+      throw new TypeError("Illegal invocation");
+    }
+    return Promise.resolve(handler(input, init));
+  }) as typeof fetch;
+}
+
 function lifecycleRow(
   status: "staged" | "tested" | "uploaded" | "promoted",
   statusVersion: number,
@@ -314,6 +334,39 @@ Deno.test("builder handoff creation derives an exact 60-minute new-Agent credent
     Date.parse(result.session.expiresAt) - Date.parse(result.session.createdAt),
     BUILDER_HANDOFF_TTL_SECONDS * 1_000,
   );
+});
+
+Deno.test("builder handoff RPC invokes a receiver-sensitive transport unbound", async () => {
+  const generatedIds = [
+    SESSION_ID,
+    CANDIDATE_SET_ID,
+    RESERVED_AGENT_ID,
+  ];
+  const receivers: unknown[] = [];
+  const fetchFn = receiverSensitiveFetch(receivers, (_input, init) => {
+    const body = parseFetchBody(init);
+    return rpcJson([
+      sessionRow({
+        targetAppId: body.p_target_app_id as string,
+        descriptionDigest: body.p_description_sha256 as string,
+      }),
+    ]);
+  });
+
+  const result = await createBuilderHandoffSession(
+    {
+      ownerId: OWNER_ID,
+      intent: "agent",
+      description: "Build one private Agent candidate",
+    },
+    serviceOptions(fetchFn, {
+      randomUUID: () => generatedIds.shift()!,
+      randomBytes: (length) => new Uint8Array(length).fill(0x12),
+    }),
+  );
+
+  assertEquals(result.session.id, SESSION_ID);
+  assertEquals(receivers, [undefined]);
 });
 
 Deno.test("builder handoff creation preserves an extension's immutable base lineage", async () => {
@@ -719,6 +772,26 @@ Deno.test("candidate session projection separately bounds uploaded work and rece
     }`,
     `lte.${new Date(Date.parse(CREATED_AT) + 60_000).toISOString()}`,
   ]);
+});
+
+Deno.test("candidate projection invokes receiver-sensitive reads unbound", async () => {
+  const receivers: unknown[] = [];
+  const fetchFn = receiverSensitiveFetch(receivers, (input) => {
+    const url = new URL(String(input));
+    return rpcJson(
+      url.searchParams.get("status") === "eq.uploaded"
+        ? [lifecycleRow("uploaded", 4)]
+        : [],
+    );
+  });
+
+  const sessions = await listBuilderHandoffCandidateSessions(
+    OWNER_ID,
+    serviceOptions(fetchFn),
+  );
+
+  assertEquals(sessions.map((session) => session.status), ["uploaded"]);
+  assertEquals(receivers, [undefined, undefined]);
 });
 
 Deno.test("candidate session projection retries one legacy select without granting lineage authority", async () => {
