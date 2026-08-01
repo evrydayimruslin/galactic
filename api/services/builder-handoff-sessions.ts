@@ -54,6 +54,15 @@ const BUILDER_HANDOFF_SESSION_SELECT = [
   "terminal_at",
 ].join(",");
 
+/**
+ * Temporary read compatibility for a PostgREST schema cache that has not yet
+ * learned the M7 lineage column. This is intentionally limited to candidate
+ * review list/detail reads. A legacy row is always projected with a null
+ * generation so it cannot acquire deployment authority from the fallback.
+ */
+const BUILDER_HANDOFF_SESSION_LEGACY_SELECT = BUILDER_HANDOFF_SESSION_SELECT
+  .split(",").filter((field) => field !== "base_release_generation").join(",");
+
 export const BUILDER_HANDOFF_INTENTS = [
   "agent",
   "interface",
@@ -246,12 +255,14 @@ export interface BuilderHandoffSessionServiceOptions {
   diagnostic?: (diagnostic: BuilderHandoffSessionDiagnostic) => void;
 }
 
-interface BuilderHandoffSessionDiagnostic {
-  event:
-    | "promoted_history_row_omitted"
-    | "promoted_history_query_suppressed";
-  code: BuilderHandoffSessionErrorCode;
-}
+type BuilderHandoffSessionDiagnostic =
+  | {
+    event:
+      | "promoted_history_row_omitted"
+      | "promoted_history_query_suppressed";
+    code: BuilderHandoffSessionErrorCode;
+  }
+  | { event: "legacy_session_select_used" };
 
 export type BuilderHandoffSessionErrorCode =
   | "invalid_request"
@@ -627,9 +638,12 @@ function emitBuilderHandoffSessionDiagnostic(
       options.diagnostic(diagnostic);
       return;
     }
-    // The event and code are closed enums. Never include the row, endpoint,
-    // response payload, or thrown message in this operational diagnostic.
-    console.warn("[BUILDER_HANDOFF] Candidate history degraded", diagnostic);
+    // Diagnostic fields are closed enums. Never include the row, endpoint,
+    // response payload, status, or thrown message in this signal.
+    console.warn(
+      "[BUILDER_HANDOFF] Candidate persistence diagnostic",
+      diagnostic,
+    );
   } catch {
     // Observability is best-effort and cannot change invitation availability.
   }
@@ -1228,24 +1242,37 @@ async function readBuilderHandoffSessionRows(
   query: URLSearchParams,
   options: BuilderHandoffSessionServiceOptions,
   invalidRowPolicy: "reject" | "omit" = "reject",
+  allowLegacyCandidateSelect = false,
 ): Promise<BuilderHandoffSessionRecord[]> {
   const config = serviceConfig(options);
-  let response: Response;
-  try {
-    response = await config.fetchFn(
-      `${config.supabaseUrl}/rest/v1/builder_handoff_sessions?${query.toString()}`,
-      {
-        headers: {
-          apikey: config.serviceRoleKey,
-          Authorization: `Bearer ${config.serviceRoleKey}`,
+  const request = async (requestQuery: URLSearchParams): Promise<Response> => {
+    try {
+      return await config.fetchFn(
+        `${config.supabaseUrl}/rest/v1/builder_handoff_sessions?${requestQuery.toString()}`,
+        {
+          headers: {
+            apikey: config.serviceRoleKey,
+            Authorization: `Bearer ${config.serviceRoleKey}`,
+          },
         },
-      },
-    );
-  } catch {
-    throw new BuilderHandoffSessionError(
-      "service_unavailable",
-      "Builder handoff persistence is temporarily unavailable",
-    );
+      );
+    } catch {
+      throw new BuilderHandoffSessionError(
+        "service_unavailable",
+        "Builder handoff persistence is temporarily unavailable",
+      );
+    }
+  };
+
+  let response = await request(query);
+  let usedLegacyCandidateSelect = false;
+  // PostgREST reports an unknown selected column as a 400. Do not amplify
+  // authentication, rate-limit, or infrastructure failures with a retry.
+  if (response.status === 400 && allowLegacyCandidateSelect) {
+    const legacyQuery = new URLSearchParams(query);
+    legacyQuery.set("select", BUILDER_HANDOFF_SESSION_LEGACY_SELECT);
+    response = await request(legacyQuery);
+    usedLegacyCandidateSelect = true;
   }
   if (!response.ok) {
     throw new BuilderHandoffSessionError(
@@ -1268,25 +1295,44 @@ async function readBuilderHandoffSessionRows(
       "Builder handoff persistence returned an invalid session list",
     );
   }
-  if (invalidRowPolicy === "reject") return payload.map(parseSession);
-
-  const sessions: BuilderHandoffSessionRecord[] = [];
-  for (const row of payload) {
-    try {
-      sessions.push(parseSession(row));
-    } catch (error) {
-      // Promoted rows are recovery receipts, never deployment authority. A
-      // malformed historical receipt must not hide valid receipts or an
-      // actionable uploaded candidate, while every other read remains strict.
-      if (error instanceof BuilderHandoffSessionError) {
-        emitBuilderHandoffSessionDiagnostic(options, {
-          event: "promoted_history_row_omitted",
-          code: error.code,
-        });
-        continue;
+  const rows: unknown[] = usedLegacyCandidateSelect
+    ? payload.map((value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return value;
       }
-      throw error;
+      return {
+        ...(value as Record<string, unknown>),
+        base_release_generation: null,
+      };
+    })
+    : payload;
+  let sessions: BuilderHandoffSessionRecord[];
+  if (invalidRowPolicy === "reject") {
+    sessions = rows.map(parseSession);
+  } else {
+    sessions = [];
+    for (const row of rows) {
+      try {
+        sessions.push(parseSession(row));
+      } catch (error) {
+        // Promoted rows are recovery receipts, never deployment authority. A
+        // malformed historical receipt must not hide valid receipts or an
+        // actionable uploaded candidate, while every other read remains strict.
+        if (error instanceof BuilderHandoffSessionError) {
+          emitBuilderHandoffSessionDiagnostic(options, {
+            event: "promoted_history_row_omitted",
+            code: error.code,
+          });
+          continue;
+        }
+        throw error;
+      }
     }
+  }
+  if (usedLegacyCandidateSelect) {
+    emitBuilderHandoffSessionDiagnostic(options, {
+      event: "legacy_session_select_used",
+    });
   }
   return sessions;
 }
@@ -1300,14 +1346,20 @@ export async function listUploadedBuilderHandoffSessions(
   ownerId: string,
   options: BuilderHandoffSessionServiceOptions = {},
 ): Promise<BuilderHandoffSessionRecord[]> {
-  const query = new URLSearchParams({
-    owner_id: `eq.${requireUuid(ownerId, "owner ID")}`,
+  const query = uploadedBuilderHandoffSessionsQuery(
+    requireUuid(ownerId, "owner ID"),
+  );
+  return await readBuilderHandoffSessionRows(query, options);
+}
+
+function uploadedBuilderHandoffSessionsQuery(ownerId: string): URLSearchParams {
+  return new URLSearchParams({
+    owner_id: `eq.${ownerId}`,
     status: "eq.uploaded",
     select: BUILDER_HANDOFF_SESSION_SELECT,
     order: "uploaded_at.asc,id.asc",
     limit: String(BUILDER_HANDOFF_UPLOADED_CANDIDATE_LIMIT),
   });
-  return await readBuilderHandoffSessionRows(query, options);
 }
 
 /**
@@ -1337,8 +1389,13 @@ export async function listBuilderHandoffCandidateSessions(
   });
   promotedQuery.append("promoted_at", `lte.${promotedBefore}`);
   const [uploaded, promoted] = await Promise.all([
-    listUploadedBuilderHandoffSessions(normalizedOwnerId, options),
-    readBuilderHandoffSessionRows(promotedQuery, options, "omit").catch(
+    readBuilderHandoffSessionRows(
+      uploadedBuilderHandoffSessionsQuery(normalizedOwnerId),
+      options,
+      "reject",
+      true,
+    ),
+    readBuilderHandoffSessionRows(promotedQuery, options, "omit", true).catch(
       (error: unknown) => {
         // Recent promoted history only restores deployment receipts in the
         // invitation. Keep the authoritative uploaded-candidate read strict,
@@ -1373,7 +1430,12 @@ export async function getBuilderHandoffSessionForOwner(
     select: BUILDER_HANDOFF_SESSION_SELECT,
     limit: "1",
   });
-  return (await readBuilderHandoffSessionRows(query, options))[0] ?? null;
+  return (await readBuilderHandoffSessionRows(
+    query,
+    options,
+    "reject",
+    true,
+  ))[0] ?? null;
 }
 
 function advanceBody(

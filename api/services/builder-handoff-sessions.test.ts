@@ -16,6 +16,7 @@ import {
   BuilderHandoffSessionError,
   type BuilderHandoffStatus,
   createBuilderHandoffSession,
+  getBuilderHandoffSessionForOwner,
   isBuilderHandoffScopeSet,
   isDefinitiveBuilderHandoffTransitionRejection,
   listBuilderHandoffCandidateSessions,
@@ -151,8 +152,9 @@ function serviceOptions(
     diagnostic?: (diagnostic: {
       event:
         | "promoted_history_row_omitted"
-        | "promoted_history_query_suppressed";
-      code: string;
+        | "promoted_history_query_suppressed"
+        | "legacy_session_select_used";
+      code?: string;
     }) => void;
   } = {},
 ) {
@@ -719,6 +721,88 @@ Deno.test("candidate session projection separately bounds uploaded work and rece
   ]);
 });
 
+Deno.test("candidate session projection retries one legacy select without granting lineage authority", async () => {
+  const urls: URL[] = [];
+  const diagnostics: unknown[] = [];
+  const uploadedLegacyExtension = lifecycleRow("uploaded", 4);
+  Object.assign(uploadedLegacyExtension, {
+    intent: "function",
+    target_app_id: EXISTING_AGENT_ID,
+    base_version: "1.2.3",
+    base_source_hash: BASE_SOURCE_HASH,
+    base_release_digest: BASE_RELEASE_DIGEST,
+    base_state_digest: BASE_STATE_DIGEST,
+    uploaded_app_id: EXISTING_AGENT_ID,
+  });
+  delete uploadedLegacyExtension.base_release_generation;
+  const promotedLegacyRow = lifecycleRow("promoted", 5);
+  delete promotedLegacyRow.base_release_generation;
+
+  const fetchFn: typeof fetch = (input) => {
+    const url = new URL(String(input));
+    urls.push(url);
+    const select = url.searchParams.get("select") ?? "";
+    if (select.includes("base_release_generation")) {
+      return Promise.resolve(
+        rpcJson({ message: "database password=must-not-leak" }, 400),
+      );
+    }
+    return Promise.resolve(
+      rpcJson([
+        url.searchParams.get("status") === "eq.uploaded"
+          ? uploadedLegacyExtension
+          : promotedLegacyRow,
+      ]),
+    );
+  };
+
+  const sessions = await listBuilderHandoffCandidateSessions(
+    OWNER_ID,
+    serviceOptions(fetchFn, {
+      diagnostic: (diagnostic) => diagnostics.push(diagnostic),
+    }),
+  );
+
+  assertEquals(sessions.map((session) => session.status), [
+    "uploaded",
+    "promoted",
+  ]);
+  assertEquals(sessions[0].intent, "function");
+  assertEquals(sessions[0].baseReleaseGeneration, null);
+  assertEquals(sessions[1].baseReleaseGeneration, null);
+  assertEquals(urls.length, 4);
+  assertEquals(diagnostics, [
+    { event: "legacy_session_select_used" },
+    { event: "legacy_session_select_used" },
+  ]);
+  assertEquals(JSON.stringify(diagnostics).includes("must-not-leak"), false);
+  for (const status of ["eq.uploaded", "eq.promoted"]) {
+    const statusUrls = urls.filter((url) =>
+      url.searchParams.get("status") === status
+    );
+    assertEquals(statusUrls.length, 2);
+    assert(
+      (statusUrls[0].searchParams.get("select") ?? "").includes(
+        "base_release_generation",
+      ),
+    );
+    assertEquals(
+      (statusUrls[1].searchParams.get("select") ?? "").includes(
+        "base_release_generation",
+      ),
+      false,
+    );
+    const primaryWithoutSelect = new URLSearchParams(statusUrls[0].search);
+    const fallbackWithoutSelect = new URLSearchParams(statusUrls[1].search);
+    primaryWithoutSelect.delete("select");
+    fallbackWithoutSelect.delete("select");
+    assertEquals(
+      fallbackWithoutSelect.toString(),
+      primaryWithoutSelect.toString(),
+    );
+  }
+});
+
 Deno.test("candidate session projection preserves a pre-M7 extension for fail-closed review", async () => {
   const legacyExtension = lifecycleRow("uploaded", 4);
   Object.assign(legacyExtension, {
@@ -784,14 +868,25 @@ Deno.test("candidate session projection keeps uploaded work when promoted histor
     code: "service_unavailable",
   }]);
   assertEquals(JSON.stringify(diagnostics).includes("must-not-leak"), false);
+  const promotedUrls = urls.filter((url) =>
+    url.searchParams.get("status") === "eq.promoted"
+  );
+  assertEquals(promotedUrls.length, 1);
+  assert(
+    (promotedUrls[0].searchParams.get("select") ?? "").includes(
+      "base_release_generation",
+    ),
+  );
 });
 
 Deno.test("candidate session projection isolates malformed promoted receipts", async () => {
+  const urls: URL[] = [];
   const diagnostics: unknown[] = [];
   const malformed = lifecycleRow("promoted", 5);
   malformed.expires_at = "database password=must-not-leak";
   const fetchFn: typeof fetch = (input) => {
     const url = new URL(String(input));
+    urls.push(url);
     if (url.searchParams.get("status") === "eq.uploaded") {
       return Promise.resolve(rpcJson([]));
     }
@@ -814,11 +909,52 @@ Deno.test("candidate session projection isolates malformed promoted receipts", a
     code: "invalid_response",
   }]);
   assertEquals(JSON.stringify(diagnostics).includes("must-not-leak"), false);
+  assertEquals(
+    urls.filter((url) => url.searchParams.get("status") === "eq.promoted")
+      .length,
+    1,
+  );
 });
 
-Deno.test("candidate session projection keeps actionable uploaded reads strict", async () => {
+Deno.test("candidate session projection does not retry invalid uploaded JSON or rows", async () => {
+  for (const failure of ["json", "row"] as const) {
+    let uploadedCalls = 0;
+    const malformedRow = lifecycleRow("uploaded", 4);
+    malformedRow.expires_at = "database password=must-not-leak";
+    const fetchFn: typeof fetch = (input) => {
+      const url = new URL(String(input));
+      if (url.searchParams.get("status") === "eq.promoted") {
+        return Promise.resolve(rpcJson([]));
+      }
+      uploadedCalls += 1;
+      if (failure === "json") {
+        return Promise.resolve(
+          new Response("{ database password=must-not-leak", { status: 200 }),
+        );
+      }
+      return Promise.resolve(rpcJson([malformedRow]));
+    };
+
+    const error = await assertRejects(
+      () =>
+        listBuilderHandoffCandidateSessions(
+          OWNER_ID,
+          serviceOptions(fetchFn),
+        ),
+      BuilderHandoffSessionError,
+    ) as BuilderHandoffSessionError;
+
+    assertEquals(error.code, "invalid_response", failure);
+    assertEquals(error.message.includes("must-not-leak"), false, failure);
+    assertEquals(uploadedCalls, 1, failure);
+  }
+});
+
+Deno.test("candidate session projection keeps actionable 503 strict without compatibility retry", async () => {
+  const urls: URL[] = [];
   const fetchFn: typeof fetch = (input) => {
     const url = new URL(String(input));
+    urls.push(url);
     if (url.searchParams.get("status") === "eq.uploaded") {
       return Promise.resolve(
         rpcJson(
@@ -841,6 +977,124 @@ Deno.test("candidate session projection keeps actionable uploaded reads strict",
 
   assertEquals(error.code, "service_unavailable");
   assertEquals(error.message.includes("must-not-leak"), false);
+  const uploadedUrls = urls.filter((url) =>
+    url.searchParams.get("status") === "eq.uploaded"
+  );
+  assertEquals(uploadedUrls.length, 1);
+  assert(
+    (uploadedUrls[0].searchParams.get("select") ?? "").includes(
+      "base_release_generation",
+    ),
+  );
+});
+
+Deno.test("candidate detail retries one legacy select without fabricating deployment lineage", async () => {
+  for (const intent of ["agent", "function"] as const) {
+    const urls: URL[] = [];
+    const diagnostics: unknown[] = [];
+    const legacyRow = lifecycleRow("uploaded", 4);
+    if (intent === "function") {
+      Object.assign(legacyRow, {
+        intent,
+        target_app_id: EXISTING_AGENT_ID,
+        base_version: "1.2.3",
+        base_source_hash: BASE_SOURCE_HASH,
+        base_release_digest: BASE_RELEASE_DIGEST,
+        base_state_digest: BASE_STATE_DIGEST,
+        uploaded_app_id: EXISTING_AGENT_ID,
+      });
+    }
+    delete legacyRow.base_release_generation;
+    const fetchFn: typeof fetch = (input) => {
+      const url = new URL(String(input));
+      urls.push(url);
+      if (
+        (url.searchParams.get("select") ?? "").includes(
+          "base_release_generation",
+        )
+      ) {
+        return Promise.resolve(
+          rpcJson({ message: "database password=must-not-leak" }, 400),
+        );
+      }
+      return Promise.resolve(rpcJson([legacyRow]));
+    };
+
+    const session = await getBuilderHandoffSessionForOwner(
+      OWNER_ID,
+      SESSION_ID,
+      serviceOptions(fetchFn, {
+        diagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      }),
+    );
+
+    assert(session);
+    assertEquals(session.intent, intent);
+    assertEquals(session.baseReleaseGeneration, null);
+    assertEquals(urls.length, 2);
+    const primaryWithoutSelect = new URLSearchParams(urls[0].search);
+    const fallbackWithoutSelect = new URLSearchParams(urls[1].search);
+    primaryWithoutSelect.delete("select");
+    fallbackWithoutSelect.delete("select");
+    assertEquals(
+      fallbackWithoutSelect.toString(),
+      primaryWithoutSelect.toString(),
+    );
+    assertEquals(diagnostics, [{ event: "legacy_session_select_used" }]);
+    assertEquals(JSON.stringify(diagnostics).includes("must-not-leak"), false);
+  }
+});
+
+Deno.test("candidate detail keeps two non-ok schema reads strict and sanitized", async () => {
+  const urls: URL[] = [];
+  const diagnostics: unknown[] = [];
+  const fetchFn: typeof fetch = (input) => {
+    urls.push(new URL(String(input)));
+    return Promise.resolve(
+      rpcJson({ message: "database password=must-not-leak" }, 400),
+    );
+  };
+
+  const error = await assertRejects(
+    () =>
+      getBuilderHandoffSessionForOwner(
+        OWNER_ID,
+        SESSION_ID,
+        serviceOptions(fetchFn, {
+          diagnostic: (diagnostic) => diagnostics.push(diagnostic),
+        }),
+      ),
+    BuilderHandoffSessionError,
+  ) as BuilderHandoffSessionError;
+
+  assertEquals(error.code, "service_unavailable");
+  assertEquals(error.message.includes("must-not-leak"), false);
+  assertEquals(urls.length, 2);
+  assertEquals(diagnostics, []);
+});
+
+Deno.test("candidate detail does not retry an infrastructure failure", async () => {
+  const urls: URL[] = [];
+  const fetchFn: typeof fetch = (input) => {
+    urls.push(new URL(String(input)));
+    return Promise.resolve(
+      rpcJson({ message: "database password=must-not-leak" }, 503),
+    );
+  };
+
+  const error = await assertRejects(
+    () =>
+      getBuilderHandoffSessionForOwner(
+        OWNER_ID,
+        SESSION_ID,
+        serviceOptions(fetchFn),
+      ),
+    BuilderHandoffSessionError,
+  ) as BuilderHandoffSessionError;
+
+  assertEquals(error.code, "service_unavailable");
+  assertEquals(error.message.includes("must-not-leak"), false);
+  assertEquals(urls.length, 1);
 });
 
 Deno.test("builder handoff termination returns durable credential revocation", async () => {
