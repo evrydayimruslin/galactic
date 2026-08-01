@@ -10,6 +10,12 @@ const migration = await Deno.readTextFile(
     import.meta.url,
   ),
 );
+const postgrestSchemaReloadMigration = await Deno.readTextFile(
+  new URL(
+    "../../supabase/migrations/20260801000000_postgrest_schema_cache_reload.sql",
+    import.meta.url,
+  ),
+);
 
 function functionBody(name: string): string {
   const marker = `CREATE OR REPLACE FUNCTION public.${name}(`;
@@ -80,6 +86,13 @@ Deno.test("builder handoff migration fixes identity, purpose, base lineage, and 
   assertStringIncludes(
     sql,
     "expires_at = created_at + interval '3600 seconds'",
+  );
+});
+
+Deno.test("builder handoff schema additions explicitly reload PostgREST", () => {
+  assertStringIncludes(
+    compact(postgrestSchemaReloadMigration),
+    "NOTIFY pgrst, 'reload schema';",
   );
 });
 
