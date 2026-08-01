@@ -538,13 +538,17 @@ async function callRpc(
   timeoutMs?: number,
 ): Promise<unknown> {
   const config = serviceConfig(options);
+  // Cloudflare's global fetch is receiver-sensitive. Calling the stored
+  // transport as config.fetchFn(...) binds `this` to config and throws an
+  // Illegal invocation before the handoff RPC reaches PostgREST.
+  const fetchFn = config.fetchFn;
   const abortController = timeoutMs === undefined
     ? undefined
     : new AbortController();
   const operation = (async (): Promise<unknown> => {
     let response: Response;
     try {
-      response = await config.fetchFn(
+      response = await fetchFn(
         `${config.supabaseUrl}/rest/v1/rpc/${name}`,
         {
           method: "POST",
@@ -1245,9 +1249,12 @@ async function readBuilderHandoffSessionRows(
   allowLegacyCandidateSelect = false,
 ): Promise<BuilderHandoffSessionRecord[]> {
   const config = serviceConfig(options);
+  // Keep the stored Cloudflare transport receiver-free for candidate reads,
+  // matching the RPC path above.
+  const fetchFn = config.fetchFn;
   const request = async (requestQuery: URLSearchParams): Promise<Response> => {
     try {
-      return await config.fetchFn(
+      return await fetchFn(
         `${config.supabaseUrl}/rest/v1/builder_handoff_sessions?${requestQuery.toString()}`,
         {
           headers: {
