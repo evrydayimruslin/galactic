@@ -873,7 +873,21 @@ export interface LaunchAgentFunctionsResponse {
   generatedAt: string;
 }
 
+/**
+ * Reserved args key for caller-generated invocation identity. Like `_async`,
+ * it is platform routing, never function input: the server strips it before
+ * any execution branch sees the args, persists it on the durable job row, and
+ * returns the EXISTING job envelope when the same (agent, id) is dispatched
+ * again. Recovery from an ambiguous dispatch failure is therefore "re-POST
+ * with the same id" — the caller can never double-execute by retrying.
+ */
+export const LAUNCH_CLIENT_INVOCATION_ARG = "_invocation_id";
+
 export interface LaunchFunctionRunRequest {
+  /**
+   * Function arguments. Keys prefixed with `_` are reserved platform routing
+   * (`_async`, `_invocation_id`) and are stripped before invocation.
+   */
   args?: Record<string, unknown>;
 }
 
@@ -2311,6 +2325,100 @@ export interface LaunchAgentOperatingSummary {
   readiness: LaunchAgentWorkingReadiness;
   evidence: LaunchAgentEvidenceReference[];
   derivedAt: string;
+}
+
+/** Agent-wide pause outcome (POST /home/pause with scope "agent"). */
+export interface LaunchAgentHomeAgentPauseResponse {
+  paused: true;
+  scope: "agent";
+  /** Shared stamp identifying this pause set for /home/resume. */
+  batch: string;
+  pausedRoutineIds: string[];
+  generatedAt: string;
+}
+
+export interface LaunchAgentHomeResumeBlockedRoutine {
+  routineId: string;
+  name: string | null;
+  reason: string;
+}
+
+/**
+ * Knowledge-lite (WO-5): probabilistic reference material — facts the agent
+ * may state and questions it has surfaced. Deliberately NOT the future
+ * adapter contract: no citations, no contradictions, no provenance chains.
+ */
+export interface LaunchAgentKnowledgeFact {
+  id: string;
+  /** Stable id used in the injected block as `[fact:slug]`. */
+  slug: string;
+  title: string | null;
+  content: string;
+  source: "owner" | "agent";
+  status: "active" | "retired";
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LaunchAgentKnowledgeQuestion {
+  id: string;
+  question: string;
+  context: string | null;
+  status: "open" | "answered" | "dismissed";
+  askCount: number;
+  /** Blocking questions mint an auto-resolving Alerts pointer. */
+  blocking: boolean;
+  firstAskedAt: string;
+  lastAskedAt: string;
+  answeredFactId: string | null;
+}
+
+export interface LaunchAgentKnowledgeProjection {
+  facts: LaunchAgentKnowledgeFact[];
+  questions: LaunchAgentKnowledgeQuestion[];
+  generatedAt: string;
+}
+
+export interface LaunchAgentKnowledgeFactUpsertRequest {
+  slug: string;
+  title?: string | null;
+  content: string;
+  status?: "active" | "retired";
+}
+
+export interface LaunchAgentKnowledgeAnswerRequest {
+  content: string;
+  slug?: string;
+  title?: string | null;
+}
+
+/**
+ * One immutable release from the app_releases ledger (WO-4). Read-only:
+ * there is deliberately no mutation surface over this history — recovery is
+ * fix-forward via a new handoff, never pointer rewrites.
+ */
+export interface LaunchAgentReleaseSummary {
+  id: string;
+  version: string;
+  releaseGeneration: number;
+  storageBytes: number;
+  createdAt: string;
+}
+
+export interface LaunchAgentReleasesResponse {
+  releases: LaunchAgentReleaseSummary[];
+  generatedAt: string;
+}
+
+/** Agent-wide resume outcome (POST /home/resume). */
+export interface LaunchAgentHomeAgentResumeResponse {
+  scope: "agent";
+  resumedRoutineIds: string[];
+  /** Routines that failed activation validation and stay paused (and stay
+   * in the batch for a later attempt). */
+  blocked: LaunchAgentHomeResumeBlockedRoutine[];
+  generatedAt: string;
 }
 
 export type LaunchAgentActivityKind =

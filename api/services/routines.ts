@@ -1110,6 +1110,98 @@ export async function resumeRoutine(
  * call this function after presenting the exact requested authority to a user.
  * Omit capabilityIds to approve every capability currently requested.
  */
+/**
+ * Marker stamped into routine user-metadata by an agent-wide pause (WO-2,
+ * docs/AGENT_STUDIO_LAUNCH_WORK_ORDERS.md). Owner-plane on purpose: it only
+ * selects which routines an agent-wide RESUME may flip back, and both ends
+ * of that decision are owner authority.
+ */
+export const AGENT_PAUSE_BATCH_METADATA_KEY = "agent_pause_batch";
+
+function agentPauseBatchStamp(routine: RoutineSummary): string | null {
+  const metadata = (routine as { metadata?: unknown }).metadata;
+  if (!metadata || typeof metadata !== "object") return null;
+  const value =
+    (metadata as Record<string, unknown>)[AGENT_PAUSE_BATCH_METADATA_KEY];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * Agent-wide pause: pause every ACTIVE routine on one Agent, stamping each
+ * with a shared batch marker so resume restores exactly this set. Routines
+ * the owner had individually paused earlier carry no stamp and are never
+ * resurrected by the agent-wide resume — that asymmetry is the point.
+ * Capacity-slot release happens inside updateRoutine's status path.
+ * In-flight runs finish; already-queued jobs execute; no NEW wakes fire.
+ */
+export async function pauseAllAgentRoutines(
+  userId: string,
+  composerAppId: string,
+): Promise<{ batch: string; paused: RoutineSummary[] }> {
+  const { routines } = await listRoutines(userId, {
+    composerAppId,
+    status: "active",
+    limit: 100,
+  });
+  const batch = new Date().toISOString();
+  const paused: RoutineSummary[] = [];
+  for (const routine of routines) {
+    paused.push(
+      await updateRoutine(userId, routine.id, {
+        status: "paused",
+        metadata: { [AGENT_PAUSE_BATCH_METADATA_KEY]: batch },
+      }),
+    );
+  }
+  return { batch, paused };
+}
+
+export interface AgentResumeBlockedRoutine {
+  routineId: string;
+  name: string | null;
+  reason: string;
+}
+
+/**
+ * Agent-wide resume: flip back ONLY batch-stamped routines, through
+ * resumeRoutine so activation validation and capacity-slot accounting stay
+ * authoritative — blockers are reported, never bypassed. The stamp clears
+ * AFTER a successful resume, so a blocked routine keeps its batch
+ * membership for the next attempt.
+ */
+export async function resumeAgentPauseBatch(
+  userId: string,
+  composerAppId: string,
+): Promise<{
+  resumed: RoutineSummary[];
+  blocked: AgentResumeBlockedRoutine[];
+}> {
+  const { routines } = await listRoutines(userId, {
+    composerAppId,
+    status: "paused",
+    limit: 100,
+  });
+  const resumed: RoutineSummary[] = [];
+  const blocked: AgentResumeBlockedRoutine[] = [];
+  for (const routine of routines) {
+    if (agentPauseBatchStamp(routine) === null) continue;
+    try {
+      const active = await resumeRoutine(userId, routine.id);
+      await updateRoutine(userId, routine.id, {
+        metadata: { [AGENT_PAUSE_BATCH_METADATA_KEY]: null },
+      });
+      resumed.push(active);
+    } catch (err) {
+      blocked.push({
+        routineId: routine.id,
+        name: (routine as { name?: string | null }).name ?? null,
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return { resumed, blocked };
+}
+
 export async function approveRoutineCapabilities(
   userId: string,
   routineId: string,

@@ -17,7 +17,15 @@ import type {
   LaunchAgentFunctionsResponse,
   LaunchAgentHomeActionRequest,
   LaunchAgentHomeIdentityUpdateRequest,
+  LaunchAgentHomeAgentPauseResponse,
+  LaunchAgentHomeAgentResumeResponse,
   LaunchAgentHomeResponse,
+  LaunchAgentKnowledgeAnswerRequest,
+  LaunchAgentKnowledgeFact,
+  LaunchAgentKnowledgeFactUpsertRequest,
+  LaunchAgentKnowledgeProjection,
+  LaunchAgentKnowledgeQuestion,
+  LaunchAgentReleasesResponse,
   LaunchAgentHomeRoutineUpdateRequest,
   LaunchAgentHomeSettingsUpdateRequest,
   LaunchAgentManagedRoutineActionRequest,
@@ -468,6 +476,61 @@ export class LaunchApiClient {
     );
   }
 
+  /** Read-only immutable release history, newest generation first (WO-4). */
+  agentReleases(idOrSlug: string): Promise<LaunchAgentReleasesResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/releases`,
+    );
+  }
+
+  /** Knowledge-lite (WO-5): facts + open questions projection. */
+  agentKnowledge(idOrSlug: string): Promise<LaunchAgentKnowledgeProjection> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/knowledge`,
+    );
+  }
+
+  /** Teach or edit one fact by slug. */
+  upsertAgentKnowledgeFact(
+    idOrSlug: string,
+    request: LaunchAgentKnowledgeFactUpsertRequest,
+  ): Promise<{ fact: LaunchAgentKnowledgeFact }> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/knowledge/facts`,
+      { method: "POST", body: JSON.stringify(request) },
+    );
+  }
+
+  /** Answer an open question; the answer becomes a fact and any alert
+   * pointer auto-resolves. */
+  answerAgentKnowledgeQuestion(
+    idOrSlug: string,
+    questionId: string,
+    request: LaunchAgentKnowledgeAnswerRequest,
+  ): Promise<{
+    question: LaunchAgentKnowledgeQuestion;
+    fact: LaunchAgentKnowledgeFact;
+  }> {
+    return this.fetchJson(
+      `/api/launch/agents/${
+        encodeURIComponent(idOrSlug)
+      }/knowledge/questions/${encodeURIComponent(questionId)}/answer`,
+      { method: "POST", body: JSON.stringify(request) },
+    );
+  }
+
+  dismissAgentKnowledgeQuestion(
+    idOrSlug: string,
+    questionId: string,
+  ): Promise<{ question: LaunchAgentKnowledgeQuestion }> {
+    return this.fetchJson(
+      `/api/launch/agents/${
+        encodeURIComponent(idOrSlug)
+      }/knowledge/questions/${encodeURIComponent(questionId)}/dismiss`,
+      { method: "POST", body: JSON.stringify({}) },
+    );
+  }
+
   operatorRoutineRun(
     idOrSlug: string,
     runId: string,
@@ -579,6 +642,29 @@ export class LaunchApiClient {
   }> {
     return this.fetchJson(
       `/api/launch/agents/${encodeURIComponent(idOrSlug)}/home/pause`,
+      { method: "POST" },
+    );
+  }
+
+  /** Agent-wide stop: pauses EVERY active routine with a shared batch stamp
+   * so resumeAgentHomeAgentWide restores exactly this set. Same safety lane
+   * as pauseAgentHome — no saga, no revision CAS. */
+  pauseAgentHomeAgentWide(
+    idOrSlug: string,
+  ): Promise<LaunchAgentHomeAgentPauseResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/home/pause`,
+      { method: "POST", body: JSON.stringify({ scope: "agent" }) },
+    );
+  }
+
+  /** Resume only the routines the latest agent-wide pause stopped; blocked
+   * routines are reported with their activation blocker reason. */
+  resumeAgentHomeAgentWide(
+    idOrSlug: string,
+  ): Promise<LaunchAgentHomeAgentResumeResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/home/resume`,
       { method: "POST" },
     );
   }

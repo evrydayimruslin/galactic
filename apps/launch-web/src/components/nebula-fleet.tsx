@@ -20,6 +20,7 @@ import type {
   LaunchAgentFunctionsResponse,
   LaunchAgentManagedRoutineUpdateRequest,
   LaunchAgentPreferences,
+  LaunchAgentReleaseSummary,
   LaunchAgentRoutineOverview,
   LaunchAgentSummary,
   LaunchApiKeySummary,
@@ -5450,6 +5451,10 @@ export function AgentSettingsPane({
             )
             : null}
         </div>
+        <ReleaseHistoryList
+          agentLocator={agent.id}
+          liveVersion={liveRelease?.version ?? null}
+        />
       </Collapsible>
 
       <Collapsible
@@ -5552,5 +5557,75 @@ export function AgentSettingsPane({
         </div>
       </Collapsible>
     </section>
+  );
+}
+
+/**
+ * WO-4: read-only list over the immutable release ledger, rendered inside
+ * the Release collapsible. The LIVE badge is a client-side comparison
+ * against the home projection's live version; there is deliberately no
+ * rollback affordance — recovery is fix-forward via a new handoff.
+ */
+function ReleaseHistoryList({
+  agentLocator,
+  liveVersion,
+}: {
+  agentLocator: string;
+  liveVersion: string | null;
+}): ReactElement {
+  const [releases, setReleases] = useState<
+    LaunchAgentReleaseSummary[] | null
+  >(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    launchApi.agentReleases(agentLocator).then(
+      (response) => {
+        if (!cancelled) setReleases(response.releases);
+      },
+      () => {
+        if (!cancelled) {
+          setError("Release history is unavailable right now.");
+        }
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [agentLocator]);
+  const liveBadged = releases && liveVersion
+    ? releases.findIndex((release) => release.version === liveVersion)
+    : -1;
+  return (
+    <div className="neb-release-block history">
+      <div className="neb-release-heading">All releases</div>
+      {error ? <p className="neb-ov-note">{error}</p> : null}
+      {releases && releases.length === 0
+        ? <p className="neb-ov-note">No releases have been cut yet.</p>
+        : null}
+      {releases && releases.length > 0
+        ? (
+          <ol className="neb-release-history">
+            {releases.map((release, index) => (
+              <li key={release.id}>
+                <span className="neb-ov-row-key">
+                  {release.version}
+                  {index === liveBadged
+                    ? <em className="neb-release-live-badge">LIVE</em>
+                    : null}
+                </span>
+                <span className="neb-ov-row-val">
+                  gen {release.releaseGeneration} ·{" "}
+                  {formatRelativePast(release.createdAt)}
+                </span>
+              </li>
+            ))}
+          </ol>
+        )
+        : null}
+      {!releases && !error
+        ? <p className="neb-ov-note">Loading release history…</p>
+        : null}
+    </div>
   );
 }

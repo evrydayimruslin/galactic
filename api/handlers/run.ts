@@ -2,6 +2,10 @@
 // Executes user code in sandbox
 
 import { error, json } from "./response.ts";
+import {
+  extractClientInvocationId,
+  InvalidClientInvocationIdError,
+} from "../services/client-invocation.ts";
 import type { AIRequest, AIResponse } from "../../shared/contracts/ai.ts";
 import type {
   LogEntry,
@@ -292,11 +296,22 @@ export async function handleRun(
 
     // The reserved _async argument is platform routing, never function input —
     // strip it before ANY execution branch (GPU included) sees the args.
+    // Same rule for _invocation_id (WO-1): caller-generated idempotency key,
+    // stripped here, persisted on the durable job row.
     let asyncOptIn = false;
+    let clientInvocationId: string | null = null;
     if (args && typeof args === "object" && !Array.isArray(args)) {
       const argsRecord = args as Record<string, unknown>;
       asyncOptIn = argsRecord._async === true;
       if ("_async" in argsRecord) delete argsRecord._async;
+      try {
+        clientInvocationId = extractClientInvocationId(argsRecord);
+      } catch (err) {
+        if (err instanceof InvalidClientInvocationIdError) {
+          return error(err.message, 400);
+        }
+        throw err;
+      }
     }
 
     // ── GPU Runtime Branch ──
@@ -447,6 +462,7 @@ export async function handleRun(
             ownerId: app.owner_id,
             functionName,
             args: argsRecord,
+            clientInvocationId,
             meta: { executionTimeoutMs: executionPolicy.timeoutMs },
           });
           let enqueued = false;

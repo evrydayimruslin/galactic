@@ -28,6 +28,10 @@ import {
   createUnavailableAIService,
 } from "../services/runtime-ai.ts";
 import { resolveFunctionInferenceOverride } from "../services/function-inference-overrides.ts";
+import {
+  extractClientInvocationId,
+  InvalidClientInvocationIdError,
+} from "../services/client-invocation.ts";
 import { getPermissionCache } from "../services/permission-cache.ts";
 import { resolveInternalMcpCall } from "../services/internal-mcp.ts";
 import {
@@ -2771,8 +2775,19 @@ async function executeAppFunction(
   try {
     // The reserved _async argument is platform routing, never function input —
     // strip it before ANY execution branch (GPU included) sees the args.
+    // Same rule for _invocation_id (WO-1): caller-generated idempotency key,
+    // stripped here, persisted on the durable job row.
     const asyncOptIn = args._async === true;
     if ("_async" in args) delete args._async;
+    let clientInvocationId: string | null = null;
+    try {
+      clientInvocationId = extractClientInvocationId(args);
+    } catch (err) {
+      if (err instanceof InvalidClientInvocationIdError) {
+        return jsonRpcErrorResponse(id, INVALID_PARAMS, err.message);
+      }
+      throw err;
+    }
 
     // ── GPU Runtime Branch (early return) ──
     // Must check BEFORE code fetching since GPU apps don't have JS code in R2.
@@ -2824,6 +2839,7 @@ async function executeAppFunction(
             ownerId: app.owner_id,
             functionName,
             args,
+            clientInvocationId,
             callerAppId: callerContext.callerApp?.appId ?? null,
             callerGrantId: meta?.callerGrantId ?? null,
             hop: callerContext.callerApp?.hop ?? meta?.incomingHop ?? null,

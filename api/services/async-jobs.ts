@@ -212,6 +212,15 @@ export async function createQueuedJob(params: {
   callerGrantId?: string | null;
   hop?: number | null;
   meta?: Record<string, unknown>;
+  /**
+   * Caller-generated invocation identity (the reserved `_invocation_id`
+   * arg, already stripped and validated by the handler). Duplicate creates
+   * for the same (app, id) return the EXISTING job's id instead of minting
+   * a second execution. Re-enqueueing that existing job is safe and even
+   * desirable: the consumer's queued->running claim dedupes deliveries, and
+   * a duplicate send heals the "insert landed, send crashed" window.
+   */
+  clientInvocationId?: string | null;
 }): Promise<string> {
   const jobId = crypto.randomUUID();
 
@@ -229,6 +238,7 @@ export async function createQueuedJob(params: {
       caller_app_id: params.callerAppId ?? null,
       caller_grant_id: params.callerGrantId ?? null,
       hop: params.hop ?? null,
+      client_invocation_id: params.clientInvocationId ?? null,
       // Reused as the sandbox executionId on claim, linking job <-> receipt
       // <-> AI-spend ledger.
       execution_id: crypto.randomUUID(),
@@ -246,10 +256,41 @@ export async function createQueuedJob(params: {
 
   if (!res.ok) {
     const err = await res.text().catch(() => res.statusText);
+    // Unique violation on (app_id, client_invocation_id): this exact
+    // invocation was already accepted. Return the surviving row — in ANY
+    // status (queued/running/completed); the caller polls it to a terminal
+    // result exactly as if this dispatch had created it.
+    if (res.status === 409 && params.clientInvocationId) {
+      const existing = await findJobByClientInvocationId(
+        params.appId,
+        params.clientInvocationId,
+      );
+      if (existing) return existing;
+    }
     throw new Error(`Failed to create queued job: ${err}`);
   }
 
   return jobId;
+}
+
+/** Resolve the job id for a previously accepted (app, client invocation). */
+async function findJobByClientInvocationId(
+  appId: string,
+  clientInvocationId: string,
+): Promise<string | null> {
+  const res = await fetch(
+    `${getEnv("SUPABASE_URL")}/rest/v1/async_jobs` +
+      `?app_id=eq.${encodeURIComponent(appId)}` +
+      `&client_invocation_id=eq.${encodeURIComponent(clientInvocationId)}` +
+      `&select=id&limit=1`,
+    { headers: supabaseHeaders() },
+  );
+  if (!res.ok) {
+    const err = await res.text().catch(() => res.statusText);
+    throw new Error(`Failed to resolve existing invocation: ${err}`);
+  }
+  const rows = await res.json().catch(() => []) as Array<{ id?: string }>;
+  return typeof rows[0]?.id === "string" ? rows[0].id : null;
 }
 
 /**

@@ -10,6 +10,7 @@ import type {
   LaunchAgentActivityPreview,
   LaunchAgentCapacityResponse,
   LaunchAgentHomeResponse,
+  LaunchOperatorRoutineRunDetail,
 } from "../../../../../shared/contracts/launch.ts";
 import type { AgentStudioPane } from "../../lib/agent-studio-route";
 import { launchApi } from "../../lib/api";
@@ -17,6 +18,7 @@ import { StudioPageHeader } from "./agent-studio-overview";
 
 export function AgentStudioActivity({
   activity,
+  agentLocator,
   canRunNow = false,
   loading,
   newAgent = false,
@@ -25,6 +27,8 @@ export function AgentStudioActivity({
   onRunNow,
 }: {
   activity: LaunchAgentActivityPreview | null;
+  /** Agent id/slug for lazy run-detail fetches; detail is hidden without it. */
+  agentLocator?: string;
   canRunNow?: boolean;
   hasMore: boolean;
   loading: boolean;
@@ -80,6 +84,7 @@ export function AgentStudioActivity({
       <div className="agent-studio-activity-list">
         {visibleItems.map((item) => (
           <StudioActivityRun
+            agentLocator={agentLocator}
             expanded={expanded === item.id}
             item={item}
             key={item.id}
@@ -398,16 +403,136 @@ export function AgentStudioCapabilitiesIntro(): ReactElement {
   );
 }
 
+/** Activity items derived from routine runs carry a `run:{uuid}` id. */
+function activityRunId(item: LaunchAgentActivityItem): string | null {
+  if (typeof item.id === "string" && item.id.startsWith("run:")) {
+    return item.id.slice("run:".length) || null;
+  }
+  return null;
+}
+
+function formatStepDuration(durationMs: number | null): string {
+  if (durationMs === null || !Number.isFinite(durationMs)) return "—";
+  if (durationMs < 1_000) return `${Math.max(0, Math.round(durationMs))}ms`;
+  return `${(durationMs / 1_000).toFixed(1)}s`;
+}
+
+/**
+ * Pure renderer for one run's owner-safe step table (WO-3 thin slice):
+ * ordered calls, status, duration, Light cost. Argument/result contents are
+ * deliberately absent — the API's owner-safe projection never returns them.
+ */
+export function StudioRunSteps({
+  detail,
+}: {
+  detail: LaunchOperatorRoutineRunDetail;
+}): ReactElement {
+  return (
+    <div className="agent-studio-run-steps">
+      <div className="agent-studio-section-label">
+        What it called, in order
+      </div>
+      {detail.steps.length
+        ? (
+          <ol className="agent-studio-run-step-list">
+            {detail.steps.map((step) => (
+              <li data-status={step.status} key={step.id}>
+                <code>
+                  {step.functionName === "galactic.ai"
+                    ? "ai.call"
+                    : step.functionName}
+                </code>
+                <em>{step.status}</em>
+                <span>{formatStepDuration(step.durationMs)}</span>
+                <small>{step.usage > 0 ? `Usage ${step.usage}` : ""}</small>
+                {step.diagnostic
+                  ? (
+                    <p className="agent-studio-run-step-error">
+                      {step.diagnostic.summary}
+                    </p>
+                  )
+                  : null}
+              </li>
+            ))}
+          </ol>
+        )
+        : <p>No function calls were recorded for this run.</p>}
+      <p className="agent-studio-run-steps-footer">
+        {detail.run.summary ? `${detail.run.summary} · ` : ""}
+        Usage {detail.run.usage}
+        {detail.logReceipts.length > 0
+          ? ` · ${detail.logReceipts.length} log receipt${
+            detail.logReceipts.length === 1 ? "" : "s"
+          }`
+          : ""}
+      </p>
+    </div>
+  );
+}
+
+/** Lazy fetch wrapper: loads the owner-safe run detail when first expanded.
+ * `fetchRunDetail` is a DI seam for tests; production uses launchApi. */
+export function StudioRunStepsDetail({
+  agentLocator,
+  fetchRunDetail,
+  runId,
+}: {
+  agentLocator: string;
+  fetchRunDetail?: (
+    agentLocator: string,
+    runId: string,
+  ) => Promise<LaunchOperatorRoutineRunDetail>;
+  runId: string;
+}): ReactElement {
+  const [detail, setDetail] = useState<LaunchOperatorRoutineRunDetail | null>(
+    null,
+  );
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    const fetcher = fetchRunDetail ??
+      ((locator: string, id: string) =>
+        launchApi.operatorRoutineRun(locator, id));
+    fetcher(agentLocator, runId).then(
+      (loaded) => {
+        if (!cancelled) setDetail(loaded);
+      },
+      (reason) => {
+        if (!cancelled) {
+          setError(
+            reason instanceof Error
+              ? reason.message
+              : "Run detail is unavailable right now.",
+          );
+        }
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [agentLocator, runId, fetchRunDetail]);
+  if (error) {
+    return <p className="agent-studio-run-steps-error">{error}</p>;
+  }
+  if (!detail) {
+    return <p className="agent-studio-run-steps-loading">Loading steps…</p>;
+  }
+  return <StudioRunSteps detail={detail} />;
+}
+
 function StudioActivityRun({
+  agentLocator,
   expanded,
   item,
   onToggle,
 }: {
+  agentLocator?: string;
   expanded: boolean;
   item: LaunchAgentActivityItem;
   onToggle: () => void;
 }): ReactElement {
   const occurredAt = item.occurredAt ?? item.scheduledAt;
+  const runId = activityRunId(item);
   return (
     <article className={`agent-studio-activity-run${expanded ? " open" : ""}`}>
       <button
@@ -427,6 +552,14 @@ function StudioActivityRun({
       {expanded
         ? (
           <div className="agent-studio-activity-run-detail">
+            {runId && agentLocator
+              ? (
+                <StudioRunStepsDetail
+                  agentLocator={agentLocator}
+                  runId={runId}
+                />
+              )
+              : null}
             <div className="agent-studio-section-label">
               Owner-safe evidence
             </div>

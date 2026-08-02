@@ -30,12 +30,12 @@ Status meanings:
 | AS-BE-009 | Connection testing and safe value projection | Partial | settings/connectors |
 | AS-BE-010 | Interface audience, sharing, and usage metadata | Required | interface artifacts, sharing |
 | AS-BE-011 | Release history, rollback, collaborators, retention, archive, deletion | Required | Agent lifecycle |
-| AS-BE-012 | Studio Pause/Resume mutation | Partial | Agent Home emergency pause |
+| AS-BE-012 | Studio Pause/Resume mutation | Implemented | Agent Home emergency pause |
 | AS-BE-013 | Routine structural lifecycle | Partial | release workflow |
 | AS-BE-014 | Keep authority planes semantically distinct | Invariant | every authority UI/API |
 | AS-BE-015 | Keep Approvals separate from Alerts/Attention | Invariant | AS-BE-004 |
 | AS-BE-016 | Durable machine connection exchange | Required | OAuth/device authorization, AS-BE-001 |
-| AS-BE-017 | Idempotent, resumable Interface invocation | Required | function runner, durable jobs, receipts |
+| AS-BE-017 | Idempotent, resumable Interface invocation | Partial | function runner, durable jobs, receipts |
 
 ## AS-BE-001 — Purpose-bound coding-agent handoff credential
 

@@ -107,6 +107,12 @@
       ]
     },
     {
+      "exports": [
+        "KNOWLEDGE_QUESTION_ALERT_PREFIX"
+      ],
+      "file": "services/agent-knowledge.ts"
+    },
+    {
       "file": "services/agentic-interface-actions.ts",
       "types": [
         "AgenticInterfaceActionAudit",
@@ -1557,8 +1563,12 @@
       "file": "services/routines-feature-flag.ts"
     },
     {
+      "exports": [
+        "AGENT_PAUSE_BATCH_METADATA_KEY"
+      ],
       "file": "services/routines.ts",
       "types": [
+        "AgentResumeBlockedRoutine",
         "LaunchRoutineRole",
         "NormalizedRoutineCapabilityInput",
         "NormalizedRoutineCreateInput",

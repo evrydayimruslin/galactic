@@ -1845,3 +1845,152 @@ body[data-agent-studio-theme="light"] .neb-modal-overlay .neb-modal {
     transition: none !important;
   }
 }
+
+/* Agent-wide pause/resume — the Overview "Right now" cell's safety control. */
+.agent-studio-pause-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.agent-studio-pause-controls button {
+  font: inherit;
+  padding: 6px 14px;
+  border: 1px solid var(--studio-border, rgba(120, 110, 100, 0.4));
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.agent-studio-pause-controls button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.agent-studio-pause-notice {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+
+/* WO-3: owner-safe run step table inside expanded Activity cards. */
+.agent-studio-run-steps {
+  margin-bottom: 14px;
+}
+
+.agent-studio-run-step-list {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.agent-studio-run-step-list li {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.4fr) 0.7fr 0.5fr 0.6fr;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--studio-row, rgba(120, 110, 100, 0.07));
+}
+
+.agent-studio-run-step-list li[data-status="failed"] {
+  outline: 1px solid rgba(180, 70, 40, 0.35);
+}
+
+.agent-studio-run-step-list code {
+  font-weight: 600;
+}
+
+.agent-studio-run-step-error {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+
+.agent-studio-run-steps-footer,
+.agent-studio-run-steps-loading,
+.agent-studio-run-steps-error {
+  font-size: 0.85em;
+  opacity: 0.75;
+  margin: 6px 0 0;
+}
+
+/* WO-5: Knowledge-lite pane. */
+.agent-studio-knowledge-questions {
+  list-style: none;
+  margin: 8px 0 20px;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.agent-studio-knowledge-questions li {
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--studio-row, rgba(120, 110, 100, 0.07));
+}
+
+.agent-studio-knowledge-questions small {
+  display: block;
+  opacity: 0.7;
+  margin-top: 2px;
+}
+
+.agent-studio-knowledge-answer {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.agent-studio-knowledge-answer input {
+  flex: 1 1 240px;
+  font: inherit;
+  padding: 6px 10px;
+}
+
+.agent-studio-knowledge-facts {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0 20px;
+}
+
+.agent-studio-knowledge-facts th,
+.agent-studio-knowledge-facts td {
+  text-align: left;
+  padding: 6px 10px;
+  vertical-align: top;
+  border-bottom: 1px solid var(--studio-border, rgba(120, 110, 100, 0.2));
+}
+
+.agent-studio-knowledge-teach {
+  display: grid;
+  gap: 8px;
+  max-width: 560px;
+  margin-bottom: 16px;
+}
+
+.agent-studio-knowledge-teach input,
+.agent-studio-knowledge-teach textarea {
+  font: inherit;
+  padding: 6px 10px;
+}
+
+.agent-studio-knowledge-teach textarea {
+  min-height: 64px;
+  resize: vertical;
+}
+
+.agent-studio-knowledge-empty,
+.agent-studio-knowledge-notice,
+.agent-studio-knowledge-error {
+  font-size: 0.9em;
+  opacity: 0.85;
+}
