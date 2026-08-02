@@ -357,6 +357,16 @@ interface DynamicWorkerEntrypointExports {
       };
     },
   ): unknown;
+  ConceptsBinding(
+    input: {
+      props: {
+        appId: string;
+        userId: string;
+        userEmail?: string;
+        requireExecCtx?: boolean;
+      };
+    },
+  ): unknown;
   NotifyBinding(
     input: {
       props: {
@@ -379,6 +389,9 @@ interface DynamicWorkerEntrypointExports {
     input: { props: { sessionName: string } },
   ): unknown;
   TestKnowledgeBinding(
+    input: { props: { sessionName: string } },
+  ): unknown;
+  TestConceptsBinding(
     input: { props: { sessionName: string } },
   ): unknown;
   TestEmbedBinding(
@@ -1103,6 +1116,12 @@ globalThis.ultralight = {
     ask(o) { if (!${allowsDatabaseWrite}) return Promise.reject(new Error('galactic.knowledge.ask requires database.write authority for this function.')); const e = __rpcEnv; if (!e.KNOWLEDGE) return Promise.reject(new Error('galactic.knowledge unavailable in this execution.')); return e.KNOWLEDGE.ask({ question: o && o.question, context: o && o.context, blocking: !!(o && o.blocking) }, globalThis.__execHandle); },
     facts() { if (!${allowsDatabaseRead}) return Promise.reject(new Error('galactic.knowledge.facts requires database.read authority for this function.')); const e = __rpcEnv; if (!e.KNOWLEDGE) return Promise.reject(new Error('galactic.knowledge unavailable in this execution.')); return e.KNOWLEDGE.facts(globalThis.__execHandle); },
   },
+  // Concept graph v1 (WO-6 PR B): same declared-database authority plane.
+  concepts: {
+    about(slug) { if (!${allowsDatabaseRead}) return Promise.reject(new Error('galactic.concepts.about requires database.read authority for this function.')); const e = __rpcEnv; if (!e.CONCEPTS) return Promise.reject(new Error('galactic.concepts unavailable in this execution.')); return e.CONCEPTS.about(slug, globalThis.__execHandle); },
+    suggest(o) { if (!${allowsDatabaseRead}) return Promise.reject(new Error('galactic.concepts.suggest requires database.read authority for this function.')); const e = __rpcEnv; if (!e.CONCEPTS) return Promise.reject(new Error('galactic.concepts unavailable in this execution.')); return e.CONCEPTS.suggest({ text: o && o.text, limit: o && o.limit }, globalThis.__execHandle); },
+    describe(o) { if (!${allowsDatabaseWrite}) return Promise.reject(new Error('galactic.concepts.describe requires database.write authority for this function.')); const e = __rpcEnv; if (!e.CONCEPTS) return Promise.reject(new Error('galactic.concepts unavailable in this execution.')); return e.CONCEPTS.describe({ slug: o && o.slug, title: o && o.title, description: o && o.description, aliases: o && o.aliases }, globalThis.__execHandle); },
+  },
   runs: {
     recent(o) { if (!${allowsRoutineRead}) return Promise.reject(new Error('routine.read authority not granted for this function.')); const e = __rpcEnv; if (!e.RUNS) return Promise.reject(new Error('galactic.runs unavailable: set "flight_recorder": true in the manifest.')); return e.RUNS.recent((o && o.limit) || 10, globalThis.__execHandle); },
   },
@@ -1401,6 +1420,7 @@ export default {
         "TestMemoryBinding",
         "TestRunsBinding",
         "TestKnowledgeBinding",
+        "TestConceptsBinding",
         "TestNotifyBinding",
         "TestAIBinding",
         "TestEmbedBinding",
@@ -1583,6 +1603,22 @@ export default {
           props: {
             appId: config.appId,
             userId: config.userId,
+            requireExecCtx: useGetReuse,
+          },
+        });
+      }
+      if (testMode) {
+        if (ctx?.exports?.TestConceptsBinding) {
+          bindings.CONCEPTS = ctx.exports.TestConceptsBinding({
+            props: { sessionName: persistentTestSessionName() },
+          });
+        }
+      } else if (ctx?.exports?.ConceptsBinding) {
+        bindings.CONCEPTS = ctx.exports.ConceptsBinding({
+          props: {
+            appId: config.appId,
+            userId: config.userId,
+            userEmail: config.user?.email ?? "",
             requireExecCtx: useGetReuse,
           },
         });

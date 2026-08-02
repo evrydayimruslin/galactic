@@ -5314,6 +5314,14 @@ When a discovery result includes \`matched_subject.next_action\`, prefer that ac
 
 ## Skills As Functions
 
+## Concepts — the agent's linked domain graph
+
+Writing is linking. \`[[slug]]\` anywhere in prose the platform stores — knowledge facts, open questions, the mission, memory, run summaries, function and schema-field descriptions, concept pages — records a mention whose payload is its enclosing block. Unknown slugs auto-create provisional concepts; never fear writing a bracket. Empty \`[[]]\` does nothing: identity is declared structurally, not with bracket tricks.
+
+Declare identity in the manifest: on any function arg property, \`concept: true\` means the field IS the concept named by its slugified field name (\`refund_window\` → \`refund-window\`), and the field's description seeds the concept page one time, only if the page is blank. \`concept: "other-slug"\` declares identity under a different name (no seeding). Identity edges carry release and arg-path provenance.
+
+At runtime (rides declared database authority): \`galactic.concepts.about(slug)\` returns the assembled neighborhood — description, schema identities, fact/mission/memory/summary blocks, related concepts. \`galactic.concepts.suggest({ text })\` ranks candidate concepts for a text blob (verbatim/alias matches first, then embedding similarity). \`galactic.concepts.describe({ slug, description })\` authors the concept page (agent-attributed; description edits re-embed under the owner's BYOK route). Write brackets into your own prose and D1 text you store; retrieve neighborhoods before answering — the graph is how your past decisions reach your next wake.
+
 Skills are a convention, not a separate primitive. An Agent MAY export a skills-index function, e.g. \`skills_index(args: {})\` returning \`{ skills: [{ id, name, description }] }\`, plus a reader \`skill_reader(args: { skill_id: string })\` returning \`{ id, content, format: "markdown" }\`. Full skill text is priced like any other function via per-function pricing (\`function_prices\` / \`free_calls\`). Generated skills.md function docs are always free.
 
 ## Cross-Agent Wiring

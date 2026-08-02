@@ -144,6 +144,28 @@ export class MemoryBinding
     await bucket.put(memKey, memory.trim() + "\n", {
       httpMetadata: { contentType: "text/markdown" },
     });
+
+    // WO-6: memory is a parsed concept surface. Best-effort — indexing
+    // never fails the remember() that triggered it.
+    try {
+      // Agent-scoped notebooks only: user-scope shared memory is not one
+      // agent's concept surface.
+      const conceptAppId = this.ctx.props.appId;
+      if (!conceptAppId) return;
+      const { reindexProseSurface } = await import(
+        "../../services/agent-concepts.ts"
+      );
+      await reindexProseSurface(
+        this.ctx.props.userId,
+        conceptAppId,
+        "memory",
+        memKey,
+        memory,
+        "paragraph",
+      );
+    } catch (err) {
+      console.error("[CONCEPTS] memory reindex failed:", err);
+    }
   }
 
   async recall(

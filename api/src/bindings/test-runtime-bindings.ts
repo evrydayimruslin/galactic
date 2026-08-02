@@ -144,6 +144,46 @@ export class TestRunsBinding extends WorkerEntrypoint<
  * deterministic canned shapes — a test run can never mint owner alerts or
  * pollute the real facts table.
  */
+/**
+ * Concepts are persistent production state (WO-6 PR B); gx.test never
+ * touches the real graph. Reads return deterministic empties; describe
+ * records a database-write effect like any other contained mutation.
+ */
+export class TestConceptsBinding extends WorkerEntrypoint<
+  Env,
+  TestRuntimeSessionBindingProps
+> {
+  async about(
+    _slug: unknown,
+    _execCtxHandle?: string,
+  ): Promise<null> {
+    await resolveTestRuntimeSession(this.env, this.ctx).recordObservedEffect(
+      UL_TEST_OBSERVED_EFFECTS.databaseRead,
+    );
+    return null;
+  }
+
+  async suggest(
+    _input: unknown,
+    _execCtxHandle?: string,
+  ): Promise<{ suggestions: unknown[] }> {
+    await resolveTestRuntimeSession(this.env, this.ctx).recordObservedEffect(
+      UL_TEST_OBSERVED_EFFECTS.databaseRead,
+    );
+    return { suggestions: [] };
+  }
+
+  async describe(
+    _input: unknown,
+    _execCtxHandle?: string,
+  ): Promise<{ concept: { slug: string; status: string } }> {
+    await resolveTestRuntimeSession(this.env, this.ctx).recordObservedEffect(
+      UL_TEST_OBSERVED_EFFECTS.databaseWrite,
+    );
+    return { concept: { slug: "ul-test-concept", status: "provisional" } };
+  }
+}
+
 export class TestKnowledgeBinding extends WorkerEntrypoint<
   Env,
   TestRuntimeSessionBindingProps

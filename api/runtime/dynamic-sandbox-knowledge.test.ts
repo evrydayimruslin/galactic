@@ -175,6 +175,7 @@ function installHarness(): {
         };
       },
       // deno-lint-ignore no-explicit-any
+      TestConceptsBinding: (_input: unknown) => ({}),
       TestKnowledgeBinding: (input: any) => {
         captured.testProps = input?.props ?? null;
         const sessionName = input?.props?.sessionName;
