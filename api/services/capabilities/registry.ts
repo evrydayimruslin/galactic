@@ -19,6 +19,7 @@ import { pollJob } from "./job.ts";
 import { recordFlag } from "./flag.ts";
 import { inspectAppDatabase } from "./db-inspect.ts";
 import { attentionCapability } from "./attention.ts";
+import { conceptsCapability } from "./concepts.ts";
 import { notificationsCapability } from "./notifications.ts";
 
 const CAPABILITIES: Capability[] = [
@@ -1001,6 +1002,70 @@ const CAPABILITIES: Capability[] = [
     cli: { command: "job" },
     web: { method: "GET", path: "/api/launch/jobs/:id" },
     handler: (args, ctx) => pollJob(ctx.userId, String(args.job_id ?? "")),
+  },
+  {
+    id: "concepts",
+    branch: "agent_user",
+    tier: 1,
+    auth: { ownerOnly: true },
+    surfaces: ["mcp", "cli"],
+    advertisedName: "gx.concepts",
+    cli: { command: "concepts" },
+    aliases: ["ul.concepts"],
+    title: "The Agent's linked concept graph",
+    description:
+      "Per-agent domain concepts built by writing: [[slug]] mentions in " +
+      "prose and `concept:` declarations in the manifest schema. " +
+      "action=list returns the glossary with mention counts; about returns " +
+      "one slug's neighborhood (description, layer-labeled mention blocks " +
+      "with release/arg-path provenance, related concepts); suggest ranks " +
+      "candidate concepts for a text blob (verbatim/alias basis on this " +
+      "surface); describe authors the concept page (attributed owner or " +
+      "agent by auth source; embedding rides the owner's next Studio " +
+      "save). Requires agent_id (an Agent you own). Writing brackets " +
+      "anywhere creates concepts — this tool reads and curates, it never " +
+      "gates.",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["list", "about", "suggest", "describe"],
+          description: 'Default "list".',
+        },
+        agent_id: {
+          type: "string",
+          description: "Owned private Agent UUID or slug. Required.",
+        },
+        slug: {
+          type: "string",
+          description: "about/describe: the concept slug.",
+        },
+        text: {
+          type: "string",
+          description: "suggest: the text blob to rank concepts for.",
+        },
+        limit: { type: "number", description: "suggest: max candidates." },
+        title: { type: "string", description: "describe: display title." },
+        description: {
+          type: "string",
+          description: "describe: the concept page prose ([[links]] work).",
+        },
+        aliases: {
+          type: "array",
+          items: { type: "string" },
+          description: "describe: alias slugs that resolve to this concept.",
+        },
+      },
+      required: ["agent_id"],
+    },
+    handler: (args, ctx) => conceptsCapability(args, ctx),
   },
   {
     id: "attention",
