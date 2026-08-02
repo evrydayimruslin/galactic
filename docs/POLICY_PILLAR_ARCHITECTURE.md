@@ -312,3 +312,97 @@ restarts, (c) fail-closed tests (timeout, parse failure, ambiguity), and
 harness from P6 is the same evaluator as production (one code path — the
 assessment's requirement), which is what makes policy changes testable before
 they govern anything real.
+
+## 13. Design note — the Concept Graph (WO-6 now; P4/P5 consumer later)
+
+Decisions locked 2026-08-02 with the owner. File-level projection:
+`docs/AGENT_STUDIO_LAUNCH_WORK_ORDERS.md` WO-6. This section is the
+decision record; the work order is the build plan.
+
+### 13.1 Thesis
+
+A per-agent graph of domain concepts, built as a **side effect of writing**,
+consumed by retrieval now and by the gate later. Three edge layers, mapping
+onto the attestation ladder (I-series invariants apply unchanged):
+
+| Layer | Origin | Grade |
+|---|---|---|
+| Structural | Platform-recorded (receipts, answered-by, release provenance) | attested |
+| Asserted | Written — `[[slug]]` mentions, `concept:` declarations, concept-page prose | claimed, with provenance |
+| Semantic | Computed — embedding similarity, ranked with scores + model identity | observed; never stored as truth |
+
+### 13.2 The notation contract
+
+**Structure declares identity; prose declares association.**
+
+- `[[slug]]` in any parsed prose = association. The mention's payload is its
+  enclosing block (Roam's linked references). Unknown slugs auto-create
+  `provisional` concepts — writing never errors.
+- `concept: true` on a manifest schema field = identity; the field IS the
+  concept named by its slugified field name. String form
+  `concept: "other-slug"` = identity with a different name. Brackets never
+  appear in identifiers; the key never appears in prose. (Considered and
+  rejected: `x-concept` extension keys; empty-`[[]]`-in-description — both
+  superseded by the dedicated key.)
+- **Seeding:** the field's description copies onto the concept page only if
+  the page is blank — one-time, never overwriting; first writer seeds on
+  collisions. The manifest declares; the page lives.
+- Slugs are immutable IDs (they live inside years of text); titles are
+  mutable; merges are alias mappings — never text rewrites. Identity edges
+  are re-asserted per release with release provenance; removing the key
+  never cascade-deletes a concept (accrued case law survives).
+
+### 13.3 Surfaces and blocks
+
+Parsed surfaces: facts, questions, mission/policy text, memory, activity
+summaries, function descriptions, schema field descriptions, concept pages,
+and declared D1 text columns. Prose only; fenced code skipped. Blocks are
+the surface's natural unit — Galactic's row/field-shaped stores mean the
+chunking is already done; only memory and mission need a paragraph rule.
+**The block is also the embedding chunk** — one boundary, both uses.
+Mentions are derived: recomputed per surface on write, so edits self-heal.
+
+D1 tiers: **v1** = manifest-declared columns parsed at the metered database
+write chokepoint (ambient — the agent's ordinary CRUD is the indexing; the
+injected concept glossary teaches it the vocabulary to bracket). **v1.5** =
+unlinked-references view (verbatim search, promotable to mentions — a view,
+never silent edges). **Deferred** = semantic sweep over tenant rows.
+
+### 13.4 Retrieval primitives
+
+- `about(slug)` — the assembled neighborhood: description, schema
+  identities (release + arg path), fact/policy/memory/activity/D1 blocks,
+  co-mentioned concepts. Layers labeled per the attestation ladder.
+- `suggest(text)` — ranked candidate concepts for a text blob: verbatim and
+  alias matches first (deterministic basis), then embedding similarity
+  within one pinned model space. Callable by dev code (shapes the median)
+  and, at P5, by the gate (shapes the tail) — same primitive, two callers.
+
+Embeddings are BYOK (I8), inline on the concept row with
+provider/model/text-hash recorded (the `agent_search_documents`
+discipline); cross-model comparison is refused; re-embed-all is an explicit
+maintenance action.
+
+### 13.5 Pillar consumption (why this ships before P2)
+
+- **P5 scoping:** the gate's "which semantic policies apply to this call's
+  content" question is `suggest()` invoked by the platform — graded in,
+  binary out (§4's evaluation order gains the scoping step there, not
+  before). Generous inclusion threshold: false-include costs one judge
+  call; false-exclude is a false allow.
+- **P4 compiler:** `concept: true` identities give deterministic
+  policy→function→arg-path binding — "hold [[refund]]s over €50" compiles
+  against the declared path, and the readback can say so.
+- **P3 case law:** approval resolutions append ruling lines to concept
+  pages (prose → re-embed → better scoping; receipts linked via structural
+  edge, never copied). Envelopes carry scoping evidence so rulings have a
+  target.
+- Sequencing: WO-6 precedes P0–P2 because it touches no gate machinery and
+  every week the notation lives in the scaffold docs is a week third-party
+  agents accumulate brackets — the gate arrives to a furnished house.
+
+### 13.6 Non-goals (this stream)
+
+Typed edges (revisit with P6 attribution), cross-agent graphs
+(collaborators-era), auto-injection into `ai()` context, semantic D1
+sweeps, unlinked-reference auto-linking, any gate integration before P5.
