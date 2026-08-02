@@ -571,6 +571,7 @@ class Wave3Harness {
             return createUlTestRunsResponse();
           },
         }),
+        TestConceptsBinding: ((_input: unknown) => ({})) as never,
         TestKnowledgeBinding: (
           { props }: { props: { sessionName: string } },
         ) => ({

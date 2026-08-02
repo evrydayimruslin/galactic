@@ -119,6 +119,7 @@ function installHarness(): {
         recent: () => Promise.resolve({ runs: [] }),
       }),
       // deno-lint-ignore no-explicit-any
+      TestConceptsBinding: ((_input: unknown) => ({})) as never,
       TestKnowledgeBinding: (input: any) => {
         const sessionName = input?.props?.sessionName;
         if (

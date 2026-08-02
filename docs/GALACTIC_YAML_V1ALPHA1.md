@@ -235,6 +235,19 @@ The effect map is the more precise declaration. Each value is:
 Neither value grants a capability by itself. Account configuration, setup,
 runtime permissions, and destination gates may always narrow or deny it.
 
+### `concept` (arg property key, optional)
+
+On any function argument property, `concept: true` declares that the field IS
+a domain concept named by its slugified property name (`refund_window` →
+`refund-window`); the property's `description` seeds that concept's page
+one time, only if the page is blank — the manifest declares, the page lives.
+`concept: "other-slug"` declares identity under a different slug (2–63 chars,
+`[a-z0-9-]`; no seeding). Invalid slugs are reported as promotion warnings and
+skipped, never silently accepted. Removing the key stops asserting the edge in
+later releases; it never deletes the concept or its accrued history. Prose
+`[[slug]]` mentions in descriptions remain plain associations — structure
+declares identity, prose declares association.
+
 For the launch slice, `ask` and `free` are review/activation policy, not a
 generic prompt injected before every SDK call. Deployment remains private and
 `setup_required`, routines remain paused, and setup must obtain approval for

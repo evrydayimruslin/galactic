@@ -309,6 +309,7 @@ function installHarness(): { captured: Captured; restore: () => void } {
       TestRunsBinding: () => ({
         recent: () => Promise.resolve({ runs: [] }),
       }),
+      TestConceptsBinding: ((_input: unknown) => ({})) as never,
       TestKnowledgeBinding: () => ({
         ask: () =>
           Promise.resolve({
