@@ -2343,6 +2343,24 @@ export interface LaunchAgentHomeResumeBlockedRoutine {
   reason: string;
 }
 
+/**
+ * One immutable release from the app_releases ledger (WO-4). Read-only:
+ * there is deliberately no mutation surface over this history — recovery is
+ * fix-forward via a new handoff, never pointer rewrites.
+ */
+export interface LaunchAgentReleaseSummary {
+  id: string;
+  version: string;
+  releaseGeneration: number;
+  storageBytes: number;
+  createdAt: string;
+}
+
+export interface LaunchAgentReleasesResponse {
+  releases: LaunchAgentReleaseSummary[];
+  generatedAt: string;
+}
+
 /** Agent-wide resume outcome (POST /home/resume). */
 export interface LaunchAgentHomeAgentResumeResponse {
   scope: "agent";

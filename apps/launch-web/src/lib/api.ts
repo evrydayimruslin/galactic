@@ -20,6 +20,7 @@ import type {
   LaunchAgentHomeAgentPauseResponse,
   LaunchAgentHomeAgentResumeResponse,
   LaunchAgentHomeResponse,
+  LaunchAgentReleasesResponse,
   LaunchAgentHomeRoutineUpdateRequest,
   LaunchAgentHomeSettingsUpdateRequest,
   LaunchAgentManagedRoutineActionRequest,
@@ -467,6 +468,13 @@ export class LaunchApiClient {
       `/api/launch/agents/${encodeURIComponent(idOrSlug)}/home/activity${
         query ? `?${query}` : ""
       }`,
+    );
+  }
+
+  /** Read-only immutable release history, newest generation first (WO-4). */
+  agentReleases(idOrSlug: string): Promise<LaunchAgentReleasesResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/releases`,
     );
   }
 

@@ -1270,3 +1270,29 @@ html[data-theme="light"] .nebula-root .neb-add-agent-card.copied-prompt {
 @media (prefers-reduced-motion: reduce) {
   .nebula-root *, .nebula-root *::before, .nebula-root *::after { animation: none !important; transition: none !important; }
 }
+
+/* WO-4: read-only release history inside the Release collapsible. */
+.neb-release-history {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.neb-release-history li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
+}
+
+.neb-release-live-badge {
+  font-style: normal;
+  font-size: 0.72em;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  padding: 0 5px;
+  margin-left: 8px;
+  letter-spacing: 0.06em;
+}

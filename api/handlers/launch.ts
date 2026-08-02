@@ -97,6 +97,7 @@ import {
   type LaunchAgentRoutineActionRequest,
   type LaunchAgentRoutineBlocker,
   type LaunchAgentRoutineOverview,
+  type LaunchAgentReleasesResponse,
   type LaunchAgentRoutineResponse,
   type LaunchAgentRoutineRun,
   type LaunchAgentRoutineSchedule,
@@ -271,6 +272,7 @@ import type {
   AgentGrantUpdateRequest,
 } from "../../shared/contracts/agent-grants.ts";
 import type { SensitiveRoute } from "../services/sensitive-route-rate-limit.ts";
+import { listAgentReleases } from "../services/app-releases-projection.ts";
 import {
   approveRoutineCapabilities,
   getRoutine,
@@ -1253,6 +1255,15 @@ export async function handleLaunch(
       );
     }
 
+    const agentReleasesMatch = path.match(
+      /^\/api\/launch\/agents\/([^/]+)\/releases$/,
+    );
+    if (agentReleasesMatch) {
+      return await privateLaunchRoute(() =>
+        handleLaunchAgentReleases(request, agentReleasesMatch[1], method)
+      );
+    }
+
     const agentAttentionMatch = path.match(
       /^\/api\/launch\/agents\/([^/]+)\/attention$/,
     );
@@ -1660,6 +1671,7 @@ function buildLaunchStatus(request: Request): Record<string, unknown> {
       agentHomeActions: "/api/launch/agents/{id}/home/actions",
       agentHomePause: "/api/launch/agents/{id}/home/pause",
       agentHomeResume: "/api/launch/agents/{id}/home/resume",
+      agentReleases: "/api/launch/agents/{id}/releases",
       agentRoutine: "/api/launch/agents/{id}/routine",
       agentComputeSettings: "/api/launch/agents/{id}/compute/settings",
       agentComputeRuns:
@@ -2924,6 +2936,27 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
               description:
                 "Batch-stamped routines resumed; activation blockers reported per routine",
             },
+            "403": { description: "Account session required" },
+            "404": { description: "Agent not found" },
+          },
+        },
+      },
+      "/api/launch/agents/{id}/releases": {
+        get: {
+          operationId: "listLaunchAgentReleases",
+          summary: "List every immutable release of a private Agent",
+          description:
+            "Account-session and owner-only. Read-only history of the app_releases ledger, newest generation first (limit 50): id, version, generation, storage size, created time. There is deliberately no mutation surface here — releases are immutable and recovery is fix-forward via a new handoff.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Private Agent id or slug",
+          }],
+          responses: {
+            "200": { description: "Releases, newest generation first" },
             "403": { description: "Account session required" },
             "404": { description: "Agent not found" },
           },
@@ -7081,6 +7114,37 @@ async function handleLaunchAgentAttention(
     }),
   });
   return privateLaunchJson(projection satisfies LaunchAgentAttentionProjection);
+}
+
+/**
+ * WO-4: read-only owner projection of the immutable release ledger. The
+ * "live" badge is a client concern (compare against home.release.live);
+ * this endpoint states history without interpreting it.
+ */
+async function handleLaunchAgentReleases(
+  request: Request,
+  encodedLocator: string,
+  method: string,
+): Promise<Response> {
+  if (method !== "GET") {
+    return privateLaunchJson({ error: "Method not allowed" }, 405);
+  }
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForAgentHome(user);
+  const resolved = await resolveOwnerPrivateRoutineAgent(
+    user,
+    encodedLocator,
+  );
+  if (resolved instanceof Response) {
+    return withPrivateLaunchPrivacy(resolved);
+  }
+  const releases = await listAgentReleases(user.id, resolved.id);
+  return privateLaunchJson(
+    {
+      releases,
+      generatedAt: new Date().toISOString(),
+    } satisfies LaunchAgentReleasesResponse,
+  );
 }
 
 async function handleLaunchOperatorRoutineRun(
