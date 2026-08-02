@@ -1875,3 +1875,49 @@ body[data-agent-studio-theme="light"] .neb-modal-overlay .neb-modal {
   font-size: 0.85em;
   opacity: 0.8;
 }
+
+/* WO-3: owner-safe run step table inside expanded Activity cards. */
+.agent-studio-run-steps {
+  margin-bottom: 14px;
+}
+
+.agent-studio-run-step-list {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.agent-studio-run-step-list li {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.4fr) 0.7fr 0.5fr 0.6fr;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--studio-row, rgba(120, 110, 100, 0.07));
+}
+
+.agent-studio-run-step-list li[data-status="failed"] {
+  outline: 1px solid rgba(180, 70, 40, 0.35);
+}
+
+.agent-studio-run-step-list code {
+  font-weight: 600;
+}
+
+.agent-studio-run-step-error {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+
+.agent-studio-run-steps-footer,
+.agent-studio-run-steps-loading,
+.agent-studio-run-steps-error {
+  font-size: 0.85em;
+  opacity: 0.75;
+  margin: 6px 0 0;
+}

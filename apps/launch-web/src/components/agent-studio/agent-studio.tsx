@@ -773,6 +773,7 @@ function AgentStudioPaneContent({
     return (
       <AgentStudioActivity
         activity={activity}
+        agentLocator={agentLocator(agent)}
         canRunNow={Boolean(home?.actions.canRunNow)}
         hasMore={Boolean(activityCursor)}
         loading={activityLoading}

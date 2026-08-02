@@ -10,7 +10,106 @@ import {
   AgentStudioContractBoundary,
   AgentStudioLimits,
   matchesActivityFilter,
+  StudioRunSteps,
 } from "./agent-studio-screens";
+import type { LaunchOperatorRoutineRunDetail } from "../../../../../shared/contracts/launch.ts";
+
+function runDetailFixture(): LaunchOperatorRoutineRunDetail {
+  return {
+    agent: { id: "agent-1", slug: "agent-1", name: "Agent One" },
+    routine: { id: "routine-1", name: "Inbox loop", status: "active" },
+    run: {
+      id: "run-1",
+      status: "completed",
+      trigger: "schedule",
+      traceId: null,
+      startedAt: "2026-08-01T14:32:00.000Z",
+      completedAt: "2026-08-01T14:32:04.200Z",
+      durationMs: 4_200,
+      usage: 3,
+      summary: "Checked the inbox, drafted 2 replies, sent 1.",
+    },
+    diagnostic: null,
+    steps: [
+      {
+        id: "step-1",
+        stepIndex: 0,
+        functionName: "check_inbox",
+        status: "succeeded",
+        durationMs: 820,
+        usage: 1,
+        receiptId: null,
+        diagnostic: null,
+        startedAt: null,
+        completedAt: null,
+      },
+      {
+        id: "step-2",
+        stepIndex: 1,
+        functionName: "galactic.ai",
+        status: "succeeded",
+        durationMs: 2_100,
+        usage: 0,
+        receiptId: null,
+        diagnostic: null,
+        startedAt: null,
+        completedAt: null,
+      },
+      {
+        id: "step-3",
+        stepIndex: 2,
+        functionName: "send_reply",
+        status: "failed",
+        durationMs: 610,
+        usage: 1,
+        receiptId: "receipt-3",
+        diagnostic: {
+          version: 1,
+          code: "smtp_refused",
+          causeCode: null,
+          summary: "SMTP refused the send on the first attempt.",
+          detail: null,
+          provenance: "runtime",
+          retryable: true,
+        },
+        startedAt: null,
+        completedAt: null,
+      },
+    ],
+    logReceipts: [{
+      receiptId: "receipt-3",
+      functionName: "send_reply",
+      createdAt: "2026-08-01T14:32:04.000Z",
+    }],
+    generatedAt: "2026-08-01T14:32:05.000Z",
+  } as unknown as LaunchOperatorRoutineRunDetail;
+}
+
+describe("Studio run steps (WO-3 thin slice)", () => {
+  it("renders the ordered call table with durations, usage, and diagnostics", () => {
+    const markup = renderToStaticMarkup(
+      <StudioRunSteps detail={runDetailFixture()} />,
+    );
+    expect(markup).toContain("What it called, in order");
+    expect(markup).toContain("check_inbox");
+    // Flight-recorder AI exchanges render under the product name.
+    expect(markup).toContain("ai.call");
+    expect(markup).not.toContain("galactic.ai");
+    expect(markup).toContain("820ms");
+    expect(markup).toContain("2.1s");
+    expect(markup).toContain("SMTP refused the send on the first attempt.");
+    expect(markup).toContain("Checked the inbox, drafted 2 replies, sent 1.");
+    expect(markup).toContain("1 log receipt");
+    // The owner-safe projection has no argument/result content to leak.
+    expect(markup).not.toContain("args");
+  });
+
+  it("says so plainly when a run recorded no calls", () => {
+    const detail = { ...runDetailFixture(), steps: [] };
+    const markup = renderToStaticMarkup(<StudioRunSteps detail={detail} />);
+    expect(markup).toContain("No function calls were recorded for this run.");
+  });
+});
 
 function activityItem(id: string, title: string): LaunchAgentActivityItem {
   return {
