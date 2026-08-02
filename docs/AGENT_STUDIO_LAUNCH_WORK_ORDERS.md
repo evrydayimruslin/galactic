@@ -19,7 +19,7 @@ the baseline commit; re-locate by symbol, not line number.
 | WO-3 | Activity run detail (thin slice) | — | 1 PR | **landed** (`feat(wo-3)`) |
 | WO-4 | Release history (read-only) | — | 1 PR | **landed** (`feat(wo-4)`) |
 | WO-5 | Knowledge-lite + open questions + alert wiring | WO-3 helpful, not required | 2 PRs | **landed** — PR A (store/API/pane/alerts) + PR B (sandbox `galactic.knowledge.ask/facts` binding, gated on declared database authority; gx.test stub; template v26) |
-| WO-6 | Concept graph v1 — brackets, glossary, `about()`/`suggest()` | WO-5 (store + binding patterns) | 3 PRs | **PR A + PR B landed** (PR B: ConceptsBinding about/suggest/describe on declared database authority, template v27, gx.test stub, memory hook, skill-docs + galactic.yaml notation docs). To PR C with the Studio glossary: gx.* MCP tools, D1 tier-1, dedicated sandbox wiring test |
+| WO-6 | Concept graph v1 — brackets, glossary, `about()`/`suggest()` | WO-5 (store + binding patterns) | 3 PRs | **PR A + B + C landed** — full data plane, agent plane (binding/template v27/docs), and the Studio glossary (Knowledge pane second act: list, concept pages with layer-labeled backlinks, owner descriptions). Follow-up WO-6.1 (deliberate, small): gx.* MCP tools, D1 tier-1 (`concepts_index` manifest key + metered-write parse), dedicated sandbox wiring test |
 
 Recommended order: **WO-1 → WO-2 → WO-3 → WO-4 → WO-5.** WO-1 first because it is
 the cornerstone of the pillar's invocation ledger (P1) — everything else is

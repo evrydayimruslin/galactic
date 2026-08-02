@@ -6,6 +6,7 @@ import type {
   LaunchAgentKnowledgeQuestion,
 } from "../../../../../shared/contracts/launch.ts";
 import { launchApi } from "../../lib/api";
+import { AgentStudioConcepts } from "./agent-studio-concepts";
 import { StudioPageHeader } from "./agent-studio-overview";
 
 // WO-5 Knowledge-lite pane. Probabilistic by decision: facts are guidance
@@ -273,6 +274,8 @@ export function AgentStudioKnowledge({
         </button>
         <small>Re-using a slug updates that fact and bumps its revision.</small>
       </div>
+
+      <AgentStudioConcepts agentLocator={agentLocator} />
 
       <div className="agent-studio-contract-note">
         Facts are guidance the agent receives, not enforced policy. Citations
