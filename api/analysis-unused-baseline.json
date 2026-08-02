@@ -358,6 +358,12 @@
       ]
     },
     {
+      "file": "services/capabilities/concepts.ts",
+      "types": [
+        "ConceptsCapabilityDependencies"
+      ]
+    },
+    {
       "file": "services/capability-suggestion-telemetry.ts",
       "types": [
         "CapabilityGapShortcomingInput",
