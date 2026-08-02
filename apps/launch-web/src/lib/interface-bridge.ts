@@ -24,10 +24,11 @@ import {
   LaunchApiAuthenticationError,
   LaunchApiRequestError,
 } from "./api";
-import type {
-  LaunchFunctionRunRequest,
-  LaunchFunctionRunResponse,
-  LaunchJobStatusResponse,
+import {
+  LAUNCH_CLIENT_INVOCATION_ARG,
+  type LaunchFunctionRunRequest,
+  type LaunchFunctionRunResponse,
+  type LaunchJobStatusResponse,
 } from "../../../../shared/contracts/launch.ts";
 
 export interface InterfaceBridgeContext {
@@ -176,7 +177,18 @@ export interface InterfaceDurableCallOptions {
   /** Test seam and optional status hook for host chrome. */
   sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
   onJobStatus?: (status: LaunchJobStatusResponse) => void;
+  /**
+   * Caller-generated invocation identity (WO-1). Defaults to a fresh UUID
+   * per logical call. The same id is reused across dispatch retries, so an
+   * ambiguous network failure can be retried safely: the server returns the
+   * existing job envelope instead of minting a second execution.
+   */
+  invocationId?: string;
 }
+
+/** Dispatch retry budget: total attempts, and backoff between them. */
+const DISPATCH_MAX_ATTEMPTS = 3;
+const DISPATCH_RETRY_DELAYS_MS = [500, 1_500];
 
 function abortError(): DOMException {
   return new DOMException("The interface was closed.", "AbortError");
@@ -243,6 +255,21 @@ function retryableStatusReadFailure(value: unknown): boolean {
 }
 
 /**
+ * Dispatch failures worth retrying are the AMBIGUOUS ones — network errors,
+ * timeouts, and 5xx, where the job may or may not have been created and the
+ * stable invocation id makes a re-POST safe. Definitive refusals (auth,
+ * validation, 425/429 capacity) mean the server processed the request and
+ * created nothing; retrying those inside seconds is noise, not recovery.
+ */
+function retryableDispatchFailure(value: unknown): boolean {
+  if (value instanceof LaunchApiAuthenticationError) return false;
+  if (value instanceof TypeError) return true;
+  const normalized = normalizeInterfaceBridgeError(value);
+  return normalized.status === 408 ||
+    (typeof normalized.status === "number" && normalized.status >= 500);
+}
+
+/**
  * Dispatch one Interface call as a durable job and follow that exact job to a
  * terminal result. Capacity admission waits stay attached to the same queued
  * write; this function never creates a second job to "retry" it.
@@ -253,20 +280,54 @@ export async function runInterfaceFunctionDurably(
   const sleep = options.sleep ?? defaultSleep;
   if (options.signal?.aborted) throw abortError();
 
+  // One id per LOGICAL call, stable across dispatch retries. The server
+  // strips it (reserved arg) and dedupes on it, so a retry after an
+  // ambiguous failure resolves to the same durable job — never a second
+  // execution. That is what makes the retry loop below safe at all.
+  const invocationId = options.invocationId ?? crypto.randomUUID();
+
   let dispatched: LaunchFunctionRunResponse;
-  try {
-    dispatched = await options.client.runAgentFunction(
-      options.agentId,
-      options.functionName,
-      { args: { ...options.args, _async: true } },
-    );
-  } catch (reason) {
-    // The request was rejected before a durable job id was returned. In
-    // particular, never tell a write caller that Galactic will auto-resume it.
-    return {
-      success: false,
-      error: decorateExecutionError(reason, "sync"),
-    };
+  let attempt = 0;
+  for (;;) {
+    if (options.signal?.aborted) throw abortError();
+    attempt += 1;
+    try {
+      dispatched = await options.client.runAgentFunction(
+        options.agentId,
+        options.functionName,
+        {
+          args: {
+            ...options.args,
+            _async: true,
+            [LAUNCH_CLIENT_INVOCATION_ARG]: invocationId,
+          },
+        },
+      );
+      break;
+    } catch (reason) {
+      // Transient transport/server failures are ambiguous — the job may or
+      // may not exist. Re-POSTing the SAME invocation id is safe (dedupe on
+      // the server), so retry a bounded number of times before failing
+      // closed. Definitive rejections (auth, validation) fail immediately.
+      if (
+        attempt < DISPATCH_MAX_ATTEMPTS && retryableDispatchFailure(reason)
+      ) {
+        await sleep(
+          DISPATCH_RETRY_DELAYS_MS[
+            Math.min(attempt - 1, DISPATCH_RETRY_DELAYS_MS.length - 1)
+          ],
+          options.signal,
+        );
+        continue;
+      }
+      // Still ambiguous after the budget (or definitively rejected before a
+      // durable job id was returned). Never tell a write caller that
+      // Galactic will auto-resume it.
+      return {
+        success: false,
+        error: decorateExecutionError(reason, "sync"),
+      };
+    }
   }
 
   if (!dispatched.success) {

@@ -136,6 +136,111 @@ Deno.test("createQueuedJob: persists the full execution request, never a bearer 
   });
 });
 
+Deno.test("createQueuedJob: persists client_invocation_id when provided", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  await withMockedDb(
+    (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Response("[]", { status: 201 });
+    },
+    () =>
+      createQueuedJob({
+        appId: "app-1",
+        userId: "user-1",
+        ownerId: "owner-1",
+        functionName: "slow_fn",
+        args: {},
+        clientInvocationId: "7f1e6f0a-2b3c-4d5e-8f90-123456789abc",
+      }),
+  );
+  assertEquals(
+    bodies[0].client_invocation_id,
+    "7f1e6f0a-2b3c-4d5e-8f90-123456789abc",
+  );
+});
+
+Deno.test("createQueuedJob: duplicate invocation returns the EXISTING job id", async () => {
+  const requests: Array<{ method: string; url: URL }> = [];
+  const jobId = await withMockedDb(
+    (url, init) => {
+      const method = init?.method ?? "GET";
+      requests.push({ method, url });
+      if (method === "POST") {
+        // PostgREST unique-violation (23505) on
+        // async_jobs_client_invocation_idx surfaces as 409.
+        return new Response(
+          JSON.stringify({ code: "23505", message: "duplicate key value" }),
+          { status: 409 },
+        );
+      }
+      return new Response(JSON.stringify([{ id: "existing-job-id" }]), {
+        status: 200,
+      });
+    },
+    () =>
+      createQueuedJob({
+        appId: "app-1",
+        userId: "user-1",
+        ownerId: "owner-1",
+        functionName: "slow_fn",
+        args: {},
+        clientInvocationId: "inv-duplicate-1",
+      }),
+  );
+  // The caller gets the surviving job — never a second execution.
+  assertEquals(jobId, "existing-job-id");
+  assertEquals(requests.length, 2);
+  assertEquals(requests[1].method, "GET");
+  const lookup = requests[1].url;
+  assertEquals(lookup.searchParams.get("app_id"), "eq.app-1");
+  assertEquals(
+    lookup.searchParams.get("client_invocation_id"),
+    "eq.inv-duplicate-1",
+  );
+});
+
+Deno.test("createQueuedJob: 409 without a client id still fails loudly", async () => {
+  await withMockedDb(
+    () => new Response("conflict", { status: 409 }),
+    () =>
+      assertRejects(
+        () =>
+          createQueuedJob({
+            appId: "app-1",
+            userId: "user-1",
+            ownerId: "owner-1",
+            functionName: "slow_fn",
+            args: {},
+          }),
+        Error,
+        "Failed to create queued job",
+      ),
+  );
+});
+
+Deno.test("createQueuedJob: 409 with an id but no surviving row fails loudly", async () => {
+  await withMockedDb(
+    (_url, init) =>
+      (init?.method ?? "GET") === "POST"
+        ? new Response("conflict", { status: 409 })
+        : new Response("[]", { status: 200 }),
+    () =>
+      assertRejects(
+        () =>
+          createQueuedJob({
+            appId: "app-1",
+            userId: "user-1",
+            ownerId: "owner-1",
+            functionName: "slow_fn",
+            args: {},
+            clientInvocationId: "inv-orphaned-1",
+          }),
+        Error,
+        "Failed to create queued job",
+      ),
+  );
+});
+
 Deno.test("async queue facts count one normal write/read/delete cycle per delivery", () => {
   assertEquals(asyncJobQueueOperationCounts({ meta: {} }), {
     deferredCycles: 0,

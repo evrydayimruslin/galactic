@@ -254,6 +254,7 @@ describe("runInterfaceFunctionDurably", () => {
       agentId: agent.id,
       functionName: "save",
       args: { value: 42 },
+      invocationId: "inv-12345678",
       sleep: async (milliseconds) => {
         slept.push(milliseconds);
       },
@@ -269,9 +270,106 @@ describe("runInterfaceFunctionDurably", () => {
     expect(runCalls[0]).toEqual([
       agent.id,
       "save",
-      { args: { value: 42, _async: true } },
+      { args: { value: 42, _async: true, _invocation_id: "inv-12345678" } },
     ]);
     expect(slept).toHaveLength(1);
+  });
+
+  it("retries an ambiguous network dispatch failure with the SAME invocation id", async () => {
+    const dispatchArgs: Array<Record<string, unknown>> = [];
+    const slept: number[] = [];
+    let dispatches = 0;
+    const statuses = [
+      job("completed", { executionId: "execution-retried", result: { ok: 1 } }),
+    ];
+    const result = await runInterfaceFunctionDurably({
+      client: {
+        runAgentFunction: async (_agentId, _fn, request) => {
+          dispatches += 1;
+          dispatchArgs.push({ ...(request.args ?? {}) });
+          if (dispatches === 1) {
+            // Network failure after the request may have reached the server:
+            // the classic ambiguous case the stable id exists for.
+            throw new TypeError("Failed to fetch");
+          }
+          return dispatch({
+            _async: true,
+            job_id: statuses[0].jobId,
+            status: "queued",
+          }, "receipt-retried");
+        },
+        launchJob: async () => statuses.shift()!,
+      },
+      agentId: agent.id,
+      functionName: "save",
+      args: { value: 7 },
+      sleep: async (milliseconds) => {
+        slept.push(milliseconds);
+      },
+    });
+
+    expect(result).toMatchObject({ success: true, result: { ok: 1 } });
+    expect(dispatches).toBe(2);
+    const first = dispatchArgs[0]._invocation_id;
+    expect(typeof first).toBe("string");
+    expect((first as string).length).toBeGreaterThanOrEqual(8);
+    // The whole point: the retry reuses the identity, so the server dedupes.
+    expect(dispatchArgs[1]._invocation_id).toBe(first);
+    expect(slept[0]).toBe(500);
+  });
+
+  it("does not retry a definitive dispatch rejection", async () => {
+    let dispatches = 0;
+    const result = await runInterfaceFunctionDurably({
+      client: {
+        runAgentFunction: async () => {
+          dispatches += 1;
+          throw new LaunchApiRequestError("Bad request.", 400, "bad_request");
+        },
+        launchJob: async () => {
+          throw new Error("must not poll");
+        },
+      },
+      agentId: agent.id,
+      functionName: "save",
+      args: {},
+      sleep: async () => {},
+    });
+
+    expect(dispatches).toBe(1);
+    expect(result).toMatchObject({
+      success: false,
+      error: { executionMode: "sync", autoResumes: false },
+    });
+  });
+
+  it("gives up after the dispatch retry budget and fails closed", async () => {
+    let dispatches = 0;
+    const slept: number[] = [];
+    const result = await runInterfaceFunctionDurably({
+      client: {
+        runAgentFunction: async () => {
+          dispatches += 1;
+          throw new TypeError("Failed to fetch");
+        },
+        launchJob: async () => {
+          throw new Error("must not poll");
+        },
+      },
+      agentId: agent.id,
+      functionName: "save",
+      args: {},
+      sleep: async (milliseconds) => {
+        slept.push(milliseconds);
+      },
+    });
+
+    expect(dispatches).toBe(3);
+    expect(slept).toEqual([500, 1500]);
+    expect(result).toMatchObject({
+      success: false,
+      error: { executionMode: "sync", autoResumes: false },
+    });
   });
 
   it("does not claim that a rejected pre-queue write will auto-resume", async () => {
