@@ -1845,3 +1845,33 @@ body[data-agent-studio-theme="light"] .neb-modal-overlay .neb-modal {
     transition: none !important;
   }
 }
+
+/* Agent-wide pause/resume — the Overview "Right now" cell's safety control. */
+.agent-studio-pause-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.agent-studio-pause-controls button {
+  font: inherit;
+  padding: 6px 14px;
+  border: 1px solid var(--studio-border, rgba(120, 110, 100, 0.4));
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.agent-studio-pause-controls button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.agent-studio-pause-notice {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  font-size: 0.85em;
+  opacity: 0.8;
+}

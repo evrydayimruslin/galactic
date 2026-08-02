@@ -122,6 +122,8 @@ function renderSetup(home: LaunchAgentHomeResponse): string {
   return renderToStaticMarkup(
     <AgentStudioOverview
       activationBusy={false}
+      agentPauseBusy={false}
+      agentPauseNotice=""
       endpoint={null}
       favoriteInterfaceIds={[]}
       home={home}
@@ -130,12 +132,89 @@ function renderSetup(home: LaunchAgentHomeResponse): string {
       onApproveSetupCapability={vi.fn()}
       onNavigate={vi.fn()}
       onOpenPane={vi.fn()}
+      onPauseAgent={vi.fn()}
       onRemediateSetupGrant={vi.fn()}
+      onResumeAgent={vi.fn()}
       setupActionBusy={null}
       setupActionError=""
     />,
   );
 }
+
+function operatingHome(overrides: {
+  canPause: boolean;
+  mode: string;
+}): LaunchAgentHomeResponse {
+  return {
+    agent: { id: "agent-1", slug: "agent-1", name: "Agent One" },
+    actions: {
+      canActivate: false,
+      canApproveCapabilities: false,
+      canPause: overrides.canPause,
+      canRunNow: false,
+    },
+    attention: { items: [], openCount: 0 },
+    activity: null,
+    agentCapacity: null,
+    capacity: null,
+    directive: null,
+    operatingSummary: {
+      mode: overrides.mode,
+      label: overrides.mode === "paused" ? "Paused" : "Standing by",
+      detail: null,
+      readiness: { working: overrides.mode !== "paused" },
+      evidence: [],
+      derivedAt: "2026-08-01T00:00:00.000Z",
+    },
+    preferences: null,
+    recentRuns: [],
+    release: { live: { version: "1.0.0" }, candidate: null },
+    responsibility: { mission: "Answer mail." },
+    routines: { routines: [] },
+    setup: { ready: true, requirements: [] },
+    state: { lifecycle: "active", nextRunAt: null },
+  } as unknown as LaunchAgentHomeResponse;
+}
+
+describe("Agent Studio agent-wide pause controls", () => {
+  it("offers Pause when the agent can pause and Resume when paused", () => {
+    const pausable = renderSetup(
+      operatingHome({ canPause: true, mode: "standing_by" }),
+    );
+    expect(pausable).toContain("Pause agent");
+    expect(pausable).not.toContain("Resume agent");
+
+    const paused = renderSetup(
+      operatingHome({ canPause: false, mode: "paused" }),
+    );
+    expect(paused).toContain("Resume agent");
+    expect(paused).not.toContain("Pause agent");
+  });
+
+  it("surfaces the pause outcome notice", () => {
+    const markup = renderToStaticMarkup(
+      <AgentStudioOverview
+        activationBusy={false}
+        agentPauseBusy={false}
+        agentPauseNotice="Paused 2 routines. In-flight work finishes; no new wakes will fire."
+        endpoint={null}
+        favoriteInterfaceIds={[]}
+        home={operatingHome({ canPause: false, mode: "paused" })}
+        interfaces={[]}
+        onActivate={vi.fn()}
+        onApproveSetupCapability={vi.fn()}
+        onNavigate={vi.fn()}
+        onOpenPane={vi.fn()}
+        onPauseAgent={vi.fn()}
+        onRemediateSetupGrant={vi.fn()}
+        onResumeAgent={vi.fn()}
+        setupActionBusy={null}
+        setupActionError=""
+      />,
+    );
+    expect(markup).toContain("Paused 2 routines");
+  });
+});
 
 describe("Agent Studio setup authority", () => {
   it("names the capability and keeps its approval separate from a grant", () => {

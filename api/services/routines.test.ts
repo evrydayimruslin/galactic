@@ -7,6 +7,8 @@ import {
 import {
   approveRoutineCapabilities,
   createRoutine,
+  pauseAllAgentRoutines,
+  resumeAgentPauseBatch,
   createRoutineRun,
   isLaunchManagedRoutine,
   launchRoutineRole,
@@ -758,6 +760,184 @@ Deno.test("routines: propagates Supabase write failures", async () => {
         }),
       Error,
       "bad write",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.__env = originalEnv;
+  }
+});
+
+Deno.test("routines: agent-wide pause stamps every active routine with one batch", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalEnv = globalThis.__env;
+  globalThis.__env = {
+    ...(originalEnv || {}),
+    SUPABASE_URL: "https://supabase.example",
+    SUPABASE_SERVICE_ROLE_KEY: "service-key",
+  };
+  const patches: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const merges: Array<Record<string, unknown>> = [];
+  const activeRow = (id: string) =>
+    ({
+      ...routineRow({
+        user_id: "user-1",
+        composer_app_id: "app-1",
+        template_id: "worker",
+        name: `Routine ${id}`,
+        handler_function: "run",
+        schedule: { type: "interval", every_minutes: 5 },
+        budget_policy: {},
+        approval_policy: {},
+        status: "active",
+      }),
+      id,
+    });
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input.toString();
+    const method = init?.method || "GET";
+    if (url.includes("/rpc/merge_routine_user_metadata")) {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      merges.push(body);
+      const row = activeRow(String(body.p_routine_id));
+      return jsonResponse([{
+        ...row,
+        status: "paused",
+        metadata: body.p_metadata as Record<string, unknown>,
+      }]);
+    }
+    if (url.includes("/user_routines?") && method === "GET") {
+      if (!url.includes("composer_app_id=eq.app-1")) {
+        throw new Error(`List must scope to the agent: ${url}`);
+      }
+      if (!url.includes("status=eq.active")) {
+        throw new Error(`Agent pause must list ACTIVE routines only: ${url}`);
+      }
+      return jsonResponse([activeRow("routine-1"), activeRow("routine-2")]);
+    }
+    if (url.includes("/user_routines?") && method === "PATCH") {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      patches.push({ url, body });
+      const id = url.includes("routine-1") ? "routine-1" : "routine-2";
+      return jsonResponse([{ ...activeRow(id), status: "paused" }]);
+    }
+    throw new Error(`Unexpected fetch: ${method} ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const outcome = await pauseAllAgentRoutines("user-1", "app-1");
+    assertEquals(outcome.paused.length, 2);
+    assertEquals(patches.length, 2);
+    assertEquals(
+      patches.every((patch) => patch.body.status === "paused"),
+      true,
+    );
+    assertEquals(merges.length, 2);
+    const stamps = merges.map((body) =>
+      (body.p_metadata as Record<string, unknown>).agent_pause_batch
+    );
+    assertEquals(typeof stamps[0], "string");
+    // One shared batch marker across the whole set — resume's membership key.
+    assertEquals(stamps[0], stamps[1]);
+    assertEquals(stamps[0], outcome.batch);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.__env = originalEnv;
+  }
+});
+
+Deno.test("routines: agent-wide resume flips only batch-stamped routines and reports blockers", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalEnv = globalThis.__env;
+  globalThis.__env = {
+    ...(originalEnv || {}),
+    SUPABASE_URL: "https://supabase.example",
+    SUPABASE_SERVICE_ROLE_KEY: "service-key",
+  };
+  const pausedRow = (
+    id: string,
+    metadata: Record<string, unknown>,
+  ) => ({
+    ...routineRow({
+      user_id: "user-1",
+      composer_app_id: "app-1",
+      template_id: "worker",
+      name: `Routine ${id}`,
+      handler_function: "run",
+      schedule: { type: "interval", every_minutes: 5 },
+      budget_policy: {},
+      approval_policy: {},
+      status: "paused",
+      metadata,
+    }),
+    id,
+  });
+  const stamped = pausedRow("routine-1", {
+    agent_pause_batch: "2026-08-01T10:00:00.000Z",
+  });
+  const unstamped = pausedRow("routine-2", {});
+  const missing = pausedRow("routine-3", {
+    agent_pause_batch: "2026-08-01T10:00:00.000Z",
+  });
+  const patched: string[] = [];
+  const merges: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input.toString();
+    const method = init?.method || "GET";
+    if (url.includes("/account_entitlements?")) {
+      return jsonResponse([{
+        plan_code: "pro",
+        subscription_status: "active",
+      }]);
+    }
+    if (url.includes("/rpc/merge_routine_user_metadata")) {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      merges.push(body);
+      return jsonResponse([{ ...stamped, status: "active", metadata: {} }]);
+    }
+    if (url.includes("/rpc/")) return jsonResponse(1);
+    if (url.includes("/routine_capabilities?")) return jsonResponse([]);
+    if (url.includes("/routine_dashboard_bindings?")) return jsonResponse([]);
+    if (url.includes("/user_routines?") && method === "GET") {
+      if (url.includes("composer_app_id=eq.app-1")) {
+        return jsonResponse([stamped, unstamped, missing]);
+      }
+      if (url.includes("id=eq.routine-1")) return jsonResponse([stamped]);
+      // routine-3 vanished between list and resume: the per-routine failure
+      // must become a reported blocker, never abort the whole batch.
+      if (url.includes("id=eq.routine-3")) return jsonResponse([]);
+      throw new Error(`Unexpected routine read: ${url}`);
+    }
+    if (url.includes("/user_routines?") && method === "PATCH") {
+      if (!url.includes("id=eq.routine-1")) {
+        throw new Error(`Only the stamped, resumable routine may flip: ${url}`);
+      }
+      patched.push(url);
+      return jsonResponse([{ ...stamped, status: "active" }]);
+    }
+    throw new Error(`Unexpected fetch: ${method} ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const outcome = await resumeAgentPauseBatch("user-1", "app-1");
+    assertEquals(outcome.resumed.length, 1);
+    assertEquals(outcome.resumed[0].id, "routine-1");
+    assertEquals(outcome.blocked.length, 1);
+    assertEquals(outcome.blocked[0].routineId, "routine-3");
+    // The individually-paused routine (no stamp) was never touched. Two
+    // PATCHes are expected for routine-1: the status flip and the
+    // updated_at touch that rides the stamp-clearing metadata update.
+    assertEquals(patched.length, 2);
+    assertEquals(patched.every((url) => url.includes("routine-1")), true);
+    // The stamp clears only after a successful resume. resumeRoutine may
+    // issue its own metadata merges (auto-pause cleanup), so filter for the
+    // merge that carries the batch key.
+    const stampMerges = merges.filter((body) =>
+      "agent_pause_batch" in (body.p_metadata as Record<string, unknown>)
+    );
+    assertEquals(stampMerges.length, 1);
+    assertEquals(
+      (stampMerges[0].p_metadata as Record<string, unknown>).agent_pause_batch,
+      null,
     );
   } finally {
     globalThis.fetch = originalFetch;

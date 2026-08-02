@@ -17,6 +17,8 @@ import { safeAttentionDestinationHref } from "../nebula/operator-agent-alerts";
 
 interface AgentStudioOverviewProps {
   activationBusy: boolean;
+  agentPauseBusy: boolean;
+  agentPauseNotice: string;
   endpoint: string | null;
   favoriteInterfaceIds: readonly string[];
   home: LaunchAgentHomeResponse;
@@ -25,13 +27,17 @@ interface AgentStudioOverviewProps {
   onApproveSetupCapability: (requirementId: string) => void;
   onNavigate: LaunchNavigate;
   onOpenPane: (pane: AgentStudioPane, item?: string | null) => void;
+  onPauseAgent: () => void;
   onRemediateSetupGrant: (requirementId: string) => void;
+  onResumeAgent: () => void;
   setupActionBusy: string | null;
   setupActionError: string;
 }
 
 export function AgentStudioOverview({
   activationBusy,
+  agentPauseBusy,
+  agentPauseNotice,
   endpoint,
   favoriteInterfaceIds,
   home,
@@ -40,7 +46,9 @@ export function AgentStudioOverview({
   onApproveSetupCapability,
   onNavigate,
   onOpenPane,
+  onPauseAgent,
   onRemediateSetupGrant,
+  onResumeAgent,
   setupActionBusy,
   setupActionError,
 }: AgentStudioOverviewProps): ReactElement {
@@ -197,6 +205,39 @@ export function AgentStudioOverview({
                     ? `Next event ${relativeTime(home.state.nextRunAt)}`
                     : "Waiting for the next declared event"}
                 </p>
+                <div className="agent-studio-pause-controls">
+                  {home.actions.canPause
+                    ? (
+                      <button
+                        aria-label="Pause this agent"
+                        disabled={agentPauseBusy}
+                        onClick={onPauseAgent}
+                        type="button"
+                      >
+                        {agentPauseBusy ? "Pausing…" : "Pause agent"}
+                      </button>
+                    )
+                    : null}
+                  {operating?.mode === "paused"
+                    ? (
+                      <button
+                        aria-label="Resume this agent"
+                        disabled={agentPauseBusy}
+                        onClick={onResumeAgent}
+                        type="button"
+                      >
+                        {agentPauseBusy ? "Resuming…" : "Resume agent"}
+                      </button>
+                    )
+                    : null}
+                  {agentPauseNotice
+                    ? (
+                      <p className="agent-studio-pause-notice" role="status">
+                        {agentPauseNotice}
+                      </p>
+                    )
+                    : null}
+                </div>
               </section>
               <section className="agent-studio-plate-cell consuming">
                 <div className="agent-studio-cell-label">

@@ -17,6 +17,8 @@ import type {
   LaunchAgentFunctionsResponse,
   LaunchAgentHomeActionRequest,
   LaunchAgentHomeIdentityUpdateRequest,
+  LaunchAgentHomeAgentPauseResponse,
+  LaunchAgentHomeAgentResumeResponse,
   LaunchAgentHomeResponse,
   LaunchAgentHomeRoutineUpdateRequest,
   LaunchAgentHomeSettingsUpdateRequest,
@@ -579,6 +581,29 @@ export class LaunchApiClient {
   }> {
     return this.fetchJson(
       `/api/launch/agents/${encodeURIComponent(idOrSlug)}/home/pause`,
+      { method: "POST" },
+    );
+  }
+
+  /** Agent-wide stop: pauses EVERY active routine with a shared batch stamp
+   * so resumeAgentHomeAgentWide restores exactly this set. Same safety lane
+   * as pauseAgentHome — no saga, no revision CAS. */
+  pauseAgentHomeAgentWide(
+    idOrSlug: string,
+  ): Promise<LaunchAgentHomeAgentPauseResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/home/pause`,
+      { method: "POST", body: JSON.stringify({ scope: "agent" }) },
+    );
+  }
+
+  /** Resume only the routines the latest agent-wide pause stopped; blocked
+   * routines are reported with their activation blocker reason. */
+  resumeAgentHomeAgentWide(
+    idOrSlug: string,
+  ): Promise<LaunchAgentHomeAgentResumeResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/home/resume`,
       { method: "POST" },
     );
   }

@@ -275,7 +275,9 @@ import {
   approveRoutineCapabilities,
   getRoutine,
   launchRoutineRole,
+  pauseAllAgentRoutines,
   pauseRoutine,
+  resumeAgentPauseBatch,
   resumeRoutine,
   type StoredRoutine,
   updateRoutine,
@@ -1265,7 +1267,7 @@ export async function handleLaunch(
     }
 
     const agentHomeMatch = path.match(
-      /^\/api\/launch\/agents\/([^/]+)\/home(?:\/(identity|routine|settings|actions|pause))?$/,
+      /^\/api\/launch\/agents\/([^/]+)\/home(?:\/(identity|routine|settings|actions|pause|resume))?$/,
     );
     if (agentHomeMatch) {
       return await handleLaunchAgentHomeRoute(
@@ -1657,6 +1659,7 @@ function buildLaunchStatus(request: Request): Record<string, unknown> {
         "/api/launch/agents/{id}/attention?limit=200&cursor={cursor}",
       agentHomeActions: "/api/launch/agents/{id}/home/actions",
       agentHomePause: "/api/launch/agents/{id}/home/pause",
+      agentHomeResume: "/api/launch/agents/{id}/home/resume",
       agentRoutine: "/api/launch/agents/{id}/routine",
       agentComputeSettings: "/api/launch/agents/{id}/compute/settings",
       agentComputeRuns:
@@ -2871,7 +2874,44 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
           operationId: "pauseLaunchAgentHome",
           summary: "Emergency-pause a private persistent Agent",
           description:
-            "Owner account-session only. This idempotent stop lane intentionally bypasses Home aggregation, optimistic revision checks, and promotion/action leases so it remains available during degraded or partially repaired runtime state.",
+            "Owner account-session only. This idempotent stop lane intentionally bypasses Home aggregation, optimistic revision checks, and promotion/action leases so it remains available during degraded or partially repaired runtime state. With no body (or scope 'primary') it pauses the primary routine. With scope 'agent' it pauses EVERY active routine, stamping the set with a shared batch marker so /home/resume restores exactly what this pause stopped. In-flight runs finish and already-queued jobs execute; no new wakes fire.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          }],
+          requestBody: {
+            required: false,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    scope: { type: "string", enum: ["primary", "agent"] },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description:
+                "Primary routine paused (scope 'primary') or every active routine paused with a batch stamp (scope 'agent')",
+            },
+            "403": { description: "Account session required" },
+            "404": { description: "Agent or routine proposal not found" },
+            "409": { description: "Routine is disabled" },
+          },
+        },
+      },
+      "/api/launch/agents/{id}/home/resume": {
+        post: {
+          operationId: "resumeLaunchAgentHome",
+          summary: "Resume the routines an agent-wide pause stopped",
+          description:
+            "Owner account-session only. Flips back ONLY routines stamped by the latest agent-wide pause — routines the owner paused individually are never resurrected. Each resume passes full activation validation and capacity-slot accounting; routines that fail are reported in 'blocked' with their reason and keep their batch membership for a later attempt.",
           security: [{ bearerAuth: [] }],
           parameters: [{
             name: "id",
@@ -2880,10 +2920,12 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             schema: { type: "string" },
           }],
           responses: {
-            "200": { description: "Primary routine is paused" },
+            "200": {
+              description:
+                "Batch-stamped routines resumed; activation blockers reported per routine",
+            },
             "403": { description: "Account session required" },
-            "404": { description: "Agent or routine proposal not found" },
-            "409": { description: "Routine is disabled" },
+            "404": { description: "Agent not found" },
           },
         },
       },
@@ -9029,7 +9071,11 @@ function launchAgentHomeMethodAllowed(
     return method === "PATCH";
   }
   if (section === "settings") return method === "PUT";
-  if (section === "actions" || section === "pause") return method === "POST";
+  if (
+    section === "actions" || section === "pause" || section === "resume"
+  ) {
+    return method === "POST";
+  }
   return false;
 }
 
@@ -10643,6 +10689,24 @@ async function handleLaunchAgentHomeRoute(
       return agentHomeJson(await buildLaunchAgentHomeSnapshot(user, row));
     }
     if (section === "pause") {
+      // Safety lane: independent of the Home action saga on purpose — the
+      // stop switch must not depend on saga health. Scope "agent" (WO-2)
+      // pauses every active routine with a shared batch stamp; the default
+      // remains the primary-routine emergency RPC, byte-compatible with
+      // pre-scope clients that send no body.
+      const pauseBody = asRecord(
+        await readJsonBody<unknown>(request).catch(() => null),
+      );
+      if (pauseBody?.scope === "agent") {
+        const outcome = await pauseAllAgentRoutines(user.id, row.id);
+        return agentHomeJson({
+          paused: true,
+          scope: "agent",
+          batch: outcome.batch,
+          pausedRoutineIds: outcome.paused.map((routine) => routine.id),
+          generatedAt: new Date().toISOString(),
+        });
+      }
       const paused = await pauseAgentHomeRoutineEmergency({
         appId: row.id,
         userId: user.id,
@@ -10650,8 +10714,20 @@ async function handleLaunchAgentHomeRoute(
       });
       return agentHomeJson({
         paused: true,
+        scope: "primary",
         routineId: paused.routineId,
         revision: paused.revision,
+        generatedAt: new Date().toISOString(),
+      });
+    }
+    if (section === "resume") {
+      // Counterpart to the agent-wide pause: flips back ONLY batch-stamped
+      // routines, and reports (never bypasses) activation blockers.
+      const outcome = await resumeAgentPauseBatch(user.id, row.id);
+      return agentHomeJson({
+        scope: "agent",
+        resumedRoutineIds: outcome.resumed.map((routine) => routine.id),
+        blocked: outcome.blocked,
         generatedAt: new Date().toISOString(),
       });
     }

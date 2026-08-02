@@ -89,6 +89,8 @@ export function AgentStudioApp({
   const [runError, setRunError] = useState("");
   const [activationBusy, setActivationBusy] = useState(false);
   const [activationError, setActivationError] = useState("");
+  const [agentPauseBusy, setAgentPauseBusy] = useState(false);
+  const [agentPauseNotice, setAgentPauseNotice] = useState("");
   const [setupActionBusy, setSetupActionBusy] = useState<string | null>(null);
   const [setupActionError, setSetupActionError] = useState("");
   const homeActionIdempotencyKeys = useRef(new Map<string, string>());
@@ -395,6 +397,59 @@ export function AgentStudioApp({
     }
   };
 
+  // Agent-wide pause/resume ride the safety lane (no saga, no revision CAS):
+  // the stop switch stays available whatever state the Home aggregate is in.
+  const pauseAgent = async () => {
+    if (!agent || agentPauseBusy) return;
+    setAgentPauseBusy(true);
+    setAgentPauseNotice("");
+    try {
+      const outcome = await launchApi.pauseAgentHomeAgentWide(
+        agentLocator(agent),
+      );
+      setAgentPauseNotice(
+        outcome.pausedRoutineIds.length === 0
+          ? "Nothing was active — the agent is already stopped."
+          : `Paused ${outcome.pausedRoutineIds.length} routine${
+            outcome.pausedRoutineIds.length === 1 ? "" : "s"
+          }. In-flight work finishes; no new wakes will fire.`,
+      );
+      live.reload();
+    } catch (reason) {
+      setAgentPauseNotice(errorMessage(reason));
+    } finally {
+      setAgentPauseBusy(false);
+    }
+  };
+
+  const resumeAgent = async () => {
+    if (!agent || agentPauseBusy) return;
+    setAgentPauseBusy(true);
+    setAgentPauseNotice("");
+    try {
+      const outcome = await launchApi.resumeAgentHomeAgentWide(
+        agentLocator(agent),
+      );
+      const blockedNote = outcome.blocked.length > 0
+        ? ` ${outcome.blocked.length} stayed paused: ${
+          outcome.blocked.map((item) => item.reason)[0]
+        }`
+        : "";
+      setAgentPauseNotice(
+        outcome.resumedRoutineIds.length === 0 && outcome.blocked.length === 0
+          ? "Nothing to resume — no agent-wide pause is in effect."
+          : `Resumed ${outcome.resumedRoutineIds.length} routine${
+            outcome.resumedRoutineIds.length === 1 ? "" : "s"
+          }.${blockedNote}`,
+      );
+      live.reload();
+    } catch (reason) {
+      setAgentPauseNotice(errorMessage(reason));
+    } finally {
+      setAgentPauseBusy(false);
+    }
+  };
+
   const approveSetupCapability = async (requirementId: string) => {
     if (!agent || !home || setupActionBusy) return;
     const capabilityId = agentStudioSetupCapabilityId(home, requirementId);
@@ -506,11 +561,15 @@ export function AgentStudioApp({
               activityLoading={activityLoading}
               activationBusy={activationBusy}
               agent={agent}
+              agentPauseBusy={agentPauseBusy}
+              agentPauseNotice={agentPauseNotice}
               home={home}
               item={item}
               live={live}
               onAttentionCountChange={setAttentionCount}
               onActivate={() => void activate()}
+              onPauseAgent={() => void pauseAgent()}
+              onResumeAgent={() => void resumeAgent()}
               onApproveSetupCapability={(requirementId) =>
                 void approveSetupCapability(requirementId)}
               onLoadMoreActivity={() => void loadMoreActivity()}
@@ -564,11 +623,15 @@ function AgentStudioPaneContent({
   activityLoading,
   activationBusy,
   agent,
+  agentPauseBusy,
+  agentPauseNotice,
   home,
   item,
   live,
   onAttentionCountChange,
   onActivate,
+  onPauseAgent,
+  onResumeAgent,
   onApproveSetupCapability,
   onLoadMoreActivity,
   onNavigate,
@@ -589,11 +652,15 @@ function AgentStudioPaneContent({
   activityLoading: boolean;
   activationBusy: boolean;
   agent: LaunchAgentSummary;
+  agentPauseBusy: boolean;
+  agentPauseNotice: string;
   home: LaunchPageProps["live"]["data"]["agentHome"];
   item?: string;
   live: LaunchPageProps["live"];
   onAttentionCountChange: (count: number) => void;
   onActivate: () => void;
+  onPauseAgent: () => void;
+  onResumeAgent: () => void;
   onApproveSetupCapability: (requirementId: string) => void;
   onLoadMoreActivity: () => void;
   onNavigate: LaunchPageProps["navigate"];
@@ -655,6 +722,10 @@ function AgentStudioPaneContent({
             home.preferences?.favoriteInterfaceIds ??
             []}
           activationBusy={activationBusy}
+          agentPauseBusy={agentPauseBusy}
+          agentPauseNotice={agentPauseNotice}
+          onPauseAgent={onPauseAgent}
+          onResumeAgent={onResumeAgent}
           onNavigate={onNavigate}
           onActivate={onActivate}
           onApproveSetupCapability={onApproveSetupCapability}
