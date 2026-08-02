@@ -19,6 +19,9 @@ import type {
   LaunchAgentHomeIdentityUpdateRequest,
   LaunchAgentHomeAgentPauseResponse,
   LaunchAgentHomeAgentResumeResponse,
+  LaunchAgentConcept,
+  LaunchAgentConceptAbout,
+  LaunchAgentConceptDescribeRequest,
   LaunchAgentHomeResponse,
   LaunchAgentKnowledgeAnswerRequest,
   LaunchAgentKnowledgeFact,
@@ -480,6 +483,45 @@ export class LaunchApiClient {
   agentReleases(idOrSlug: string): Promise<LaunchAgentReleasesResponse> {
     return this.fetchJson(
       `/api/launch/agents/${encodeURIComponent(idOrSlug)}/releases`,
+    );
+  }
+
+  /** Concept glossary (WO-6): slugs, titles, status, mention counts. */
+  agentConcepts(
+    idOrSlug: string,
+  ): Promise<{
+    concepts: Array<LaunchAgentConcept & { mentionCount: number }>;
+    generatedAt: string;
+  }> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/concepts`,
+    );
+  }
+
+  /** One concept's assembled neighborhood: description, grouped mention
+   * blocks (identity edges first), related concepts. */
+  agentConceptAbout(
+    idOrSlug: string,
+    slug: string,
+  ): Promise<LaunchAgentConceptAbout> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/concepts/${
+        encodeURIComponent(slug)
+      }`,
+    );
+  }
+
+  /** Owner describe/edit; description edits re-embed under BYOK. */
+  describeAgentConcept(
+    idOrSlug: string,
+    slug: string,
+    request: LaunchAgentConceptDescribeRequest,
+  ): Promise<{ concept: LaunchAgentConcept }> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/concepts/${
+        encodeURIComponent(slug)
+      }`,
+      { method: "POST", body: JSON.stringify(request) },
     );
   }
 

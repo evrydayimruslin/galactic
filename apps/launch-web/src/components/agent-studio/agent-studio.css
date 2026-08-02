@@ -1994,3 +1994,119 @@ body[data-agent-studio-theme="light"] .neb-modal-overlay .neb-modal {
   font-size: 0.9em;
   opacity: 0.85;
 }
+
+/* WO-6 PR C: concept glossary inside the Knowledge pane. */
+.agent-studio-concepts {
+  margin-top: 22px;
+}
+
+.agent-studio-concepts-list {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.agent-studio-concepts-list button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(140px, auto) 1fr auto;
+  gap: 12px;
+  align-items: baseline;
+  text-align: left;
+  font: inherit;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--studio-row, rgba(120, 110, 100, 0.07));
+  cursor: pointer;
+}
+
+.agent-studio-concepts-list code,
+.agent-studio-concept-title code {
+  font-weight: 600;
+}
+
+.agent-studio-concepts-provisional {
+  font-style: normal;
+  font-size: 0.8em;
+  margin-left: 10px;
+  opacity: 0.7;
+}
+
+.agent-studio-concept-title {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  margin: 10px 0 4px;
+}
+
+.agent-studio-concept-title em[data-status="provisional"] {
+  font-size: 0.75em;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  padding: 0 5px;
+  opacity: 0.7;
+}
+
+.agent-studio-concept-mentions {
+  list-style: none;
+  margin: 6px 0 14px;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.agent-studio-concept-mentions li {
+  padding: 8px 12px;
+  border-left: 2px solid var(--studio-border, rgba(120, 110, 100, 0.4));
+}
+
+.agent-studio-concept-mentions p {
+  margin: 0 0 2px;
+}
+
+.agent-studio-concept-mentions small,
+.agent-studio-concept-related,
+.agent-studio-concept-aliases {
+  opacity: 0.75;
+  font-size: 0.85em;
+}
+
+.agent-studio-concept-related button {
+  font: inherit;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0 4px;
+}
+
+.agent-studio-concept-edit textarea {
+  width: 100%;
+  min-height: 96px;
+  font: inherit;
+  padding: 8px 10px;
+}
+
+.agent-studio-concept-edit div {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.agent-studio-concepts-back {
+  font: inherit;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  padding: 0;
+  opacity: 0.8;
+}
+
+.agent-studio-concepts-empty,
+.agent-studio-concepts-error {
+  font-size: 0.9em;
+  opacity: 0.85;
+}
