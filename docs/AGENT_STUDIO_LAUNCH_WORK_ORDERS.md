@@ -19,7 +19,7 @@ the baseline commit; re-locate by symbol, not line number.
 | WO-3 | Activity run detail (thin slice) | — | 1 PR | **landed** (`feat(wo-3)`) |
 | WO-4 | Release history (read-only) | — | 1 PR | **landed** (`feat(wo-4)`) |
 | WO-5 | Knowledge-lite + open questions + alert wiring | WO-3 helpful, not required | 2 PRs | **landed** — PR A (store/API/pane/alerts) + PR B (sandbox `galactic.knowledge.ask/facts` binding, gated on declared database authority; gx.test stub; template v26) |
-| WO-6 | Concept graph v1 — brackets, glossary, `about()`/`suggest()` | WO-5 (store + binding patterns) | 3 PRs | **authored** — pending build |
+| WO-6 | Concept graph v1 — brackets, glossary, `about()`/`suggest()` | WO-5 (store + binding patterns) | 3 PRs | **PR A landed** (store, parser, routes, prose hooks, promotion identity+seeding). Divergence: memory-binding hook and D1 tier-1 ride PR B with the agent-plane wiring |
 
 Recommended order: **WO-1 → WO-2 → WO-3 → WO-4 → WO-5.** WO-1 first because it is
 the cornerstone of the pillar's invocation ledger (P1) — everything else is

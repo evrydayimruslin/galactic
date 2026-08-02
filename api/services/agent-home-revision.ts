@@ -655,7 +655,21 @@ export async function updateAgentHomeRoutineCAS(input: {
     base.appId,
     deps,
   );
-  return revisionFromMutation(payload, base.appId);
+  const revision = revisionFromMutation(payload, base.appId);
+  if (setMission) {
+    // WO-6: the mission is a parsed concept surface. Best-effort by design —
+    // indexing never fails the mutation that triggered it.
+    const { reindexProseSurface } = await import("./agent-concepts.ts");
+    await reindexProseSurface(
+      base.userId,
+      base.appId,
+      "mission",
+      input.routineId,
+      input.mission ?? "",
+      "paragraph",
+    );
+  }
+  return revision;
 }
 
 /**

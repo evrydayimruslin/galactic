@@ -282,6 +282,13 @@ import {
   upsertAgentKnowledgeFact,
 } from "../services/agent-knowledge.ts";
 import {
+  aboutConcept,
+  AgentConceptValidationError,
+  describeConcept,
+  listConcepts,
+  suggestConcepts,
+} from "../services/agent-concepts.ts";
+import {
   approveRoutineCapabilities,
   getRoutine,
   launchRoutineRole,
@@ -1272,6 +1279,21 @@ export async function handleLaunch(
       );
     }
 
+    const agentConceptsMatch = path.match(
+      /^\/api\/launch\/agents\/([^/]+)\/concepts(?:\/(suggest)|\/([a-z0-9][a-z0-9-]{0,62}))?$/,
+    );
+    if (agentConceptsMatch) {
+      return await privateLaunchRoute(() =>
+        handleLaunchAgentConcepts(
+          request,
+          agentConceptsMatch[1],
+          agentConceptsMatch[2] === "suggest",
+          agentConceptsMatch[3] || null,
+          method,
+        )
+      );
+    }
+
     const agentKnowledgeMatch = path.match(
       /^\/api\/launch\/agents\/([^/]+)\/knowledge(?:\/(facts|questions)(?:\/([^/]+)\/(answer|dismiss))?)?$/,
     );
@@ -1695,6 +1717,7 @@ function buildLaunchStatus(request: Request): Record<string, unknown> {
       agentHomeActions: "/api/launch/agents/{id}/home/actions",
       agentHomePause: "/api/launch/agents/{id}/home/pause",
       agentHomeResume: "/api/launch/agents/{id}/home/resume",
+      agentConcepts: "/api/launch/agents/{id}/concepts",
       agentKnowledge: "/api/launch/agents/{id}/knowledge",
       agentReleases: "/api/launch/agents/{id}/releases",
       agentRoutine: "/api/launch/agents/{id}/routine",
@@ -2961,6 +2984,27 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
               description:
                 "Batch-stamped routines resumed; activation blockers reported per routine",
             },
+            "403": { description: "Account session required" },
+            "404": { description: "Agent not found" },
+          },
+        },
+      },
+      "/api/launch/agents/{id}/concepts": {
+        get: {
+          operationId: "listLaunchAgentConcepts",
+          summary: "Concept glossary for a private Agent",
+          description:
+            "Account-session and owner-only. Concept graph v1: per-agent domain entities created by writing — [[slug]] prose mentions (auto-creating provisional concepts), manifest `concept:` declarations, or authoring. GET /concepts lists the glossary with mention counts. GET /concepts/{slug} returns the neighborhood: description, mention blocks grouped by surface (identity edges first, with release + arg-path provenance), and co-mentioned concepts. POST /concepts/{slug} edits title/description/aliases/status — description edits re-embed under the owner's BYOK route with the model recorded. POST /concepts/suggest ranks candidate concepts for a text blob: verbatim and alias matches first, then embedding similarity within one pinned model space.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Private Agent id or slug",
+          }],
+          responses: {
+            "200": { description: "Glossary, most recently updated first" },
             "403": { description: "Account session required" },
             "404": { description: "Agent not found" },
           },
@@ -7160,6 +7204,91 @@ async function handleLaunchAgentAttention(
     }),
   });
   return privateLaunchJson(projection satisfies LaunchAgentAttentionProjection);
+}
+
+/**
+ * WO-6 PR A: concept graph owner routes. Glossary, neighborhood (about),
+ * describe (re-embeds via the owner's BYOK route), and suggest (verbatim/
+ * alias first, semantic within one model space).
+ */
+async function handleLaunchAgentConcepts(
+  request: Request,
+  encodedLocator: string,
+  isSuggest: boolean,
+  slug: string | null,
+  method: string,
+): Promise<Response> {
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForAgentHome(user);
+  const resolved = await resolveOwnerPrivateRoutineAgent(
+    user,
+    encodedLocator,
+  );
+  if (resolved instanceof Response) {
+    return withPrivateLaunchPrivacy(resolved);
+  }
+  try {
+    if (isSuggest) {
+      if (method !== "POST") {
+        return privateLaunchJson({ error: "Method not allowed" }, 405);
+      }
+      const body = asRecord(await readJsonBody<unknown>(request));
+      const suggestions = await suggestConcepts(
+        user.id,
+        resolved.id,
+        String(body?.text ?? ""),
+        {
+          limit: typeof body?.limit === "number" ? body.limit : undefined,
+          userEmail: user.email ?? undefined,
+        },
+      );
+      return privateLaunchJson({
+        suggestions,
+        generatedAt: new Date().toISOString(),
+      });
+    }
+    if (slug === null) {
+      if (method !== "GET") {
+        return privateLaunchJson({ error: "Method not allowed" }, 405);
+      }
+      return privateLaunchJson({
+        concepts: await listConcepts(user.id, resolved.id),
+        generatedAt: new Date().toISOString(),
+      });
+    }
+    if (method === "GET") {
+      const about = await aboutConcept(user.id, resolved.id, slug);
+      if (!about) return privateLaunchJson({ error: "Not found" }, 404);
+      return privateLaunchJson(about);
+    }
+    if (method === "POST") {
+      const body = asRecord(await readJsonBody<unknown>(request));
+      if (!body) {
+        throw new RequestValidationError("Request body must be an object");
+      }
+      const concept = await describeConcept(user.id, resolved.id, slug, {
+        ...("title" in body ? { title: body.title as string | null } : {}),
+        ...("description" in body
+          ? { description: body.description as string | null }
+          : {}),
+        ...(Array.isArray(body.aliases)
+          ? { aliases: body.aliases.map(String) }
+          : {}),
+        ...(body.status === "active" || body.status === "retired"
+          ? { status: body.status }
+          : {}),
+        author: "owner",
+        userEmail: user.email ?? "",
+      });
+      return privateLaunchJson({ concept });
+    }
+    return privateLaunchJson({ error: "Method not allowed" }, 405);
+  } catch (err) {
+    if (err instanceof AgentConceptValidationError) {
+      return privateLaunchJson({ error: err.message }, 400);
+    }
+    throw err;
+  }
 }
 
 /**

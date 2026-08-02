@@ -698,6 +698,19 @@
       ]
     },
     {
+      "file": "services/concept-mentions.ts",
+      "types": [
+        "ConceptBlockSplit"
+      ]
+    },
+    {
+      "file": "services/concept-promotion.ts",
+      "types": [
+        "ManifestConceptExtraction",
+        "ManifestConceptSurface"
+      ]
+    },
+    {
       "file": "services/connect-verification.ts",
       "types": [
         "ConnectReconcileResult",
