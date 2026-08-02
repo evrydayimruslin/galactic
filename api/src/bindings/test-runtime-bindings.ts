@@ -139,6 +139,47 @@ export class TestRunsBinding extends WorkerEntrypoint<
 }
 
 /**
+ * Knowledge is persistent production state (WO-5 PR B); gx.test never
+ * touches it. ask/facts record their database operation class and return
+ * deterministic canned shapes — a test run can never mint owner alerts or
+ * pollute the real facts table.
+ */
+export class TestKnowledgeBinding extends WorkerEntrypoint<
+  Env,
+  TestRuntimeSessionBindingProps
+> {
+  async ask(
+    _input: unknown,
+    _execCtxHandle?: string,
+  ): Promise<{
+    questionId: string;
+    deduped: boolean;
+    askCount: number;
+    status: string;
+  }> {
+    await resolveTestRuntimeSession(this.env, this.ctx).recordObservedEffect(
+      UL_TEST_OBSERVED_EFFECTS.databaseWrite,
+    );
+    return {
+      questionId: "ul-test-knowledge-question",
+      deduped: false,
+      askCount: 1,
+      status: "open",
+    };
+  }
+
+  async facts(_execCtxHandle?: string): Promise<{
+    facts: unknown[];
+    block: string;
+  }> {
+    await resolveTestRuntimeSession(this.env, this.ctx).recordObservedEffect(
+      UL_TEST_OBSERVED_EFFECTS.databaseRead,
+    );
+    return { facts: [], block: "" };
+  }
+}
+
+/**
  * Exact, canned raw HTTP. A match returns a fresh synthetic Response; a miss,
  * invalid destination, or unreadable request latches containment failure.
  * There is deliberately no live fetch implementation in this binding.

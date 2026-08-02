@@ -56,6 +56,7 @@ export { ComputeBinding } from "./bindings/compute-binding.ts";
 export { EmbedBinding } from "./bindings/embed-binding.ts";
 export { MemoryBinding } from "./bindings/memory-binding.ts";
 export { RunsBinding } from "./bindings/runs-binding.ts";
+export { KnowledgeBinding } from "./bindings/knowledge-binding.ts";
 export { NotifyBinding } from "./bindings/notify-binding.ts";
 export {
   TestAIBinding,
@@ -65,6 +66,7 @@ export {
   TestCredentialBinding,
   TestEmbedBinding,
   TestEventsBinding,
+  TestKnowledgeBinding,
   TestMemoryBinding,
   TestNetworkBinding,
   TestNotifyBinding,

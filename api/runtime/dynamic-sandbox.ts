@@ -348,6 +348,15 @@ interface DynamicWorkerEntrypointExports {
       };
     },
   ): unknown;
+  KnowledgeBinding(
+    input: {
+      props: {
+        appId: string;
+        userId: string;
+        requireExecCtx?: boolean;
+      };
+    },
+  ): unknown;
   NotifyBinding(
     input: {
       props: {
@@ -367,6 +376,9 @@ interface DynamicWorkerEntrypointExports {
     input: { props: { sessionName: string } },
   ): unknown;
   TestRunsBinding(
+    input: { props: { sessionName: string } },
+  ): unknown;
+  TestKnowledgeBinding(
     input: { props: { sessionName: string } },
   ): unknown;
   TestEmbedBinding(
@@ -1084,6 +1096,13 @@ globalThis.ultralight = {
   // Flight recorder read-back: this agent's recent routine runs (+ recorded
   // steps, incl. captured ai() exchanges) for the CURRENT user. Wired only
   // when the manifest sets "flight_recorder": true.
+  // Knowledge-lite (WO-5 PR B): the agent's own facts + open questions.
+  // Rides declared DATABASE authority — knowledge is an internal platform
+  // store write/read on the app's own behalf, same consequence class.
+  knowledge: {
+    ask(o) { if (!${allowsDatabaseWrite}) return Promise.reject(new Error('galactic.knowledge.ask requires database.write authority for this function.')); const e = __rpcEnv; if (!e.KNOWLEDGE) return Promise.reject(new Error('galactic.knowledge unavailable in this execution.')); return e.KNOWLEDGE.ask({ question: o && o.question, context: o && o.context, blocking: !!(o && o.blocking) }, globalThis.__execHandle); },
+    facts() { if (!${allowsDatabaseRead}) return Promise.reject(new Error('galactic.knowledge.facts requires database.read authority for this function.')); const e = __rpcEnv; if (!e.KNOWLEDGE) return Promise.reject(new Error('galactic.knowledge unavailable in this execution.')); return e.KNOWLEDGE.facts(globalThis.__execHandle); },
+  },
   runs: {
     recent(o) { if (!${allowsRoutineRead}) return Promise.reject(new Error('routine.read authority not granted for this function.')); const e = __rpcEnv; if (!e.RUNS) return Promise.reject(new Error('galactic.runs unavailable: set "flight_recorder": true in the manifest.')); return e.RUNS.recent((o && o.limit) || 10, globalThis.__execHandle); },
   },
@@ -1381,6 +1400,7 @@ export default {
         "TestAppDataBinding",
         "TestMemoryBinding",
         "TestRunsBinding",
+        "TestKnowledgeBinding",
         "TestNotifyBinding",
         "TestAIBinding",
         "TestEmbedBinding",
@@ -1537,6 +1557,29 @@ export default {
         }
       } else if (ctx?.exports?.RunsBinding) {
         bindings.RUNS = ctx.exports.RunsBinding({
+          props: {
+            appId: config.appId,
+            userId: config.userId,
+            requireExecCtx: useGetReuse,
+          },
+        });
+      }
+    }
+
+    // Knowledge-lite (WO-5 PR B): the agent's own facts + open questions,
+    // scoped (appId, userId) host-side. Gated on declared DATABASE authority
+    // (same internal-write consequence class as the store itself); gx.test
+    // gets the deterministic stub so test runs can never mint owner alerts
+    // or touch the production facts table — fail closed if it is missing.
+    if (allowsDatabaseRead || allowsDatabaseWrite) {
+      if (testMode) {
+        if (ctx?.exports?.TestKnowledgeBinding) {
+          bindings.KNOWLEDGE = ctx.exports.TestKnowledgeBinding({
+            props: { sessionName: persistentTestSessionName() },
+          });
+        }
+      } else if (ctx?.exports?.KnowledgeBinding) {
+        bindings.KNOWLEDGE = ctx.exports.KnowledgeBinding({
           props: {
             appId: config.appId,
             userId: config.userId,

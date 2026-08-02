@@ -309,6 +309,16 @@ function installHarness(): { captured: Captured; restore: () => void } {
       TestRunsBinding: () => ({
         recent: () => Promise.resolve({ runs: [] }),
       }),
+      TestKnowledgeBinding: () => ({
+        ask: () =>
+          Promise.resolve({
+            questionId: "ul-test-knowledge-question",
+            deduped: false,
+            askCount: 1,
+            status: "open",
+          }),
+        facts: () => Promise.resolve({ facts: [], block: "" }),
+      }),
       TestNetworkBinding: () => ({
         imapFetchUnseen: () =>
           Promise.reject(new Error("gx.test IMAP blocked")),
