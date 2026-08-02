@@ -19,6 +19,7 @@ the baseline commit; re-locate by symbol, not line number.
 | WO-3 | Activity run detail (thin slice) | — | 1 PR | **landed** (`feat(wo-3)`) |
 | WO-4 | Release history (read-only) | — | 1 PR | **landed** (`feat(wo-4)`) |
 | WO-5 | Knowledge-lite + open questions + alert wiring | WO-3 helpful, not required | 2 PRs | **landed** — PR A (store/API/pane/alerts) + PR B (sandbox `galactic.knowledge.ask/facts` binding, gated on declared database authority; gx.test stub; template v26) |
+| WO-6 | Concept graph v1 — brackets, glossary, `about()`/`suggest()` | WO-5 (store + binding patterns) | 3 PRs | **authored** — pending build |
 
 Recommended order: **WO-1 → WO-2 → WO-3 → WO-4 → WO-5.** WO-1 first because it is
 the cornerstone of the pillar's invocation ledger (P1) — everything else is
@@ -340,6 +341,281 @@ states (empty/questions/facts), teach flow, badge count (vitest).
 question in Studio, teaches an answer, the fact exists with a stable slug, a
 blocking question raised an alert that auto-resolved on answering, and
 `facts()` returns the taught fact on the next wake.
+
+---
+
+## WO-6 — Concept graph v1: brackets, glossary, `about()` / `suggest()`
+
+**Baseline for this order:** `main @ a2f776c` (2026-08-02, post PR #191).
+Design record: `docs/POLICY_PILLAR_ARCHITECTURE.md` §13 (the concept-graph
+design note) — decisions there are LOCKED; this order is their file-level
+projection.
+
+**Problem.** Knowledge-lite gives the agent facts; nothing connects facts,
+policies, schema fields, memory, and runtime data into retrievable
+neighborhoods. The concept graph adds that connective tissue with one
+writing-native notation, and pre-builds the substrate the pillar's P5
+scoping layer and P4 compiler will consume (they arrive to a populated
+graph, not an empty one).
+
+**Design (locked, summarized).**
+
+- Creation channels: **declared** (`concept: true | "slug"` on a manifest
+  schema field), **mentioned** (`[[slug]]` in any parsed prose — unknown
+  slugs auto-create `provisional` concepts), **authored** (Studio/MCP).
+- Structure declares identity; prose declares association. Brackets never
+  appear in identifiers; `concept:` never appears in prose.
+- Field-description **seeding**: `concept: true` copies the field's
+  description onto the concept page **only if the page is blank** — one
+  time, never overwriting; the page is canonical thereafter. First writer
+  seeds on multi-field collisions.
+- Mentions are **derived**: recomputed per (surface, id) on write —
+  edit text, re-index, stale edges vanish. Block = the surface's natural
+  unit (fact, question, policy statement, function/schema description
+  string, run summary; memory + mission split by paragraph/bullet) and the
+  block is also the embedding chunk.
+- Slugs immutable (fact-slug charset), titles mutable, merges = aliases.
+- Embeddings: owner's BYOK route, **inline on the concept row** with
+  provider/model/text-hash columns (mirror `agent_search_documents`);
+  compare only within one model space; "re-embed all" is explicit.
+- D1 tier 1 only: manifest-declared text columns parsed at the platform's
+  metered database write path; no scanning, no background jobs.
+- Agent-scoped. NOT in v1: gate scoping (P5), case-law writes (P3),
+  unlinked-references view (v1.5), semantic D1 sweep, typed edges,
+  `x-concept`, cross-agent graphs, auto-injection into `ai()`.
+
+**Schema.** New migration `supabase/migrations/<ts>_agent_concepts.sql`
+(precedents: `20260723103000_agent_search_documents.sql` for pgvector +
+embedding metadata; `20260801170000_agent_knowledge.sql` for RLS posture):
+
+```sql
+CREATE TABLE public.agent_concepts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  app_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  slug text NOT NULL CHECK (slug ~ '^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$'),
+  title text CHECK (title IS NULL OR char_length(title) <= 120),
+  description text CHECK (description IS NULL OR char_length(description) <= 4000),
+  status text NOT NULL DEFAULT 'provisional'
+    CHECK (status IN ('provisional', 'active', 'retired')),
+  created_by text NOT NULL DEFAULT 'mention'
+    CHECK (created_by IN ('owner', 'agent', 'schema', 'mention')),
+  aliases text[] NOT NULL DEFAULT ARRAY[]::text[],
+  embedding public.vector(1536),
+  embedding_status text NOT NULL DEFAULT 'none',
+  embedding_provider text,
+  embedding_model text,
+  embedding_text_hash text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (app_id, slug)
+);
+
+CREATE TABLE public.agent_concept_mentions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  app_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  concept_id uuid NOT NULL REFERENCES public.agent_concepts(id) ON DELETE CASCADE,
+  surface_type text NOT NULL CHECK (surface_type IN (
+    'fact', 'question', 'mission', 'memory', 'activity_summary',
+    'function_description', 'schema_field', 'concept_page', 'd1'
+  )),
+  surface_id text NOT NULL CHECK (char_length(surface_id) BETWEEN 1 AND 240),
+  block_id text NOT NULL CHECK (char_length(block_id) BETWEEN 1 AND 240),
+  block_text text NOT NULL CHECK (char_length(block_text) <= 2000),
+  -- Identity edges (concept: true|"slug") vs prose mentions ([[slug]]).
+  identity boolean NOT NULL DEFAULT false,
+  -- Schema-origin provenance: which release asserted this, which arg path.
+  release_id uuid,
+  field_path text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (app_id, concept_id, surface_type, surface_id, block_id)
+);
+
+CREATE INDEX agent_concept_mentions_surface_idx
+  ON public.agent_concept_mentions (app_id, surface_type, surface_id);
+CREATE INDEX agent_concept_mentions_concept_idx
+  ON public.agent_concept_mentions (app_id, concept_id, created_at DESC);
+
+ALTER TABLE public.agent_concepts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.agent_concept_mentions ENABLE ROW LEVEL SECURITY;
+```
+
+Re-index contract: `DELETE WHERE (app_id, surface_type, surface_id)` then
+insert the fresh parse — mentions are a pure function of current text.
+`block_text` is capped at 2000 chars (facts already are; long prose blocks
+truncate with an ellipsis marker — `about()` links back to the source for
+the rest).
+
+---
+
+### PR A — data plane: store, parser, indexer, routes
+
+**New `api/services/concept-mentions.ts`** — the pure parser. Exports:
+- `extractConceptMentions(text, { blockSplit }) → [{slug, blockId, blockText}]`
+  — reuses the fact-slug regex (export `SLUG_PATTERN` from
+  `agent-knowledge.ts` instead of duplicating); skips fenced code blocks;
+  paragraph/bullet splitter for freeform surfaces; whole-string block for
+  row-shaped surfaces.
+- `slugifyIdentifier(fieldName)` — underscores→hyphens, lowercase (shared
+  with the promotion parser).
+Pure functions, no fetch — fully unit-testable.
+
+**New `api/services/agent-concepts.ts`** — store + retrieval:
+- `ensureConcept(userId, appId, slug, {createdBy})` — auto-create
+  `provisional` on first mention; idempotent (409 → return existing, the
+  WO-1/WO-5 dedupe pattern).
+- `reindexSurface(userId, appId, surfaceType, surfaceId, blocks)` —
+  delete + insert per the re-index contract; ensures concepts for unknown
+  slugs.
+- `describeConcept(userId, appId, slug, {title?, description?, aliases?,
+  status?, author})` — description edit re-embeds via the owner's BYOK
+  inference route (same resolution path as `galactic.embed`); on embed
+  failure store `embedding_status: 'pending'` and the text hash — never
+  fail the write because embedding hiccuped (mirror
+  `agent_search_documents` status discipline).
+- `aboutConcept(userId, appId, slug)` — concept row + mentions grouped by
+  surface_type (identity edges first, newest-first within groups, bounded
+  per group) + `relatedConcepts` (co-mention counts). Aliases resolve.
+- `suggestConcepts(userId, appId, text, {limit})` — verbatim/alias match
+  (deterministic, ranked first) + embedding similarity vs concept vectors
+  **within the same embedding model only**; returns
+  `[{slug, score, basis: 'verbatim' | 'alias' | 'semantic'}]`.
+
+**Hook sites (each is 2–4 lines calling `reindexSurface`):**
+- `api/services/agent-knowledge.ts` — after fact upsert (surface `fact`,
+  block = content) and question ask (surface `question`).
+- `api/services/routines.ts` `updateRoutine` — mission/intent changes
+  (surface `mission`, paragraph split).
+- `api/src/bindings/memory-binding.ts` — memory writes (surface `memory`,
+  markdown block split; hook host-side where the write lands, not in
+  sandbox code).
+- `api/services/routines.ts` `updateRoutineRun` — run summary writes
+  (surface `activity_summary`).
+- `api/services/agent-concepts.ts` itself — description edits re-index the
+  concept page (surface `concept_page`) so concept↔concept prose links work.
+
+**Promotion parsing** — in `api/services/builder-handoff-deployments.ts`
+where the exports snapshot is persisted (`exports: [...snapshot.exports]`,
+~L2113): walk each function's arg schema; for every property read
+`description` (prose mentions → surface `schema_field`, field_path set,
+release_id set) and the `concept` key: `true` → identity edge to
+`slugifyIdentifier(propertyName)`; string → identity edge to that slug
+(validate against SLUG_PATTERN; invalid = candidate validation warning,
+never a silent drop). Seeding: if the target concept's description is
+blank, copy the field description (one-time; `created_by: 'schema'`).
+Function descriptions parse the same way (surface `function_description`).
+Removing `concept:` in a later release stops asserting the edge for new
+releases; prior releases' mentions remain with their release_id — never
+cascade-delete a concept from a manifest change.
+
+**D1 tier 1** — manifest opt-in (e.g. `concepts_index: ["notes",
+"conversation_summary"]` alongside the database declaration; exact key
+location per GALACTIC_YAML conventions, documented in the same PR): at the
+platform's metered database write path (locate via
+`api/services/d1-data.ts` / `d1-metering.ts` — the host-mediated write the
+flight recorder already tallies), when a written value is a string in a
+declared column, parse and re-index (surface `d1`,
+surface_id = `table.rowid`, best-effort — a parse failure never fails the
+tenant write).
+
+**Routes + OpenAPI (`api/handlers/launch.ts`, the WO-4/WO-5 pattern:
+owner-only, `resolveOwnerPrivateRoutineAgent`):**
+- `GET  /api/launch/agents/{id}/concepts` — glossary (slug, title, status,
+  mention counts, description first line).
+- `GET  /api/launch/agents/{id}/concepts/{slug}` — `aboutConcept`.
+- `POST /api/launch/agents/{id}/concepts/{slug}` — owner describe/edit
+  (title, description, aliases, status; author = 'owner').
+- `POST /api/launch/agents/{id}/concepts/suggest` — `suggestConcepts`.
+Contracts in `shared/contracts/launch.ts`:
+`LaunchAgentConcept`, `LaunchAgentConceptMentionGroup`,
+`LaunchAgentConceptAbout`, `LaunchAgentConceptSuggestion` + request types.
+
+**Tests (PR A):** parser unit suite (brackets, fences, blocks, slugify,
+`[[]]`-is-not-a-mention — empty brackets are a no-op everywhere now);
+concepts service (ensure-idempotency, reindex delete+insert, seeding
+only-if-blank, alias resolution, suggest basis ordering, model-space
+guard); promotion parsing (identity edges, string form, invalid slug
+warning, seeding, release provenance); hook-site tests extend the existing
+suites (`agent-knowledge.test.ts`, `routines.test.ts`).
+
+---
+
+### PR B — agent plane: binding, MCP tools, skill docs
+
+**New `api/src/bindings/concepts-binding.ts`** — stamp
+`knowledge-binding.ts` exactly: `WorkerEntrypoint` with frozen
+`{appId, userId, requireExecCtx}` props; `assertExecutionContext` on every
+method; authority rides the release's declared database effect
+(`database.read` for `about`/`suggest`, `database.write` for `describe`) —
+the never-widen invariant with zero manifest-vocabulary changes, exactly as
+PR #191 established. Methods: `about(slug)`, `suggest(text, limit?)`,
+`describe(slug, {title?, description?, aliases?})` (author = 'agent',
+attributed).
+
+Wiring checklist (mirror PR #191 file-for-file):
+- `api/src/worker-entry.ts` — export the binding beside `KnowledgeBinding`.
+- `api/src/bindings/test-runtime-bindings.ts` — `TestConceptsBinding` stub
+  (gx.test containment).
+- `api/runtime/runtime-contract.ts` — bump
+  `GALACTIC_SANDBOX_TEMPLATE_VERSION` (next: `…concepts-binding.v27`) and
+  add the `galactic.concepts` surface to the runtime contract.
+- `api/runtime/dynamic-sandbox.ts` — expose `galactic.concepts.*`;
+  `api/runtime/dynamic-sandbox-concepts.test.ts` (crib
+  `dynamic-sandbox-knowledge.test.ts`).
+
+**Platform MCP** (`api/handlers/platform-mcp.ts`): `gx.concepts_about`,
+`gx.concepts_suggest`, `gx.concepts_describe` following the existing gx
+tool pattern, and — the actual launch vehicle — extend `buildPlatformDocs()`
+with the notation contract: `[[slug]]` = association in any prose;
+`concept: true | "slug"` = identity on schema fields; unknown slugs
+auto-create; write brackets into declared D1 text columns. Scaffold
+template guidance updates ride the same PR so newly built agents write
+brackets from day one.
+
+**Docs:** `docs/GALACTIC_YAML_V1ALPHA1.md` — the `concept:` field key
+(bool | string), seeding semantics, `concepts_index` D1 opt-in.
+
+**Tests (PR B):** binding tests (scope freeze, authority gating, exec-ctx
+assertion — crib the PR #191 suite), template-version test update, MCP tool
+registration + docs snapshot tests (`platform-skills-doc.test.ts` pattern).
+
+---
+
+### PR C — Studio plane: glossary in the Knowledge pane
+
+`apps/launch-web/src/components/agent-studio/agent-studio-knowledge.tsx`
+gains the Concepts section (the pane's "second act"):
+- Glossary list: slug, title, status chip (`provisional` distinct), mention
+  count; orphans (provisional, single mention, no description) grouped for
+  housekeeping visibility.
+- Concept page view: description (owner-editable), aliases, backlinks
+  grouped by surface (schema identities first with release + field path;
+  then facts, policies/mission, memory, activity, D1) — each backlink
+  renders its block text with a source label.
+- "Add a concept" mirrors the Add-a-fact flow.
+Client methods in `apps/launch-web/src/lib/api.ts`
+(`agentConcepts`, `agentConceptAbout`, `describeAgentConcept`,
+`suggestAgentConcepts`); vitest via the `initialProjection`-style DI seam
+already used by the knowledge pane tests.
+
+**Acceptance (whole order).** A dev's coding agent reads the skill docs,
+writes `concept: true` on `refund_window` and `[[refund-window]]` in a
+fact; after promotion the glossary shows the concept seeded from the field
+description with an identity backlink carrying release + arg path; the
+agent's runtime `about("refund-window")` returns the fact block, the schema
+identity, and (with a declared D1 column) the conversation rows that
+mentioned it; `suggest("I want my money back")` ranks `refund-window`
+first once the description mentions paraphrases; editing the description
+re-embeds under the owner's BYOK model with provider/model recorded;
+deleting the bracket from the fact and re-saving removes that mention on
+re-index. Nothing routes to Approvals — no gate exists yet, by design.
+
+**Guardrails.** Do not touch the gate/policy contracts (P2–P5 territory);
+do not auto-inject concepts into `ai()` calls; do not parse undeclared D1
+columns; do not implement unlinked-references or typed edges; embedding
+failures degrade to `pending`, never block writes; the reserved-args and
+never-widen invariants apply unchanged.
 
 ---
 
