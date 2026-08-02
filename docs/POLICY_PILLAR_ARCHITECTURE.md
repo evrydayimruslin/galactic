@@ -1,0 +1,314 @@
+# The Policy Pillar — Architecture & Phased Build
+
+**Status:** Draft for owner review · **Baseline:** `main @ af196cc` (2026-08-01)
+**Predecessors:** `docs/AGENT_STUDIO_BACKEND_REQUIREMENTS.md` (AS-BE-003/004/005/006),
+`docs/AGENT_STUDIO_LAUNCH_WORK_ORDERS.md` (WO-1 is this pillar's first brick)
+
+## 1. Thesis
+
+Natural-language policies become permissions, permissions become gates, gate
+uncertainty triages into approvals, and everything lands as receipts. One
+supply chain; each Agent Studio tab is a stage of it. The product claim this
+enables: **the agent can be wrong, but it cannot be unauthorized.** Guidance
+shapes the median; the gate bounds the tail; receipts prove which was which.
+
+Verifiability framing: each phase makes agent operation more *resettable*
+(ledgered inputs → replay), more *efficient* (dry-runs over recorded
+invocations), and more *rewardable* (machine-scorable verdicts + witnessed
+effects). Model improvements strengthen this platform (better compilers,
+judges, agents under the same gates); they never obsolete it, because the
+gates, ledger, and receipts are what make model work checkable.
+
+## 2. Invariants
+
+Numbered so PRs and reviews can cite them.
+
+- **I1 — Never widen.** Policies only narrow the release's declared authority
+  (manifest `read | internal_write | external_write`, runtime ceilings).
+  No overlay, compile, or judge outcome may grant what the release didn't declare.
+- **I2 — Fail closed.** Uncertainty → hold. Judge timeout/parse failure → hold.
+  Compile ambiguity → save fails with the clarification question. Policy
+  tightened while work is held → revalidate at approval; on conflict, deny.
+- **I3 — Planes stay distinct.** Inbound caller grants (always/ask/never),
+  release authority declarations, inference routing, and the owner's
+  autonomous policy are four systems. UI and storage never conflate them
+  (AS-BE-014/015). Caller permission requests live under GRANT, never in Approvals.
+- **I4 — Enforce at effect chokepoints.** The gate binds where intent becomes
+  execution (host dispatch) and where execution touches the world (platform
+  channels). In-bundle function composition is invisible and free by design.
+- **I5 — Artifacts are immutable and versioned; runs snapshot versions.**
+  Policy sets version as one unit. Every gated invocation records the policy
+  version it was judged under. Old runs keep their old bindings.
+- **I6 — Receipts name their decider.** Every verdict records the layer
+  (ceiling | overlay | predicate | judge | default), the rule reference, and —
+  for judge verdicts — model identity + prompt version.
+- **I7 — Alerts are pointers.** Promotion on impact, auto-resolve with cause,
+  dedupe by cause. Objects live in their owning tab; Approvals holds gate
+  holds only (a knowledge revision qualifies because it is a held
+  `knowledge.set` call).
+- **I8 — BYOK everywhere, structure from the platform.** Compiler and judge run
+  on the user's models. The platform guarantees structure, not model quality:
+  schema validation fails the save; the readback approval is the mandatory
+  quality gate; compile-model identity is recorded in the version; judge model
+  + prompt version pin per policy version.
+- **I9 — Exactly-once execution.** A held invocation resumes from the ledger by
+  claim, never by re-dispatch. Approval moves the *same* invocation
+  held → queued; the consumer's optimistic claim (existing async_jobs
+  machinery) remains the idempotency guard.
+- **I10 — Sanitized projections.** Raw prompts, secrets, and unredacted args
+  never reach owner surfaces. Envelopes carry sanitized `source`/`proposal`
+  (the existing `LaunchApprovalEnvelope` contract already states this).
+
+## 3. Object model
+
+Existing contracts adopted as-is from `shared/contracts/launch.ts` (currently
+consumed by nothing — the pillar is their consumer):
+
+- `LaunchAutonomousFunctionPolicy` = `off | ask | free` (~L667 region)
+- `LaunchFunctionConsequenceGroup` = `read | internal_write | external_side_effect | spend`
+- `LaunchApprovalEnvelope` + `LAUNCH_APPROVAL_ACTIONS` (approve/revise/reject,
+  `expectedRevision`, `idempotencyKey`) (~L735 region)
+
+New objects (contracts added in their phase):
+
+```
+PolicySet      { appId, version, rules[], sourceTexts[], compiledBy: {model, at},
+                 createdBy, status: draft|active|superseded }
+Rule           { id, when: {function? | consequenceGroup?},
+                 check: Predicate | Semantic | null,
+                 effect: allow | hold | deny,
+                 bindings: { inject?: bool, note? } }
+Predicate      { path, op ∈ {eq,neq,gt,gte,lt,lte,in,not_in,domain_in,
+                 matches_glob, rate_window(count,per), time_window(from,to,tz),
+                 consequence_is}, value }
+Semantic       { question, target: argPath, unsureMeans: hold,
+                 judge: {modelId, promptVersion} }
+Invocation     (ledger row; P1 extends async_jobs — see §5)
+Verdict        { invocationId, layer: ceiling|overlay|predicate|judge|default,
+                 ruleRef?, outcome: allow|hold|deny, judgeTranscriptHash? }
+EffectEvent    { invocationId, seq, kind: function_started|function_completed|
+                 function_failed|ai_exchange|db_mutation|email_dispatch|
+                 notification|event_emit|http_request|non_action,
+                 channel, targetDigest?, outcome,
+                 attestation: attested|observed|app_claimed, evidence[] }
+EvidenceRef    { kind: interface_link|external_url|platform_record,
+                 target, label }
+```
+
+The attestation ladder is the honesty contract: **attested** (platform
+witnessed the channel itself — managed email, db, ai), **observed** (platform
+saw the request, not its meaning — raw HTTP domain+status), **app_claimed**
+(the app said so — rendered as its account of itself, never as platform fact).
+
+## 4. The gate
+
+**Placement.** Two checkpoints, one policy set:
+
+1. **Dispatch gate** — where an intended call becomes execution: the MCP
+   `tools/call` execution path (the caller-gate region in
+   `api/handlers/mcp.ts` ~L1977 is the in-repo precedent for
+   "policy lookup → verdict → hold-with-pending-id"), and the queue consumer's
+   claim point (`api/services/async-exec-consumer.ts`) so schedule, manual
+   run-now, event, retry, and recovery paths all pass one evaluator.
+   Content rules bind here too: generated content arrives as the *arguments*
+   of the next call (a draft is `send_reply`'s `body`), so the judge inspects
+   args at dispatch.
+2. **Effect witness** — the platform channels (`galactic.ai`, `galactic.db`,
+   managed email/notify, `emit`, `galactic.call`, raw fetch) emit
+   `EffectEvent`s. P0 records; later phases may also *check* channel-level
+   rules here (e.g., domain rules on fetch), still under I1.
+
+**Evaluation order (dispatch gate).**
+
+```
+release ceiling (exists today — manifest declarations, runtime-enforced)
+  → owner overlay (off | ask | free, per function; default from declarations)
+  → compiled predicates (deterministic; first matching deny/hold wins)
+  → semantic checks (judge; unsure → hold)
+  → default allow
+```
+
+`off` → deny + structured `non_action` event. `ask`/predicate-hold/judge-hold →
+invocation `held` + envelope minted. Approve → same invocation → `queued`
+(exactly-once via claim, I9). Reject → `denied` + non-action. Revise →
+new invocation referencing the original (lineage), original closed.
+
+**Adopted decisions** (from the validated assessment + sessions):
+manual "Run now" passes the same gate (execution principal is the agent);
+policy carry-forward across releases only when the function's declaration hash
+is unchanged, else reset to `ask`; approval granularity is the host-dispatched
+invocation (no mid-stack resumption — verified: the sandbox has no continuation
+serialization); expiry of a held envelope → `denied` + non-action + alert pointer.
+
+## 5. Data model (phase-tagged sketches)
+
+**P1 — ledger.** Extend `async_jobs` in place (it already owns durable claim
+machinery, caller attribution, `hop`, and — after WO-1 — client invocation
+identity). Additive columns:
+
+```sql
+ALTER TABLE public.async_jobs
+  ADD COLUMN IF NOT EXISTS trigger text,            -- schedule|manual|event|interface|retry
+  ADD COLUMN IF NOT EXISTS release_id uuid,
+  ADD COLUMN IF NOT EXISTS policy_version integer,
+  ADD COLUMN IF NOT EXISTS held_at timestamptz,
+  ADD COLUMN IF NOT EXISTS resolved_at timestamptz;
+-- status gains 'held' and 'denied' (widen the CHECK; consumer ignores both)
+```
+
+A `agent_invocations` view over it gives the pillar vocabulary without a
+dual-write migration. Revisit a physical split only if volume demands it.
+
+**P2 — overlay.**
+
+```sql
+CREATE TABLE public.agent_function_policies (
+  app_id uuid NOT NULL, function_name text NOT NULL,
+  policy text NOT NULL CHECK (policy IN ('off','ask','free')),
+  declaration_hash text NOT NULL,          -- carry-forward key (I5, §4)
+  revision text NOT NULL,                  -- CAS token
+  set_by jsonb NOT NULL,                   -- LaunchAutonomousPolicyActor shape
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (app_id, function_name)
+);
+```
+
+**P3 — envelopes.** Mirror `LaunchApprovalEnvelope` exactly; `UNIQUE (run_id)`
+(one envelope per held invocation); status from `LAUNCH_APPROVAL_STATUSES`;
+actions require `expectedRevision` + `idempotencyKey` (contract already says so).
+
+**P4 — policy sets.**
+
+```sql
+CREATE TABLE public.agent_policy_sets (
+  app_id uuid NOT NULL, version integer NOT NULL,
+  source jsonb NOT NULL,                   -- [{text, ruleIds[]}]
+  artifact jsonb NOT NULL,                 -- compiled rules, schema-validated
+  compile_model text NOT NULL,             -- I8: recorded, BYOK
+  created_by uuid NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (app_id, version)
+);
+-- immutability trigger, precedent: prevent_app_release_mutation
+```
+
+**P0 — effects.**
+
+```sql
+CREATE TABLE public.agent_effect_events (
+  invocation_id uuid NOT NULL, seq integer NOT NULL,
+  kind text NOT NULL, channel text,
+  target_digest text, outcome text,
+  attestation text NOT NULL CHECK (attestation IN ('attested','observed','app_claimed')),
+  evidence jsonb NOT NULL DEFAULT '[]',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (invocation_id, seq)
+);
+```
+
+## 6. Compiler (P4)
+
+- **Input:** owner's sentence(s) + the release's export schemas (arg paths and
+  types come from the manifest — declaration quality sets policy resolution;
+  Studio shows a per-function readiness hint: predicate-capable vs semantic-only).
+- **Model:** the owner's BYOK route (I8). Identity recorded in the version.
+- **Pipeline:** compile → schema-validate the artifact (unknown op, unknown
+  path, type mismatch ⇒ **save fails** with precise errors) → deterministic
+  readback rendered from the artifact by a code template (never by a model) →
+  owner approves readback → version persisted immutable. A compiler that needs
+  clarification must emit `clarification_needed` — surfaced as the save error.
+- **Round-trip rule:** the user approves what will execute, not what they typed.
+
+## 7. Judge (P5)
+
+- Pinned per policy version: `{modelId, promptVersion}`; billed through the
+  user's inference route when that model is available on it, platform-metered
+  fallback otherwise — either way the receipt records what actually ran (I6).
+- Schema-forced single enum `{allow | hold}` with `unsure ⇒ hold` folded in;
+  bounded latency budget; timeout ⇒ hold (I2).
+- Hardening: the judge sees content as data (no tools, no URLs followed);
+  prompt-injection in inspected content can at worst cause a false *hold* —
+  the failure mode is friction, never authorization.
+- Receipt: verdict, rule id, transcript hash (not transcript).
+
+## 8. Phases
+
+Each phase ships alone, is user-visible or measurably de-risking, and ends
+with a replayable fixture suite.
+
+| Phase | Deliverable | Key touchpoints | User-visible | Est. |
+|-------|------------|-----------------|--------------|------|
+| **P0** | Effect witness + evidence SDK (`galactic.evidence()`), Activity upgrade to typed events with attestation labels | `runtime/sandbox.ts` (channel taps: ai/db exist — formalize; email/notify/emit/fetch), `agent_effect_events`, activity projection | "What changed in the world" + "decided not to do" sections, honestly labeled | 2–3 PRs |
+| **P1** | Ledger unification: WO-1 id becomes ledger identity; trigger/release columns; `held`/`denied` statuses (dormant) | `async_jobs` migration, `async-jobs.ts`, `async-exec-consumer.ts`, view | none (foundation) | 2 PRs |
+| **P2** | Overlay + dispatch gate with `off`/`free` (no holds yet): defaults from declarations, CAS routes, enforcement on every autonomous path | gate module `api/services/policy-gate.ts`, `mcp.ts` dispatch seam, consumer seam, overlay table + routes | Capabilities pane: per-function Off/Free with audit trail | 2–3 PRs |
+| **P3** | `ask` + envelopes + **Approvals tab unhidden**; expiry; revise-lineage; tightened-policy revalidation | envelopes table + routes, gate hold path, Studio Approvals pane (mock exists), alert pointers for expiring holds | The Approvals tab, meaning one thing forever | 3 PRs |
+| **P4** | Compiler + readback + policy sets; Directive tab v2 (versions, history); overlay folds in as compiled rules | policy sets table, compile service (BYOK), readback renderer, Directive pane | NL policies with versions + readback approval | 2–3 PRs |
+| **P5** | Judge layer (semantic rules) | judge service, gate integration, receipts fields | "anything mentioning a lawyer"-class rules enforced | 2 PRs |
+| **P6** | Attribution + counters + dry-run: per-rule "held 4 this week", policy-version diffs ("since v4 it escalated 6"), dry-run over recorded invocations | verdict/effect joins, dry-run harness replaying ledger inputs, Directive counters + "See them →" | Policies visibly earning their keep | 2–3 PRs |
+
+Total ≈ 14–19 PRs. Dependency spine: P1 → P2 → P3; P0 independent (start
+anytime, pairs well with launch); P4–P6 sequential after P3.
+
+```mermaid
+flowchart LR
+  WO1[WO-1 invocation id] --> P1[P1 ledger]
+  P0[P0 witness + evidence] --> P6
+  P1 --> P2[P2 overlay + gate off/free]
+  P2 --> P3[P3 ask + envelopes + Approvals]
+  P3 --> P4[P4 compiler + readback]
+  P4 --> P5[P5 judge]
+  P3 --> P6[P6 attribution + dry-run]
+  P5 --> P6
+```
+
+## 9. Decision register (final, 2026-08-01)
+
+1. Everything BYOK — compiler and judge on the user's models; platform
+   guarantees structure (validation, pinning, receipts), not model quality.
+2. Approval granularity = host-dispatched invocation. No mid-stack resume.
+3. Manual "Run now" passes the autonomous gate.
+4. Carry policy forward across releases only on unchanged declaration hash;
+   else reset to `ask`.
+5. Held + policy tightened ⇒ revalidate at approve; fail closed.
+6. Approvals tab = gate holds only; knowledge revisions qualify as held
+   knowledge-mutation calls; caller grants stay in GRANT.
+7. Alerts = impact-promoted, auto-resolving pointers; dedupe by cause.
+8. Evidence is developer-curated on a typed ladder: attested / observed /
+   app_claimed.
+9. Enforcement at chokepoints; in-bundle composition free (I4).
+10. Handoff TTL 60 min; durable machine auth is AS-BE-016, a separate stream.
+11. Deferred, explicitly: inference-USD ledger + hard dollar ceiling;
+    collaborators/retention/archive; full knowledge adapter contract;
+    compute admission (own session); rollback-as-reissue (design agreed:
+    forward re-release referencing an immutable prior artifact through the
+    existing promotion validation; small schema allowance for releases minted
+    from prior releases — build when demanded).
+
+## 10. Risks
+
+| Risk | Mitigation |
+|------|-----------|
+| Judge latency on hot paths | latency budget + timeout⇒hold (I2); semantic rules are opt-in per policy; predicates carry the bulk |
+| BYOK compile variance | validation floor + readback approval (I8); readiness hints steer schema quality |
+| Double execution on resume | I9: approval flips the same row; consumer claim is the guard (existing machinery) |
+| Envelope pile-up / expiry ambiguity | expiry ⇒ denied + non-action + alert pointer; counts on the tab |
+| Prompt injection via inspected content | judge is toolless, schema-forced; worst case is a false hold |
+| Ledger/effect volume | additive columns on an existing table; retention policy deferred deliberately (decision 11) — revisit at P6 with real volumes |
+| Release/policy drift | declaration-hash carry-forward (decision 4) + I5 snapshots |
+| Scope creep toward widening | I1 cited in review; gate has no allow-override path by construction |
+
+## 11. Non-goals
+
+USD ceilings, collaborators, retention/archive contracts, knowledge adapter
+(agent-owned truth), compute admission, cross-agent policy inheritance,
+policy marketplaces. Each is a future stream with its own doc when its time comes.
+
+## 12. Verification strategy
+
+Every phase lands with: (a) fixture invocations recorded as JSON (replayable),
+(b) a dry-run harness test proving same-input-same-verdict across process
+restarts, (c) fail-closed tests (timeout, parse failure, ambiguity), and
+(d) receipts assertions that the decider layer is named (I6). The dry-run
+harness from P6 is the same evaluator as production (one code path — the
+assessment's requirement), which is what makes policy changes testable before
+they govern anything real.
