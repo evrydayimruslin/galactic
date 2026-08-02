@@ -118,6 +118,27 @@ function installHarness(): {
       TestRunsBinding: () => ({
         recent: () => Promise.resolve({ runs: [] }),
       }),
+      // deno-lint-ignore no-explicit-any
+      TestKnowledgeBinding: (input: any) => {
+        const sessionName = input?.props?.sessionName;
+        if (
+          typeof sessionName !== "string" || !testSessions.has(sessionName)
+        ) {
+          throw new Error(
+            "test knowledge binding received an unknown session",
+          );
+        }
+        return {
+          ask: () =>
+            Promise.resolve({
+              questionId: "ul-test-knowledge-question",
+              deduped: false,
+              askCount: 1,
+              status: "open",
+            }),
+          facts: () => Promise.resolve({ facts: [], block: "" }),
+        };
+      },
       TestNotifyBinding: () => ({
         notifyOwner: () => Promise.resolve({ created: false }),
       }),

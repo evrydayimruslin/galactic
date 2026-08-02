@@ -571,6 +571,27 @@ class Wave3Harness {
             return createUlTestRunsResponse();
           },
         }),
+        TestKnowledgeBinding: (
+          { props }: { props: { sessionName: string } },
+        ) => ({
+          ask: async () => {
+            await testSession(props).recordObservedEffect(
+              UL_TEST_OBSERVED_EFFECTS.databaseWrite,
+            );
+            return {
+              questionId: "ul-test-knowledge-question",
+              deduped: false,
+              askCount: 1,
+              status: "open",
+            };
+          },
+          facts: async () => {
+            await testSession(props).recordObservedEffect(
+              UL_TEST_OBSERVED_EFFECTS.databaseRead,
+            );
+            return { facts: [], block: "" };
+          },
+        }),
         TestOutboundBinding: (
           { props }: {
             props: {

@@ -1917,6 +1917,13 @@
       "file": "src/bindings/embedding-budget.ts"
     },
     {
+      "file": "src/bindings/knowledge-binding.ts",
+      "types": [
+        "KnowledgeAskResult",
+        "KnowledgeFactsResult"
+      ]
+    },
+    {
       "file": "src/bindings/outbound-policy.ts",
       "types": [
         "GuardedFetchOptions",
