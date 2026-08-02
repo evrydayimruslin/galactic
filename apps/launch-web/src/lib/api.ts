@@ -20,6 +20,11 @@ import type {
   LaunchAgentHomeAgentPauseResponse,
   LaunchAgentHomeAgentResumeResponse,
   LaunchAgentHomeResponse,
+  LaunchAgentKnowledgeAnswerRequest,
+  LaunchAgentKnowledgeFact,
+  LaunchAgentKnowledgeFactUpsertRequest,
+  LaunchAgentKnowledgeProjection,
+  LaunchAgentKnowledgeQuestion,
   LaunchAgentReleasesResponse,
   LaunchAgentHomeRoutineUpdateRequest,
   LaunchAgentHomeSettingsUpdateRequest,
@@ -475,6 +480,54 @@ export class LaunchApiClient {
   agentReleases(idOrSlug: string): Promise<LaunchAgentReleasesResponse> {
     return this.fetchJson(
       `/api/launch/agents/${encodeURIComponent(idOrSlug)}/releases`,
+    );
+  }
+
+  /** Knowledge-lite (WO-5): facts + open questions projection. */
+  agentKnowledge(idOrSlug: string): Promise<LaunchAgentKnowledgeProjection> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/knowledge`,
+    );
+  }
+
+  /** Teach or edit one fact by slug. */
+  upsertAgentKnowledgeFact(
+    idOrSlug: string,
+    request: LaunchAgentKnowledgeFactUpsertRequest,
+  ): Promise<{ fact: LaunchAgentKnowledgeFact }> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/knowledge/facts`,
+      { method: "POST", body: JSON.stringify(request) },
+    );
+  }
+
+  /** Answer an open question; the answer becomes a fact and any alert
+   * pointer auto-resolves. */
+  answerAgentKnowledgeQuestion(
+    idOrSlug: string,
+    questionId: string,
+    request: LaunchAgentKnowledgeAnswerRequest,
+  ): Promise<{
+    question: LaunchAgentKnowledgeQuestion;
+    fact: LaunchAgentKnowledgeFact;
+  }> {
+    return this.fetchJson(
+      `/api/launch/agents/${
+        encodeURIComponent(idOrSlug)
+      }/knowledge/questions/${encodeURIComponent(questionId)}/answer`,
+      { method: "POST", body: JSON.stringify(request) },
+    );
+  }
+
+  dismissAgentKnowledgeQuestion(
+    idOrSlug: string,
+    questionId: string,
+  ): Promise<{ question: LaunchAgentKnowledgeQuestion }> {
+    return this.fetchJson(
+      `/api/launch/agents/${
+        encodeURIComponent(idOrSlug)
+      }/knowledge/questions/${encodeURIComponent(questionId)}/dismiss`,
+      { method: "POST", body: JSON.stringify({}) },
     );
   }
 

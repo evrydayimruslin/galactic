@@ -2344,6 +2344,56 @@ export interface LaunchAgentHomeResumeBlockedRoutine {
 }
 
 /**
+ * Knowledge-lite (WO-5): probabilistic reference material — facts the agent
+ * may state and questions it has surfaced. Deliberately NOT the future
+ * adapter contract: no citations, no contradictions, no provenance chains.
+ */
+export interface LaunchAgentKnowledgeFact {
+  id: string;
+  /** Stable id used in the injected block as `[fact:slug]`. */
+  slug: string;
+  title: string | null;
+  content: string;
+  source: "owner" | "agent";
+  status: "active" | "retired";
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LaunchAgentKnowledgeQuestion {
+  id: string;
+  question: string;
+  context: string | null;
+  status: "open" | "answered" | "dismissed";
+  askCount: number;
+  /** Blocking questions mint an auto-resolving Alerts pointer. */
+  blocking: boolean;
+  firstAskedAt: string;
+  lastAskedAt: string;
+  answeredFactId: string | null;
+}
+
+export interface LaunchAgentKnowledgeProjection {
+  facts: LaunchAgentKnowledgeFact[];
+  questions: LaunchAgentKnowledgeQuestion[];
+  generatedAt: string;
+}
+
+export interface LaunchAgentKnowledgeFactUpsertRequest {
+  slug: string;
+  title?: string | null;
+  content: string;
+  status?: "active" | "retired";
+}
+
+export interface LaunchAgentKnowledgeAnswerRequest {
+  content: string;
+  slug?: string;
+  title?: string | null;
+}
+
+/**
  * One immutable release from the app_releases ledger (WO-4). Read-only:
  * there is deliberately no mutation surface over this history — recovery is
  * fix-forward via a new handoff, never pointer rewrites.

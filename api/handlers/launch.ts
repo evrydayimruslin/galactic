@@ -274,6 +274,14 @@ import type {
 import type { SensitiveRoute } from "../services/sensitive-route-rate-limit.ts";
 import { listAgentReleases } from "../services/app-releases-projection.ts";
 import {
+  AgentKnowledgeValidationError,
+  answerAgentKnowledgeQuestion,
+  askAgentKnowledgeQuestion,
+  dismissAgentKnowledgeQuestion,
+  listAgentKnowledge,
+  upsertAgentKnowledgeFact,
+} from "../services/agent-knowledge.ts";
+import {
   approveRoutineCapabilities,
   getRoutine,
   launchRoutineRole,
@@ -1264,6 +1272,22 @@ export async function handleLaunch(
       );
     }
 
+    const agentKnowledgeMatch = path.match(
+      /^\/api\/launch\/agents\/([^/]+)\/knowledge(?:\/(facts|questions)(?:\/([^/]+)\/(answer|dismiss))?)?$/,
+    );
+    if (agentKnowledgeMatch) {
+      return await privateLaunchRoute(() =>
+        handleLaunchAgentKnowledge(
+          request,
+          agentKnowledgeMatch[1],
+          agentKnowledgeMatch[2] || null,
+          agentKnowledgeMatch[3] || null,
+          agentKnowledgeMatch[4] || null,
+          method,
+        )
+      );
+    }
+
     const agentAttentionMatch = path.match(
       /^\/api\/launch\/agents\/([^/]+)\/attention$/,
     );
@@ -1671,6 +1695,7 @@ function buildLaunchStatus(request: Request): Record<string, unknown> {
       agentHomeActions: "/api/launch/agents/{id}/home/actions",
       agentHomePause: "/api/launch/agents/{id}/home/pause",
       agentHomeResume: "/api/launch/agents/{id}/home/resume",
+      agentKnowledge: "/api/launch/agents/{id}/knowledge",
       agentReleases: "/api/launch/agents/{id}/releases",
       agentRoutine: "/api/launch/agents/{id}/routine",
       agentComputeSettings: "/api/launch/agents/{id}/compute/settings",
@@ -2936,6 +2961,27 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
               description:
                 "Batch-stamped routines resumed; activation blockers reported per routine",
             },
+            "403": { description: "Account session required" },
+            "404": { description: "Agent not found" },
+          },
+        },
+      },
+      "/api/launch/agents/{id}/knowledge": {
+        get: {
+          operationId: "getLaunchAgentKnowledge",
+          summary: "Facts this Agent may state and questions it has surfaced",
+          description:
+            "Account-session and owner-only. Knowledge-lite: probabilistic reference material (facts with stable slugs, open questions with ask counts). Facts are injected as guidance, not enforced policy; citations and contradiction tracking are future work and the Studio pane says so. Mutations: POST /knowledge/facts (teach/edit by slug), POST /knowledge/questions (record a gap; blocking questions mint one auto-resolving alert), POST /knowledge/questions/{qid}/answer (answer becomes a fact), POST /knowledge/questions/{qid}/dismiss.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Private Agent id or slug",
+          }],
+          responses: {
+            "200": { description: "Facts and questions, newest first" },
             "403": { description: "Account session required" },
             "404": { description: "Agent not found" },
           },
@@ -7114,6 +7160,91 @@ async function handleLaunchAgentAttention(
     }),
   });
   return privateLaunchJson(projection satisfies LaunchAgentAttentionProjection);
+}
+
+/**
+ * WO-5 Knowledge-lite: owner-plane facts + open questions. Probabilistic
+ * guidance by decision — the pane's copy stays honest about citations and
+ * contradictions being future (pillar) work.
+ */
+async function handleLaunchAgentKnowledge(
+  request: Request,
+  encodedLocator: string,
+  section: string | null,
+  questionId: string | null,
+  action: string | null,
+  method: string,
+): Promise<Response> {
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForAgentHome(user);
+  const resolved = await resolveOwnerPrivateRoutineAgent(
+    user,
+    encodedLocator,
+  );
+  if (resolved instanceof Response) {
+    return withPrivateLaunchPrivacy(resolved);
+  }
+  try {
+    if (section === null) {
+      if (method !== "GET") {
+        return privateLaunchJson({ error: "Method not allowed" }, 405);
+      }
+      return privateLaunchJson(
+        await listAgentKnowledge(user.id, resolved.id),
+      );
+    }
+    if (method !== "POST") {
+      return privateLaunchJson({ error: "Method not allowed" }, 405);
+    }
+    const body = asRecord(await readJsonBody<unknown>(request));
+    if (!body) {
+      throw new RequestValidationError("Request body must be an object");
+    }
+    if (section === "facts") {
+      const fact = await upsertAgentKnowledgeFact(user.id, resolved.id, {
+        slug: String(body.slug ?? ""),
+        title: typeof body.title === "string" ? body.title : null,
+        content: String(body.content ?? ""),
+        status: body.status === "retired" ? "retired" : "active",
+      });
+      return privateLaunchJson({ fact });
+    }
+    if (section === "questions" && questionId && action === "answer") {
+      const outcome = await answerAgentKnowledgeQuestion(
+        user.id,
+        resolved.id,
+        questionId,
+        {
+          content: String(body.content ?? ""),
+          slug: typeof body.slug === "string" ? body.slug : undefined,
+          title: typeof body.title === "string" ? body.title : null,
+        },
+      );
+      return privateLaunchJson(outcome);
+    }
+    if (section === "questions" && questionId && action === "dismiss") {
+      const question = await dismissAgentKnowledgeQuestion(
+        user.id,
+        resolved.id,
+        questionId,
+      );
+      return privateLaunchJson({ question });
+    }
+    if (section === "questions" && !questionId) {
+      const outcome = await askAgentKnowledgeQuestion(user.id, resolved.id, {
+        question: String(body.question ?? ""),
+        context: typeof body.context === "string" ? body.context : null,
+        blocking: body.blocking === true,
+      });
+      return privateLaunchJson(outcome);
+    }
+    return privateLaunchJson({ error: "Not found" }, 404);
+  } catch (err) {
+    if (err instanceof AgentKnowledgeValidationError) {
+      return privateLaunchJson({ error: err.message }, 400);
+    }
+    throw err;
+  }
 }
 
 /**

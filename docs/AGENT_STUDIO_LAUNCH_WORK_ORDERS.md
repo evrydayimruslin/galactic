@@ -14,11 +14,11 @@ the baseline commit; re-locate by symbol, not line number.
 
 | WO | Title | Depends on | Est. | Status |
 |----|-------|-----------|------|--------|
-| WO-1 | Interface invocation idempotency | — | 1 PR | pending |
-| WO-2 | Agent-wide Pause / Resume | — | 1 PR | pending |
-| WO-3 | Activity run detail (thin slice) | — | 1 PR | pending |
-| WO-4 | Release history (read-only) | — | 1 PR | pending |
-| WO-5 | Knowledge-lite + open questions + alert wiring | WO-3 helpful, not required | 2 PRs | pending |
+| WO-1 | Interface invocation idempotency | — | 1 PR | **landed** (`feat(wo-1)`) |
+| WO-2 | Agent-wide Pause / Resume | — | 1 PR | **landed** (`feat(wo-2)`) |
+| WO-3 | Activity run detail (thin slice) | — | 1 PR | **landed** (`feat(wo-3)`) |
+| WO-4 | Release history (read-only) | — | 1 PR | **landed** (`feat(wo-4)`) |
+| WO-5 | Knowledge-lite + open questions + alert wiring | WO-3 helpful, not required | 2 PRs | **PR A landed** (store/API/pane/alerts); PR B = sandbox `galactic.knowledge` binding via the src/bindings pattern |
 
 Recommended order: **WO-1 → WO-2 → WO-3 → WO-4 → WO-5.** WO-1 first because it is
 the cornerstone of the pillar's invocation ledger (P1) — everything else is

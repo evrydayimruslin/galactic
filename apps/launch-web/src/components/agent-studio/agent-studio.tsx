@@ -61,6 +61,7 @@ import {
   AgentStudioDirective,
   AgentStudioLimits,
 } from "./agent-studio-screens";
+import { AgentStudioKnowledge } from "./agent-studio-knowledge";
 import {
   AgentStudioShell,
   type AgentStudioTheme,
@@ -839,20 +840,7 @@ function AgentStudioPaneContent({
     );
   }
   if (pane === "knowledge") {
-    return (
-      <AgentStudioContractBoundary
-        body="Use this Agent’s published Interfaces to manage its source data today. Studio will gather reliable working knowledge here when a compatible source is connected."
-        description="Facts, open questions, citations, and contradictions this Agent can use while it works."
-        details={[
-          "Facts with source and confirmation status",
-          "Open questions that need an answer",
-          "Citations and conflicting information",
-        ]}
-        eyebrow="Not available for this Agent"
-        heading="No Studio knowledge source is connected."
-        title="Knowledge"
-      />
-    );
+    return <AgentStudioKnowledge agentLocator={agentLocator(agent)} />;
   }
   if (pane === "capabilities") {
     return (
