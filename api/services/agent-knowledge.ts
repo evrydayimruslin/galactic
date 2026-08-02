@@ -1,4 +1,5 @@
 import { getEnv } from "../lib/env.ts";
+import { reindexProseSurface } from "./agent-concepts.ts";
 import { createNotification, resolveNotificationIncidentByDedupe } from "./notifications.ts";
 import type {
   LaunchAgentKnowledgeFact,
@@ -218,7 +219,18 @@ export async function upsertAgentKnowledgeFact(
       "update knowledge fact",
     );
     if (!rows[0]) throw new Error("Knowledge fact update returned no row");
-    return factProjection(rows[0]);
+    const updated = factProjection(rows[0]);
+    // WO-6: facts are a parsed concept surface — reindex on every edit so
+    // removed brackets self-heal (mentions are derived from current text).
+    await reindexProseSurface(
+      userId,
+      appId,
+      "fact",
+      updated.slug,
+      `${updated.title ? `${updated.title}: ` : ""}${updated.content}`,
+      "whole",
+    );
+    return updated;
   }
   const rows = await readRows<FactRow>(
     await fetch(restUrl("agent_knowledge_facts"), {
@@ -236,7 +248,16 @@ export async function upsertAgentKnowledgeFact(
     "create knowledge fact",
   );
   if (!rows[0]) throw new Error("Knowledge fact create returned no row");
-  return factProjection(rows[0]);
+  const created = factProjection(rows[0]);
+  await reindexProseSurface(
+    userId,
+    appId,
+    "fact",
+    created.slug,
+    `${created.title ? `${created.title}: ` : ""}${created.content}`,
+    "whole",
+  );
+  return created;
 }
 
 /**

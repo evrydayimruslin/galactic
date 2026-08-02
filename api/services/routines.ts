@@ -1346,6 +1346,27 @@ export async function updateRoutineRun(
     RUN_SELECT,
   );
   if (!run) throw new Error(`Routine run ${runId} not found`);
+  // WO-6: run summaries are a parsed concept surface. Pre-filtered on the
+  // bracket notation so the routine lookup only happens when a mention can
+  // exist; best-effort — indexing never fails the run update.
+  if (typeof updates.summary === "string" && updates.summary.includes("[[")) {
+    try {
+      const routine = await getRoutine(userId, run.routine_id);
+      if (routine?.composer_app_id) {
+        const { reindexProseSurface } = await import("./agent-concepts.ts");
+        await reindexProseSurface(
+          userId,
+          routine.composer_app_id,
+          "activity_summary",
+          runId,
+          updates.summary,
+          "whole",
+        );
+      }
+    } catch (err) {
+      console.error("[CONCEPTS] run summary reindex failed:", err);
+    }
+  }
   return run;
 }
 

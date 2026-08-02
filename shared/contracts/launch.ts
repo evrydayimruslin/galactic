@@ -2394,6 +2394,65 @@ export interface LaunchAgentKnowledgeAnswerRequest {
 }
 
 /**
+ * Concept graph v1 (WO-6). A concept is a per-agent domain entity created
+ * by writing: declared (`concept:` manifest key), mentioned (`[[slug]]`
+ * prose), or authored. Mentions are derived from current text; the
+ * description doubles as the semantic anchor (BYOK-embedded, model
+ * recorded).
+ */
+export interface LaunchAgentConcept {
+  id: string;
+  slug: string;
+  title: string | null;
+  description: string | null;
+  status: "provisional" | "active" | "retired";
+  createdBy: "owner" | "agent" | "schema" | "mention";
+  aliases: string[];
+  embeddingStatus: "none" | "pending" | "ready";
+  embeddingModel: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LaunchAgentConceptMention {
+  surfaceId: string;
+  blockId: string;
+  blockText: string;
+  /** Manifest-declared identity edge (vs a prose mention). */
+  identity: boolean;
+  releaseId: string | null;
+  fieldPath: string | null;
+  createdAt: string;
+}
+
+export interface LaunchAgentConceptMentionGroup {
+  surfaceType: string;
+  mentions: LaunchAgentConceptMention[];
+}
+
+export interface LaunchAgentConceptAbout {
+  concept: LaunchAgentConcept;
+  mentionGroups: LaunchAgentConceptMentionGroup[];
+  relatedConcepts: Array<{ slug: string; title: string | null }>;
+  generatedAt: string;
+}
+
+export interface LaunchAgentConceptSuggestion {
+  slug: string;
+  title: string | null;
+  /** 1 for verbatim/alias; cosine similarity (0..1) for semantic. */
+  score: number;
+  basis: "verbatim" | "alias" | "semantic";
+}
+
+export interface LaunchAgentConceptDescribeRequest {
+  title?: string | null;
+  description?: string | null;
+  aliases?: string[];
+  status?: "active" | "retired";
+}
+
+/**
  * One immutable release from the app_releases ledger (WO-4). Read-only:
  * there is deliberately no mutation surface over this history — recovery is
  * fix-forward via a new handoff, never pointer rewrites.
