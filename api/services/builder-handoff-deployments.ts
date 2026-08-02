@@ -2140,6 +2140,43 @@ export async function deployBuilderHandoffCandidate(
       ),
     );
     phase = "committed";
+    // WO-6: the committed manifest is a parsed concept surface — function
+    // descriptions carry [[slug]] mentions, schema properties carry
+    // `concept:` identity declarations with only-if-blank description
+    // seeding. Best-effort by contract: indexing never fails (or delays
+    // rolling back) a committed deployment. Release provenance resolves
+    // through the deployment's unique app_releases row.
+    try {
+      const serviceKey = getEnv("SUPABASE_SERVICE_ROLE_KEY");
+      const releaseRes = await fetch(
+        `${getEnv("SUPABASE_URL")}/rest/v1/app_releases` +
+          `?deployment_id=eq.${encodeURIComponent(state.deployment_id)}` +
+          `&select=id&limit=1`,
+        {
+          headers: {
+            apikey: serviceKey,
+            Authorization: `Bearer ${serviceKey}`,
+          },
+        },
+      );
+      const releaseRows = releaseRes.ok
+        ? (await releaseRes.json().catch(() => [])) as Array<{ id?: string }>
+        : [];
+      const { indexReleaseConceptSurfaces } = await import(
+        "./concept-promotion.ts"
+      );
+      await indexReleaseConceptSurfaces(
+        ownerId,
+        state.app_id,
+        typeof releaseRows[0]?.id === "string" ? releaseRows[0].id : null,
+        snapshot.manifest,
+      );
+    } catch (err) {
+      console.error(
+        "[CONCEPTS] promotion indexing skipped:",
+        err instanceof Error ? err.message : err,
+      );
+    }
     return completedResponse(candidateId, state, fallbackAgent);
   } catch (error) {
     await bestEffortFail(

@@ -235,6 +235,45 @@ export async function reindexProseSurface(
   }
 }
 
+/**
+ * Seed a concept's description ONLY IF BLANK (the manifest declares; the
+ * page lives — a later release never clobbers accumulated prose). The
+ * PostgREST `description=is.null` filter makes only-if-blank atomic:
+ * a non-blank page matches zero rows. Seeded pages carry
+ * embedding_status 'pending' — the owner's next Studio visit (or the
+ * housekeeping chore) embeds them under the BYOK route.
+ */
+export async function seedConceptDescription(
+  userId: string,
+  appId: string,
+  slug: string,
+  description: string,
+): Promise<boolean> {
+  const concept = await ensureConcept(userId, appId, slug, {
+    createdBy: "schema",
+  });
+  const rows = await readRows<ConceptRow>(
+    await fetch(
+      restUrl(
+        `agent_concepts?id=eq.${encodeURIComponent(concept.id)}` +
+          `&description=is.null`,
+      ),
+      {
+        method: "PATCH",
+        headers: supabaseHeaders({ Prefer: "return=representation" }),
+        body: JSON.stringify({
+          description: description.slice(0, 4000),
+          embedding_status: "pending",
+          status: concept.status === "provisional" ? "active" : concept.status,
+          updated_at: new Date().toISOString(),
+        }),
+      },
+    ),
+    "seed concept description",
+  );
+  return rows.length > 0;
+}
+
 export async function listConcepts(
   userId: string,
   appId: string,
