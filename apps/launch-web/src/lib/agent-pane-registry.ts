@@ -31,11 +31,6 @@ export const AGENT_PANE_REGISTRY = [
   },
   {
     group: "manage",
-    id: "compute",
-    label: "Compute",
-  },
-  {
-    group: "manage",
     id: "settings",
     label: "Settings",
   },

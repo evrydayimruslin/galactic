@@ -17,7 +17,6 @@ describe("agent pane registry", () => {
       "access",
       "routines",
       "functions",
-      "compute",
       "settings",
     ]);
     expect(new Set(AGENT_PANE_REGISTRY.map((pane) => pane.id)).size)
@@ -35,7 +34,6 @@ describe("agent pane registry", () => {
       "access",
       "routines",
       "functions",
-      "compute",
       "settings",
     ]);
   });

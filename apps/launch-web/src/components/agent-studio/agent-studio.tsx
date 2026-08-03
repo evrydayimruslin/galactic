@@ -37,7 +37,7 @@ import {
 } from "../../lib/interface-favorites";
 import { dismissLaunchWorkspace } from "../../lib/navigation";
 import { mergeAgentActivityPages } from "../../lib/operator-activity-state";
-import { AgentComputePane } from "../agent-compute-pane";
+import { useTheme } from "../../lib/theme";
 import {
   AgentSettingsPane,
   FunctionsPane,
@@ -63,14 +63,13 @@ import {
 import { AgentStudioKnowledge } from "./agent-studio-knowledge";
 import { AgentStudioPolicies } from "./agent-studio-policies";
 import { AgentStudioApprovals } from "./agent-studio-approvals";
-import {
-  AgentStudioShell,
-  type AgentStudioTheme,
-} from "./agent-studio-shell";
+import { AgentStudioShell } from "./agent-studio-shell";
 
 import "./agent-studio.css";
 
-const STUDIO_THEME_KEY = "galactic.agent-studio.theme";
+/** Pre-unification per-Studio theme choice; cleared now that the account
+ * Appearance setting is the single theme control. */
+const LEGACY_STUDIO_THEME_KEY = "galactic.agent-studio.theme";
 
 export function AgentStudioApp({
   live,
@@ -86,7 +85,7 @@ export function AgentStudioApp({
     () => parseAgentStudioRouteState(location.search),
     [location.search],
   );
-  const [theme, setTheme] = useState<AgentStudioTheme>(readStudioTheme);
+  const { resolvedTheme } = useTheme();
   const [runBusy, setRunBusy] = useState(false);
   const [runError, setRunError] = useState("");
   const [activationBusy, setActivationBusy] = useState(false);
@@ -119,15 +118,19 @@ export function AgentStudioApp({
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(STUDIO_THEME_KEY, theme);
+      window.localStorage.removeItem(LEGACY_STUDIO_THEME_KEY);
     } catch {
-      // The theme remains session-local when browser storage is unavailable.
+      // Storage denial only means the stale key lingers unused.
     }
-    document.body.dataset.agentStudioTheme = theme;
+  }, []);
+  // Portaled overlays mount outside .agent-studio, so the resolved theme is
+  // mirrored on <body> for their selectors.
+  useEffect(() => {
+    document.body.dataset.agentStudioTheme = resolvedTheme;
     return () => {
       delete document.body.dataset.agentStudioTheme;
     };
-  }, [theme]);
+  }, [resolvedTheme]);
   useEffect(() => {
     if (home?.attention) setAttentionCount(home.attention.openCount);
   }, [home?.attention?.openCount]);
@@ -541,17 +544,13 @@ export function AgentStudioApp({
       badges={{
         ...(attentionCount ? { alerts: attentionCount } : {}),
       }}
-      canRunNow={Boolean(home?.actions.canRunNow)}
       onBack={() => dismissLaunchWorkspace(navigate, returnToAlerts)}
       onPaneChange={(next) => openPane(next, null)}
-      onRunNow={() => void runNow()}
-      onThemeChange={setTheme}
       pane={pane}
       releaseVersion={home?.release.live?.version ?? null}
-      runBusy={runBusy}
       statusLabel={status.label}
       statusTone={status.tone}
-      theme={theme}
+      theme={resolvedTheme}
     >
       {!agent
         ? <StudioLoading error={live.error} />
@@ -875,15 +874,6 @@ function AgentStudioPaneContent({
       />
     );
   }
-  if (pane === "compute") {
-    return (
-      <AgentComputePane
-        agent={agent}
-        itemId={item}
-        onClearItem={() => onOpenPane("compute", null)}
-      />
-    );
-  }
   if (pane === "limits") {
     return (
       <AgentStudioLimits
@@ -918,18 +908,6 @@ function StudioLoading({ error }: { error?: string }): ReactElement {
         : <><span /><span /><span /></>}
     </section>
   );
-}
-
-function readStudioTheme(): AgentStudioTheme {
-  try {
-    const stored = window.localStorage.getItem(STUDIO_THEME_KEY);
-    if (stored === "light" || stored === "dark") return stored;
-  } catch {
-    // Fall through to the system preference.
-  }
-  return window.matchMedia?.("(prefers-color-scheme: light)").matches
-    ? "light"
-    : "dark";
 }
 
 function agentLocator(agent: LaunchAgentSummary): string {

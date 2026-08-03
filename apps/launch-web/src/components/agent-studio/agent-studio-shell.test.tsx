@@ -9,14 +9,10 @@ describe("AgentStudioShell", () => {
       <AgentStudioShell
         agentName="email-ops"
         badges={{ alerts: 2, approvals: 3 }}
-        canRunNow
         onBack={() => undefined}
         onPaneChange={() => undefined}
-        onRunNow={() => undefined}
-        onThemeChange={() => undefined}
         pane="overview"
         releaseVersion="2.2.0"
-        runBusy={false}
         statusLabel="Live"
         statusTone="live"
         theme="dark"
@@ -28,7 +24,7 @@ describe("AgentStudioShell", () => {
     expect(markup).toContain('class="agent-studio" data-theme="dark"');
     expect(markup).toContain("email-ops");
     expect(markup).toContain("v2.2.0");
-    expect(markup).toContain("Run now");
+    expect(markup).toContain("Home");
     expect(markup).toContain("Watch");
     expect(markup).toContain("Teach");
     expect(markup).toContain("Grant");
@@ -38,5 +34,29 @@ describe("AgentStudioShell", () => {
     expect(markup).toContain("Connections");
     expect(markup).toContain("Limits");
     expect(markup).toContain("Studio content");
+  });
+
+  it("keeps the header free of the retired studio-only controls", () => {
+    const markup = renderToStaticMarkup(
+      <AgentStudioShell
+        agentName="email-ops"
+        onBack={() => undefined}
+        onPaneChange={() => undefined}
+        pane="overview"
+        releaseVersion={null}
+        statusLabel="Setup"
+        statusTone="waiting"
+        theme="light"
+      >
+        <p>Studio content</p>
+      </AgentStudioShell>,
+    );
+
+    expect(markup).not.toContain("galactic-wordmark");
+    expect(markup).not.toContain("agent-studio-wordmark");
+    expect(markup).not.toContain("Run now");
+    expect(markup).not.toContain("Studio theme");
+    expect(markup).not.toContain("agent-studio-settings-button");
+    expect(markup).toContain("Settings");
   });
 });
