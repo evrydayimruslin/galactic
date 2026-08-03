@@ -136,6 +136,26 @@ Deno.test("createQueuedJob: persists the full execution request, never a bearer 
   });
 });
 
+Deno.test("createQueuedJob: persists the P1 trigger", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  await withMockedDb(
+    (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Response("[]", { status: 201 });
+    },
+    () =>
+      createQueuedJob({
+        appId: "app-1",
+        userId: "user-1",
+        ownerId: "owner-1",
+        functionName: "slow_fn",
+        args: {},
+        trigger: "schedule",
+      }),
+  );
+  assertEquals(bodies[0].trigger, "schedule");
+});
+
 Deno.test("createQueuedJob: persists client_invocation_id when provided", async () => {
   const bodies: Record<string, unknown>[] = [];
   await withMockedDb(

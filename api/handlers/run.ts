@@ -466,6 +466,7 @@ export async function handleRun(
             functionName,
             args: argsRecord,
             clientInvocationId,
+            trigger: "interface",
             meta: { executionTimeoutMs: executionPolicy.timeoutMs },
           });
           let enqueued = false;

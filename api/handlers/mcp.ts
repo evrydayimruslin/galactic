@@ -2843,6 +2843,7 @@ async function executeAppFunction(
             functionName,
             args,
             clientInvocationId,
+            trigger: meta?.routineContext ? "schedule" : "interface",
             callerAppId: callerContext.callerApp?.appId ?? null,
             callerGrantId: meta?.callerGrantId ?? null,
             hop: callerContext.callerApp?.hop ?? meta?.incomingHop ?? null,

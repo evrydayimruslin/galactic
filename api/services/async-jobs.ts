@@ -221,6 +221,8 @@ export async function createQueuedJob(params: {
    * a duplicate send heals the "insert landed, send crashed" window.
    */
   clientInvocationId?: string | null;
+  /** Pillar P1: how this invocation was initiated. */
+  trigger?: "interface" | "schedule" | "manual" | "event" | "retry" | null;
 }): Promise<string> {
   const jobId = crypto.randomUUID();
 
@@ -239,6 +241,7 @@ export async function createQueuedJob(params: {
       caller_grant_id: params.callerGrantId ?? null,
       hop: params.hop ?? null,
       client_invocation_id: params.clientInvocationId ?? null,
+      trigger: params.trigger ?? null,
       // Reused as the sandbox executionId on claim, linking job <-> receipt
       // <-> AI-spend ledger.
       execution_id: crypto.randomUUID(),
