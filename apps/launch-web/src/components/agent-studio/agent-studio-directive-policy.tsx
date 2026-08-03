@@ -2,8 +2,11 @@ import { type ReactElement, useEffect, useState } from "react";
 
 import type {
   LaunchAgentPolicySetsResponse,
+  LaunchPolicyAttributionResponse,
   LaunchPolicyCompileRequest,
   LaunchPolicyCompileResponse,
+  LaunchPolicyDryRunRequest,
+  LaunchPolicyDryRunResponse,
   LaunchPolicySetApproveRequest,
   LaunchPolicySetApproveResponse,
 } from "../../../../../shared/contracts/launch.ts";
@@ -25,6 +28,12 @@ interface AgentStudioDirectivePolicyApi {
     locator: string,
     request: LaunchPolicySetApproveRequest & { compileModel?: string },
   ) => Promise<LaunchPolicySetApproveResponse>;
+  /** P6 seams. */
+  attribution: (locator: string) => Promise<LaunchPolicyAttributionResponse>;
+  dryRun: (
+    locator: string,
+    request: LaunchPolicyDryRunRequest,
+  ) => Promise<LaunchPolicyDryRunResponse>;
 }
 
 const defaultApi: AgentStudioDirectivePolicyApi = {
@@ -32,17 +41,34 @@ const defaultApi: AgentStudioDirectivePolicyApi = {
   compile: (locator, request) => launchApi.compileAgentPolicy(locator, request),
   approve: (locator, request) =>
     launchApi.approveAgentPolicySet(locator, request),
+  attribution: (locator) => launchApi.agentPolicyAttribution(locator),
+  dryRun: (locator, request) => launchApi.dryRunAgentPolicy(locator, request),
 };
+
+/** "held 4 this week · 2 waiting now" — from the envelope ledger. */
+export function attributionLabel(
+  entry: { heldLast7d: number; pendingNow: number },
+): string {
+  const held = `held ${entry.heldLast7d} this week`;
+  return entry.pendingNow > 0
+    ? `${held} · ${entry.pendingNow} waiting now`
+    : held;
+}
 
 export function AgentStudioDirectivePolicy({
   agentLocator,
   api = defaultApi,
   initialResponse = null,
+  initialAttribution = null,
+  onOpenApprovals,
 }: {
   agentLocator: string;
   /** DI seams for tests. */
   api?: AgentStudioDirectivePolicyApi;
   initialResponse?: LaunchAgentPolicySetsResponse | null;
+  initialAttribution?: LaunchPolicyAttributionResponse | null;
+  /** "See them →" navigation into the Approvals pane. */
+  onOpenApprovals?: () => void;
 }): ReactElement {
   const [response, setResponse] = useState<
     LaunchAgentPolicySetsResponse | null
@@ -51,6 +77,12 @@ export function AgentStudioDirectivePolicy({
   const [notice, setNotice] = useState("");
   const [text, setText] = useState("");
   const [compiled, setCompiled] = useState<LaunchPolicyCompileResponse | null>(
+    null,
+  );
+  const [attribution, setAttribution] = useState<
+    LaunchPolicyAttributionResponse | null
+  >(initialAttribution);
+  const [dryRun, setDryRun] = useState<LaunchPolicyDryRunResponse | null>(
     null,
   );
   const [busy, setBusy] = useState(false);
@@ -72,6 +104,12 @@ export function AgentStudioDirectivePolicy({
 
   useEffect(() => {
     if (!initialResponse) reload();
+    if (!initialAttribution) {
+      api.attribution(agentLocator).then(
+        (loaded) => setAttribution(loaded),
+        () => undefined, // counters are additive; their absence is not an error
+      );
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentLocator]);
 
@@ -80,6 +118,7 @@ export function AgentStudioDirectivePolicy({
     setBusy(true);
     setNotice("");
     setCompiled(null);
+    setDryRun(null);
     api.compile(agentLocator, { text: text.trim() }).then(
       (result) => setCompiled(result),
       (reason) =>
@@ -91,10 +130,25 @@ export function AgentStudioDirectivePolicy({
     ).finally(() => setBusy(false));
   };
 
+  const runDryRun = () => {
+    if (busy || !compiled) return;
+    setBusy(true);
+    api.dryRun(agentLocator, { artifact: compiled.artifact }).then(
+      (result) => setDryRun(result),
+      (reason) =>
+        setNotice(
+          reason instanceof Error
+            ? reason.message
+            : "Dry-run failed — nothing was saved.",
+        ),
+    ).finally(() => setBusy(false));
+  };
+
   const approve = () => {
     if (busy || !compiled) return;
     setBusy(true);
     setNotice("");
+    setDryRun(null);
     api.approve(agentLocator, {
       artifact: compiled.artifact,
       source: compiled.source,
@@ -149,6 +203,23 @@ export function AgentStudioDirectivePolicy({
           <ul>
             {response.head.readback.map((line) => <li key={line}>{line}</li>)}
           </ul>
+          {attribution && attribution.rules.length > 0 ? (
+            <div className="agent-studio-directive-policy-counters">
+              {attribution.rules.map((entry) => (
+                <p key={`v${entry.policyVersion}:${entry.ruleId}`}>
+                  <strong>
+                    {entry.ruleId} (v{entry.policyVersion})
+                  </strong>{" "}
+                  — {attributionLabel(entry)}
+                  {onOpenApprovals ? (
+                    <button onClick={onOpenApprovals} type="button">
+                      See them →
+                    </button>
+                  ) : null}
+                </p>
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : (
         <p className="agent-studio-directive-policy-empty">
@@ -185,6 +256,9 @@ export function AgentStudioDirectivePolicy({
             <button disabled={busy} onClick={approve} type="button">
               Approve as version {(response?.head?.version ?? 0) + 1}
             </button>
+            <button disabled={busy} onClick={runDryRun} type="button">
+              Test against recent runs
+            </button>
             <button
               disabled={busy}
               onClick={() => setCompiled(null)}
@@ -193,6 +267,39 @@ export function AgentStudioDirectivePolicy({
               Discard
             </button>
           </div>
+          {dryRun ? (
+            <div className="agent-studio-directive-policy-dryrun">
+              <p>
+                Replayed <strong>{dryRun.replayed}</strong> recorded runs
+                through the production evaluator:{" "}
+                <strong>{dryRun.summary.newlyHeld}</strong> newly held,{" "}
+                <strong>{dryRun.summary.newlyDenied}</strong> newly denied,{" "}
+                <strong>{dryRun.summary.newlyAllowed}</strong> newly allowed
+                {dryRun.summary.wouldConsultJudge > 0
+                  ? (
+                    <>
+                      {" "}· {dryRun.summary.wouldConsultJudge}{" "}
+                      in a semantic rule&rsquo;s scope (the judge decides
+                      live)
+                    </>
+                  )
+                  : null}.
+              </p>
+              {dryRun.changed.length > 0 ? (
+                <ul>
+                  {dryRun.changed.slice(0, 8).map((row) => (
+                    <li key={row.jobId}>
+                      <code>{row.functionName}</code> {row.current} →{" "}
+                      {row.proposed}
+                      {row.proposedRuleId ? ` (${row.proposedRuleId})` : ""}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p>No recorded run changes verdict under this proposal.</p>
+              )}
+            </div>
+          ) : null}
         </div>
       ) : null}
 

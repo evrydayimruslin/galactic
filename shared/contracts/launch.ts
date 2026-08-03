@@ -939,6 +939,63 @@ export interface LaunchPolicySetApproveResponse {
   generatedAt: string;
 }
 
+/**
+ * Pillar P6: policies visibly earning their keep. Counters aggregate the
+ * envelope ledger per rule; dry-run replays RECORDED autonomous
+ * invocations through the same evaluator production uses — one code path,
+ * so a dry-run verdict is a production verdict.
+ */
+export interface LaunchPolicyRuleAttribution {
+  ruleId: string;
+  policyVersion: number;
+  /** The rule's own readback line when known (from the envelope). */
+  readback: string | null;
+  heldLast7d: number;
+  pendingNow: number;
+}
+
+export interface LaunchPolicyAttributionResponse {
+  agent: LaunchAgentHandle;
+  /** Rules that held at least once in the window, most-held first. */
+  rules: LaunchPolicyRuleAttribution[];
+  /** Envelope counts per policy version in the window (version diffs). */
+  versions: Array<{ policyVersion: number; held: number }>;
+  windowDays: number;
+  generatedAt: string;
+}
+
+export interface LaunchPolicyDryRunRequest {
+  artifact: LaunchPolicyArtifact;
+  /** How many recent autonomous invocations to replay (max 200). */
+  limit?: number;
+}
+
+export interface LaunchPolicyDryRunRow {
+  jobId: string;
+  functionName: string;
+  createdAt: string;
+  /** Verdict under the PROPOSED artifact. */
+  proposed: "allow" | "hold" | "deny" | "would_judge";
+  proposedRuleId: string | null;
+  /** Verdict under the CURRENT head (allow when no head). */
+  current: "allow" | "hold" | "deny" | "would_judge";
+  currentRuleId: string | null;
+}
+
+export interface LaunchPolicyDryRunResponse {
+  replayed: number;
+  /** Rows whose verdict CHANGES under the proposal, newest first. */
+  changed: LaunchPolicyDryRunRow[];
+  summary: {
+    newlyHeld: number;
+    newlyDenied: number;
+    newlyAllowed: number;
+    /** Semantic rules match by meaning — dry-run marks scope, not verdicts. */
+    wouldConsultJudge: number;
+  };
+  generatedAt: string;
+}
+
 /** GET /api/launch/agents/{id}/approvals — envelopes, newest first (P3). */
 export interface LaunchAgentApprovalsResponse {
   agent: LaunchAgentHandle;

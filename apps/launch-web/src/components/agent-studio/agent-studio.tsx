@@ -822,7 +822,10 @@ function AgentStudioPaneContent({
     return (
       <>
         <AgentStudioDirective home={home} onOpenPane={onOpenPane} />
-        <AgentStudioDirectivePolicy agentLocator={agentLocator(agent)} />
+        <AgentStudioDirectivePolicy
+          agentLocator={agentLocator(agent)}
+          onOpenApprovals={() => onOpenPane("approvals")}
+        />
       </>
     );
   }

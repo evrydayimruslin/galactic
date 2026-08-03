@@ -2444,3 +2444,54 @@ body[data-agent-studio-theme="light"] .neb-modal-overlay .neb-modal {
   font-size: 10px;
   color: var(--ink-3);
 }
+
+/* Pillar P6: counters + dry-run on the Directive policy panel. */
+.agent-studio-directive-policy-counters {
+  margin-top: 9px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.agent-studio-directive-policy-counters p {
+  margin: 0 0 4px;
+  font-size: 10px;
+  color: var(--ink-3);
+}
+
+.agent-studio-directive-policy-counters strong {
+  color: var(--ink);
+}
+
+.agent-studio-directive-policy-counters button {
+  margin-left: 7px;
+  padding: 1px 7px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-3);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.agent-studio-directive-policy-dryrun {
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 9px;
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+.agent-studio-directive-policy-dryrun p {
+  margin: 0 0 6px;
+}
+
+.agent-studio-directive-policy-dryrun strong {
+  color: var(--ink);
+}
+
+.agent-studio-directive-policy-dryrun ul {
+  margin: 0;
+  padding: 0 0 0 16px;
+  line-height: 1.6;
+}

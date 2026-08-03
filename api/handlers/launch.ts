@@ -87,6 +87,7 @@ import {
   type LaunchAgentApprovalsResponse,
   type LaunchAgentFunctionPoliciesResponse,
   type LaunchAgentPolicySetsResponse,
+  type LaunchPolicyAttributionResponse,
   type LaunchPolicyArtifact,
   type LaunchPolicyCompileResponse,
   type LaunchPolicySetApproveResponse,
@@ -307,6 +308,12 @@ import {
   renderPolicyReadback,
   validatePolicyArtifact,
 } from "../services/policy-predicates.ts";
+import {
+  aggregatePolicyAttribution,
+  ATTRIBUTION_WINDOW_DAYS,
+  dryRunArtifacts,
+  fetchRecordedAutonomousInvocations,
+} from "../services/policy-attribution.ts";
 import {
   denyHeldJob,
   resumeHeldJob,
@@ -1338,14 +1345,18 @@ export async function handleLaunch(
     }
 
     const agentPolicySetsMatch = path.match(
-      /^\/api\/launch\/agents\/([^/]+)\/policy-sets(?:\/(compile))?$/,
+      /^\/api\/launch\/agents\/([^/]+)\/policy-sets(?:\/(compile|attribution|dry-run))?$/,
     );
     if (agentPolicySetsMatch) {
       return await privateLaunchRoute(() =>
         handleLaunchAgentPolicySets(
           request,
           agentPolicySetsMatch[1],
-          agentPolicySetsMatch[2] === "compile",
+          (agentPolicySetsMatch[2] || null) as
+            | "compile"
+            | "attribution"
+            | "dry-run"
+            | null,
           method,
         )
       );
@@ -3132,6 +3143,60 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             "400": { description: "Missing artifact or head version" },
             "409": { description: "Head moved — body carries currentHeadVersion" },
             "422": { description: "Artifact no longer validates — body carries errors" },
+          },
+        },
+      },
+      "/api/launch/agents/{id}/policy-sets/attribution": {
+        get: {
+          operationId: "getLaunchAgentPolicyAttribution",
+          summary: "Per-rule hold counters from the envelope ledger",
+          description:
+            "Account-session and owner-only. Pillar P6: which compiled rules held work, how often (7-day window), and how many holds are pending now — aggregated from the same envelopes the Approvals tab shows, so the numbers cannot drift from the record. Includes per-policy-version totals for version diffs. Overlay (switch) holds attribute themselves in Capabilities and are excluded here.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          }],
+          responses: {
+            "200": { description: "Rule + version counters, most-held first" },
+            "403": { description: "Account session required" },
+            "404": { description: "Agent not found" },
+          },
+        },
+      },
+      "/api/launch/agents/{id}/policy-sets/dry-run": {
+        post: {
+          operationId: "dryRunLaunchAgentPolicy",
+          summary: "Replay recorded invocations under a proposed artifact",
+          description:
+            "Account-session and owner-only. Pillar P6: replays up to 200 recorded autonomous invocations through the SAME evaluator the production gate uses (one code path — a dry-run verdict is a production verdict) under the proposed artifact vs the current head, and returns the rows whose verdict would CHANGE plus a summary (newly held / newly denied / newly allowed). Semantic rules match by meaning, so dry-run reports how many recorded calls fall in their scope ('would consult the judge') rather than paying judge calls to guess. Nothing persists; nothing executes.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          }],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["artifact"],
+                  properties: {
+                    artifact: { type: "object" },
+                    limit: { type: "integer", minimum: 1, maximum: 200 },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": { description: "Changed rows + summary" },
+            "422": { description: "Artifact does not validate" },
           },
         },
       },
@@ -8162,7 +8227,7 @@ async function handleLaunchAgentApprovals(
 async function handleLaunchAgentPolicySets(
   request: Request,
   encodedLocator: string,
-  isCompile: boolean,
+  sub: "compile" | "attribution" | "dry-run" | null,
   method: string,
 ): Promise<Response> {
   const user = await requireLaunchUser(request);
@@ -8187,7 +8252,60 @@ async function handleLaunchAgentPolicySets(
     .map((fn) => declaredFunctionFactsFromApp(resolved, fn.name))
     .filter((fact): fact is NonNullable<typeof fact> => fact !== null);
 
-  if (isCompile) {
+  if (sub === "attribution") {
+    // P6: per-rule counters from the envelope ledger — the same rows the
+    // Approvals tab shows, so the numbers cannot drift from the record.
+    if (method !== "GET") {
+      return privateLaunchJson({ error: "Method not allowed" }, 405);
+    }
+    const attribution = await aggregatePolicyAttribution(
+      user.id,
+      resolved.id,
+    );
+    return privateLaunchJson(
+      {
+        agent: agentHandle,
+        rules: attribution.rules,
+        versions: attribution.versions,
+        windowDays: ATTRIBUTION_WINDOW_DAYS,
+        generatedAt: new Date().toISOString(),
+      } satisfies LaunchPolicyAttributionResponse,
+    );
+  }
+
+  if (sub === "dry-run") {
+    // P6: replay recorded autonomous invocations through the SAME
+    // evaluator the gate uses — a changed row here is a changed verdict
+    // in production. Nothing persists; nothing executes.
+    if (method !== "POST") {
+      return privateLaunchJson({ error: "Method not allowed" }, 405);
+    }
+    const body = asRecord(await readJsonBody<unknown>(request));
+    const artifact = asRecord(body?.artifact) as LaunchPolicyArtifact | null;
+    if (!artifact) {
+      return privateLaunchJson({ error: "artifact is required" }, 400);
+    }
+    const validation = validatePolicyArtifact(artifact, facts);
+    if (!validation.ok) {
+      return privateLaunchJson(
+        { error: "The artifact does not validate.", errors: validation.errors },
+        422,
+      );
+    }
+    const limit = typeof body?.limit === "number" &&
+        Number.isInteger(body.limit) && body.limit > 0
+      ? body.limit
+      : 200;
+    const [head, invocations] = await Promise.all([
+      readPolicySetHead(resolved.id),
+      fetchRecordedAutonomousInvocations(resolved.id, limit),
+    ]);
+    return privateLaunchJson(
+      dryRunArtifacts(invocations, artifact, head?.artifact ?? null),
+    );
+  }
+
+  if (sub === "compile") {
     if (method !== "POST") {
       return privateLaunchJson({ error: "Method not allowed" }, 405);
     }
