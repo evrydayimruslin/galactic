@@ -853,17 +853,37 @@ export interface LaunchPolicyRuleCondition {
 
 export interface LaunchPolicyRule {
   id: string;
+  /** A declared function name, or "*" (semantic rules only) for any. */
   functionName: string;
   effect: LaunchPolicyRuleEffect;
-  /** AND of 1–4 conditions; OR = separate rules. First matching rule wins. */
-  when: LaunchPolicyRuleCondition[];
+  /**
+   * P5: absent/"predicate" = deterministic conditions; "semantic" = the
+   * pinned judge evaluates `criterion` against the call's content.
+   */
+  kind?: "predicate" | "semantic";
+  /** Predicate rules: AND of 1–4 conditions; OR = separate rules. */
+  when?: LaunchPolicyRuleCondition[];
+  /**
+   * Semantic rules: the plain-language condition the judge answers.
+   * Semantic rules are HOLD-only — a model verdict can gate for review,
+   * never irreversibly deny (deny stays deterministic).
+   */
+  criterion?: string | null;
   /** Short paraphrase of the source clause (compiler-authored). */
   note?: string | null;
+}
+
+/** P5: the judge pinned by an approved version — verdicts never drift. */
+export interface LaunchPolicyJudgePin {
+  modelId: string;
+  promptVersion: number;
 }
 
 export interface LaunchPolicyArtifact {
   version: 1;
   rules: LaunchPolicyRule[];
+  /** Present iff the artifact contains semantic rules. */
+  judge?: LaunchPolicyJudgePin | null;
 }
 
 export interface LaunchPolicySourceEntry {

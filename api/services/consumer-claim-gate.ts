@@ -23,7 +23,10 @@ import {
   evaluateAutonomousGate,
   readFunctionPolicy,
 } from "./policy-gate.ts";
-import { evaluateCompiledPredicates } from "./policy-predicates.ts";
+import {
+  evaluatePolicyLayersForGate,
+  type GateJudgeDeps,
+} from "./policy-predicates.ts";
 import {
   createApprovalEnvelope,
   readApprovalByRunId,
@@ -104,6 +107,11 @@ async function parkAndFile(
       policyVersion: number;
       readback: string;
     } | null;
+    judgeRecord?: {
+      modelUsed: string;
+      promptVersion: number;
+      transcriptHash: string;
+    } | null;
   },
 ): Promise<ClaimGateOutcome> {
   let existing = null;
@@ -149,6 +157,7 @@ async function parkAndFile(
       policyRevision: details.policyRevision,
       declarationHash: details.declarationHash,
       heldBy: details.heldBy ?? null,
+      judgeRecord: details.judgeRecord ?? null,
     });
   } catch (err) {
     // The job is safely held either way; a missing envelope means the hold
@@ -169,6 +178,7 @@ async function parkAndFile(
  */
 export async function gateClaimedAutonomousJob(
   job: AsyncJob,
+  gateDeps: GateJudgeDeps = {},
 ): Promise<ClaimGateOutcome> {
   const trigger = (job as { trigger?: string | null }).trigger ?? null;
   if (!trigger || !AUTONOMOUS_TRIGGERS.has(trigger)) return "proceed";
@@ -229,11 +239,12 @@ export async function gateClaimedAutonomousJob(
   // ── Compiled predicates (P4) — after the overlay allows ──
   let predicate;
   try {
-    predicate = await evaluateCompiledPredicates({
+    predicate = await evaluatePolicyLayersForGate({
       appId: job.app_id,
       functionName: job.function_name,
       args: (job.args ?? {}) as Record<string, unknown>,
-    });
+      userId: job.user_id,
+    }, gateDeps);
   } catch (err) {
     console.error(
       `[CLAIM-GATE] predicate evaluation failed for job ${job.id} — holding (I2):`,
@@ -268,5 +279,6 @@ export async function gateClaimedAutonomousJob(
       policyVersion: predicate.policyVersion,
       readback: predicate.readback,
     },
+    judgeRecord: predicate.judge ?? null,
   });
 }

@@ -31,6 +31,10 @@ import {
   InferenceRouteError,
   resolveInferenceRoute,
 } from "./inference-route.ts";
+import {
+  JUDGE_PROMPT_VERSION,
+  judgeSemanticRules,
+} from "./policy-judge.ts";
 import type { DeclaredFunctionFacts } from "./policy-gate.ts";
 import { PolicyConflictError } from "./policy-gate.ts";
 
@@ -85,6 +89,22 @@ export function validatePolicyArtifact(
     errors.push(`Too many rules (${artifact.rules.length} > ${MAX_RULES}).`);
   }
   const seenIds = new Set<string>();
+  const hasSemantic = artifact.rules.some((rule) => rule.kind === "semantic");
+  if (hasSemantic) {
+    // P5: semantic rules pin their judge at approval — verdicts never
+    // drift under an owner silently (doc §7).
+    if (
+      !artifact.judge || typeof artifact.judge.modelId !== "string" ||
+      !artifact.judge.modelId ||
+      typeof artifact.judge.promptVersion !== "number"
+    ) {
+      errors.push(
+        "Artifacts with semantic rules must pin a judge {modelId, promptVersion}.",
+      );
+    }
+  } else if (artifact.judge) {
+    errors.push("judge is only valid when semantic rules exist.");
+  }
   artifact.rules.forEach((rule, index) => {
     const label = rule.id || `rule ${index + 1}`;
     if (!RULE_ID_PATTERN.test(rule.id ?? "")) {
@@ -102,6 +122,36 @@ export function validatePolicyArtifact(
       errors.push(
         `${label}: effect must be hold or deny — never allow (I1).`,
       );
+    }
+    if (rule.kind === "semantic") {
+      // Semantic rules: a plain-language criterion the judge answers.
+      // HOLD-only — a model verdict gates for review, never irreversibly
+      // denies (deny stays deterministic).
+      if (rule.effect !== "hold") {
+        errors.push(`${label}: semantic rules are hold-only.`);
+      }
+      if (
+        typeof rule.criterion !== "string" || !rule.criterion.trim() ||
+        rule.criterion.length > 500
+      ) {
+        errors.push(
+          `${label}: semantic rules need a criterion (at most 500 chars).`,
+        );
+      }
+      if (rule.when !== undefined) {
+        errors.push(`${label}: semantic rules take no when conditions.`);
+      }
+      if (
+        rule.functionName !== "*" && !factByName.has(rule.functionName)
+      ) {
+        errors.push(
+          `${label}: '${rule.functionName}' is not declared by the current release (or use "*").`,
+        );
+      }
+      return;
+    }
+    if (rule.criterion !== undefined) {
+      errors.push(`${label}: predicate rules take no criterion.`);
     }
     const fact = factByName.get(rule.functionName);
     if (!fact) {
@@ -208,8 +258,22 @@ function renderCondition(condition: LaunchPolicyRuleCondition): string {
   }
 }
 
-export function renderRuleReadback(rule: LaunchPolicyRule): string {
-  const conditions = rule.when.map(renderCondition).join(" and ");
+export function renderRuleReadback(
+  rule: LaunchPolicyRule,
+  judge?: { modelId: string; promptVersion: number } | null,
+): string {
+  if (rule.kind === "semantic") {
+    const scope = rule.functionName === "*"
+      ? "any autonomous call"
+      : `every \`${rule.functionName}\` call`;
+    const judgedBy = judge
+      ? ` — judged by ${judge.modelId} (prompt v${judge.promptVersion}); when unsure, it holds`
+      : "";
+    return `${rule.id}: Hold ${scope} that ${
+      (rule.criterion ?? "").trim()
+    }${judgedBy} — you approve each one in Approvals before it runs.`;
+  }
+  const conditions = (rule.when ?? []).map(renderCondition).join(" and ");
   if (rule.effect === "deny") {
     return `${rule.id}: Never run \`${rule.functionName}\` ${conditions} — ` +
       "each attempt is recorded as a deliberate non-action.";
@@ -224,7 +288,9 @@ export function renderPolicyReadback(artifact: LaunchPolicyArtifact): string[] {
       "No compiled rules — the Capabilities switches and the release ceiling still apply.",
     ];
   }
-  return artifact.rules.map(renderRuleReadback);
+  return artifact.rules.map((rule) =>
+    renderRuleReadback(rule, artifact.judge ?? null)
+  );
 }
 
 // ── Evaluation ──────────────────────────────────────────────────────────
@@ -290,12 +356,26 @@ export function evaluatePolicyRules(
   args: Record<string, unknown>,
 ): { rule: LaunchPolicyRule } | null {
   for (const rule of artifact.rules) {
+    if (rule.kind === "semantic") continue;
     if (rule.functionName !== functionName) continue;
-    if (rule.when.every((condition) => conditionMatches(condition, args))) {
+    if (
+      (rule.when ?? []).every((condition) => conditionMatches(condition, args))
+    ) {
       return { rule };
     }
   }
   return null;
+}
+
+/** P5: semantic rules applicable to a call — exact function or "*". */
+export function applicableSemanticRules(
+  artifact: LaunchPolicyArtifact,
+  functionName: string,
+): LaunchPolicyRule[] {
+  return artifact.rules.filter((rule) =>
+    rule.kind === "semantic" &&
+    (rule.functionName === "*" || rule.functionName === functionName)
+  );
 }
 
 // ── Store ───────────────────────────────────────────────────────────────
@@ -429,6 +509,12 @@ export interface PredicateVerdict {
   policyVersion: number;
   /** The single rule's readback line — envelope/receipt attribution (I6). */
   readback: string;
+  /** P5: present when the judge decided (I6 — what actually ran + hash). */
+  judge?: {
+    modelUsed: string;
+    promptVersion: number;
+    transcriptHash: string;
+  } | null;
 }
 
 /**
@@ -510,6 +596,8 @@ Rules:
 - Ops: eq, neq, gt, gte, lt, lte (numbers), contains (string), in (array of scalars), exists, absent (no value).
 - 'when' is an AND of 1-4 conditions on declared arg paths. Use separate rules for OR.
 - effect 'hold' means the owner approves each matching call; 'deny' means it never runs. There is NO allow effect.
+- When the condition is about MEANING rather than a comparable value ("mentions a lawyer", "sounds angry", "discusses pricing"), emit a SEMANTIC rule instead: {"id": "rN", "kind": "semantic", "functionName": "<declared name or * for any>", "effect": "hold", "criterion": "<the condition as one plain sentence>", "note": "..."}. Semantic rules are hold-only and take no 'when'.
+- Prefer deterministic 'when' conditions whenever the declared paths can express the policy; semantic rules are for content no path comparison can capture.
 - Only reference the declared functions and paths given. If the policy names something undeclared or is vague ("be careful"), emit clarificationNeeded instead of guessing.
 - ids are r1, r2, ... in order.`;
 
@@ -601,11 +689,23 @@ export async function compilePolicyText(
     // Doc §6: clarification is surfaced as the save error — nothing persists.
     throw new PolicyCompileError("clarification", parsed.clarificationNeeded);
   }
+  const rules = Array.isArray(parsed.rules)
+    ? parsed.rules as LaunchPolicyRule[]
+    : [];
+  const compileModel = data.model ?? model;
   const artifact: LaunchPolicyArtifact = {
     version: 1,
-    rules: Array.isArray(parsed.rules)
-      ? parsed.rules as LaunchPolicyRule[]
-      : [],
+    rules,
+    // P5: semantic rules pin the judge AT COMPILE — the owner's route
+    // model at this moment, recorded in the readback they approve.
+    ...(rules.some((rule) => rule.kind === "semantic")
+      ? {
+        judge: {
+          modelId: compileModel,
+          promptVersion: JUDGE_PROMPT_VERSION,
+        },
+      }
+      : {}),
   };
   const validation = validatePolicyArtifact(artifact, input.facts);
   if (!validation.ok) {
@@ -621,6 +721,99 @@ export async function compilePolicyText(
       text: input.text,
       ruleIds: artifact.rules.map((rule) => rule.id),
     }],
-    compileModel: data.model ?? model,
+    compileModel,
+  };
+}
+
+// ── Layered gate evaluation (P4 predicates + P5 judge) ──────────────────
+
+export interface GateJudgeDeps {
+  judgeFn?: typeof judgeSemanticRules;
+}
+
+/**
+ * The full compiled-policy evaluation for the dispatch gate's two
+ * checkpoints (doc §4 order): deterministic predicates first (first match
+ * wins), then the judge over every applicable semantic rule — bundled
+ * into ONE completion, which is the maximally generous inclusion posture
+ * of §13.5 (a false include costs part of one judge call; a false exclude
+ * would be a false allow). Judge unavailability, timeout, or unparseable
+ * output holds on the first applicable rule (I2) — friction, never
+ * authorization.
+ */
+export async function evaluatePolicyLayersForGate(
+  input: {
+    appId: string;
+    functionName: string;
+    args: Record<string, unknown>;
+    userId: string;
+    userEmail?: string | null;
+  },
+  deps: GateJudgeDeps = {},
+): Promise<PredicateVerdict | null> {
+  const head = await readPolicySetHead(input.appId);
+  if (!head || head.artifact.rules.length === 0) return null;
+  const matched = evaluatePolicyRules(
+    head.artifact,
+    input.functionName,
+    input.args,
+  );
+  if (matched) {
+    return {
+      effect: matched.rule.effect,
+      ruleId: matched.rule.id,
+      policyVersion: head.version,
+      readback: renderRuleReadback(matched.rule, head.artifact.judge ?? null),
+    };
+  }
+  const semanticRules = applicableSemanticRules(
+    head.artifact,
+    input.functionName,
+  );
+  if (semanticRules.length === 0 || !head.artifact.judge) return null;
+  const judgeFn = deps.judgeFn ?? judgeSemanticRules;
+  let outcome;
+  try {
+    outcome = await judgeFn({
+      userId: input.userId,
+      userEmail: input.userEmail,
+      judge: head.artifact.judge,
+      rules: semanticRules.map((rule) => ({
+        ruleId: rule.id,
+        criterion: rule.criterion ?? "",
+      })),
+      functionName: input.functionName,
+      args: input.args,
+    });
+  } catch (err) {
+    const first = semanticRules[0];
+    console.error(
+      `[JUDGE] unavailable for ${input.functionName} — holding (I2):`,
+      err,
+    );
+    return {
+      effect: "hold",
+      ruleId: first.id,
+      policyVersion: head.version,
+      readback: `${
+        renderRuleReadback(first, head.artifact.judge)
+      } (judge unavailable — held to be safe)`,
+      judge: null,
+    };
+  }
+  const held = outcome.verdicts.find((verdict) => verdict.verdict === "hold");
+  if (!held) return null;
+  const rule = semanticRules.find((candidate) => candidate.id === held.ruleId);
+  if (!rule) return null;
+  return {
+    effect: "hold",
+    ruleId: rule.id,
+    policyVersion: head.version,
+    readback: renderRuleReadback(rule, head.artifact.judge),
+    judge: {
+      modelUsed: outcome.modelUsed,
+      promptVersion: outcome.promptVersion,
+      transcriptHash: outcome.transcriptHash,
+    },
   };
 }

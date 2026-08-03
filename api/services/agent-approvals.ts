@@ -145,6 +145,13 @@ export async function createApprovalEnvelope(input: {
     policyVersion: number;
     readback: string;
   } | null;
+  /** P5: the judge's receipt — model that ran + transcript hash, never
+   * the transcript (I10). */
+  judgeRecord?: {
+    modelUsed: string;
+    promptVersion: number;
+    transcriptHash: string;
+  } | null;
 }): Promise<ApprovalRow> {
   const { argKeys, preview, lossless } = sanitizeProposal(input.args);
   const now = Date.now();
@@ -176,6 +183,7 @@ export async function createApprovalEnvelope(input: {
         routineRunId: input.routineRunId,
         trigger: input.trigger,
         ...(input.heldBy ? { heldBy: input.heldBy } : {}),
+        ...(input.judgeRecord ? { judge: input.judgeRecord } : {}),
       },
       proposal: { argKeys, preview, lossless },
       created_at: new Date(now).toISOString(),

@@ -16,7 +16,9 @@ import type {
 import type { DeclaredFunctionFacts } from "./policy-gate.ts";
 import { PolicyConflictError } from "./policy-gate.ts";
 import {
+  applicableSemanticRules,
   compilePolicyText,
+  evaluatePolicyLayersForGate,
   evaluatePolicyRules,
   insertPolicySet,
   PolicyCompileError,
@@ -373,4 +375,215 @@ Deno.test("compiler: clarification, invalid output, and missing BYOK all fail th
     PolicyCompileError,
   );
   assertEquals((noByok as PolicyCompileError).kind, "no_byok");
+});
+
+const LAWYER_RULE = {
+  id: "r1",
+  kind: "semantic" as const,
+  functionName: "*",
+  effect: "hold" as const,
+  criterion: "mentions a lawyer or legal threat",
+};
+const JUDGE_PIN = { modelId: "anthropic/claude-sonnet-5", promptVersion: 1 };
+
+Deno.test("P5 validator: semantic rules are hold-only, need criterion + judge pin", () => {
+  const good = validatePolicyArtifact(
+    { version: 1, rules: [LAWYER_RULE], judge: JUDGE_PIN },
+    FACTS,
+  );
+  assertEquals(good, { ok: true });
+  const bad = validatePolicyArtifact(
+    {
+      version: 1,
+      rules: [
+        { ...LAWYER_RULE, effect: "deny" as never },
+        { ...LAWYER_RULE, id: "r2", criterion: "" },
+        { ...LAWYER_RULE, id: "r3", functionName: "refnds" },
+        {
+          ...LAWYER_RULE,
+          id: "r4",
+          when: [{ path: "amount", op: "gt", value: 1 }],
+        },
+      ],
+    },
+    FACTS,
+  );
+  assert(!bad.ok);
+  const text = bad.errors.join("\n");
+  assert(text.includes("semantic rules are hold-only"));
+  assert(text.includes("need a criterion"));
+  assert(text.includes('not declared by the current release (or use "*")'));
+  assert(text.includes("no when conditions"));
+  assert(text.includes("must pin a judge"));
+  // A pin without semantic rules is also rejected.
+  const stray = validatePolicyArtifact(
+    { version: 1, rules: [HOLD_OVER_50], judge: JUDGE_PIN },
+    FACTS,
+  );
+  assert(!stray.ok);
+});
+
+Deno.test("P5 readback: the semantic template names the judge and the unsure posture", () => {
+  const lines = renderPolicyReadback({
+    version: 1,
+    rules: [LAWYER_RULE],
+    judge: JUDGE_PIN,
+  });
+  assertEquals(lines, [
+    "r1: Hold any autonomous call that mentions a lawyer or legal threat — " +
+    "judged by anthropic/claude-sonnet-5 (prompt v1); when unsure, it " +
+    "holds — you approve each one in Approvals before it runs.",
+  ]);
+});
+
+Deno.test("P5: semantic rules never match deterministically; scoping is fn or *", () => {
+  const artifact = {
+    version: 1 as const,
+    rules: [
+      LAWYER_RULE,
+      { ...LAWYER_RULE, id: "r2", functionName: "send_reply" },
+    ],
+    judge: JUDGE_PIN,
+  };
+  assertEquals(
+    evaluatePolicyRules(artifact, "send_reply", { body: "my lawyer says" }),
+    null,
+  );
+  assertEquals(
+    applicableSemanticRules(artifact, "send_reply").map((rule) => rule.id),
+    ["r1", "r2"],
+  );
+  assertEquals(
+    applicableSemanticRules(artifact, "issue_refund").map((rule) => rule.id),
+    ["r1"],
+  );
+});
+
+Deno.test("P5 gate layering: predicates first; judge hold carries the receipt; unavailability holds", async () => {
+  const head = {
+    app_id: "app-1",
+    user_id: "user-1",
+    version: 5,
+    source: [],
+    artifact: {
+      version: 1,
+      rules: [HOLD_OVER_50, { ...LAWYER_RULE, id: "r2" }],
+      judge: JUDGE_PIN,
+    },
+    compile_model: "m",
+    created_at: "2026-08-03T00:00:00Z",
+  };
+  await withFetchStub(
+    () => new Response(JSON.stringify([head]), { status: 200 }),
+    async () => {
+      // Deterministic match wins without consulting the judge.
+      const deterministic = await evaluatePolicyLayersForGate(
+        {
+          appId: "app-1",
+          functionName: "issue_refund",
+          args: { amount: 90 },
+          userId: "user-1",
+        },
+        {
+          judgeFn: () => Promise.reject(new Error("must not be called")),
+        },
+      );
+      assertEquals(deterministic?.ruleId, "r1");
+      assertEquals(deterministic?.judge, undefined);
+
+      // Judge hold: rule attribution + model + transcript hash recorded.
+      const judged = await evaluatePolicyLayersForGate(
+        {
+          appId: "app-1",
+          functionName: "issue_refund",
+          args: { amount: 10 },
+          userId: "user-1",
+        },
+        {
+          judgeFn: (request) => {
+            assertEquals(request.rules, [{
+              ruleId: "r2",
+              criterion: "mentions a lawyer or legal threat",
+            }]);
+            return Promise.resolve({
+              verdicts: [{ ruleId: "r2", verdict: "hold" as const }],
+              modelUsed: "anthropic/claude-sonnet-5",
+              promptVersion: 1,
+              transcriptHash: "t".repeat(64),
+            });
+          },
+        },
+      );
+      assertEquals(judged?.effect, "hold");
+      assertEquals(judged?.ruleId, "r2");
+      assertEquals(judged?.judge?.transcriptHash, "t".repeat(64));
+
+      // All-allow verdicts pass the call.
+      const allowed = await evaluatePolicyLayersForGate(
+        {
+          appId: "app-1",
+          functionName: "issue_refund",
+          args: { amount: 10 },
+          userId: "user-1",
+        },
+        {
+          judgeFn: () =>
+            Promise.resolve({
+              verdicts: [{ ruleId: "r2", verdict: "allow" as const }],
+              modelUsed: "m",
+              promptVersion: 1,
+              transcriptHash: "t".repeat(64),
+            }),
+        },
+      );
+      assertEquals(allowed, null);
+
+      // Judge unavailable => hold, fail closed, attributed + explained.
+      const unavailable = await evaluatePolicyLayersForGate(
+        {
+          appId: "app-1",
+          functionName: "issue_refund",
+          args: { amount: 10 },
+          userId: "user-1",
+        },
+        { judgeFn: () => Promise.reject(new Error("route down")) },
+      );
+      assertEquals(unavailable?.effect, "hold");
+      assert(unavailable?.readback.includes("judge unavailable"));
+    },
+  );
+});
+
+Deno.test("P5 compiler: semantic output pins the judge at the compile model", async () => {
+  const result = await compilePolicyText(
+    {
+      userId: "user-1",
+      userEmail: "o@example.com",
+      text: "hold anything mentioning a lawyer",
+      facts: FACTS,
+    },
+    {
+      resolveRoute: () => Promise.resolve(ROUTE_STUB),
+      fetchCompletion: () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              model: "anthropic/claude-sonnet-5",
+              choices: [{
+                message: {
+                  content: '{"rules": [{"id": "r1", "kind": "semantic", ' +
+                    '"functionName": "*", "effect": "hold", "criterion": ' +
+                    '"mentions a lawyer or legal threat"}]}',
+                },
+              }],
+            }),
+            { status: 200 },
+          ),
+        ),
+    },
+  );
+  assertEquals(result.artifact.judge, {
+    modelId: "anthropic/claude-sonnet-5",
+    promptVersion: 1,
+  });
 });

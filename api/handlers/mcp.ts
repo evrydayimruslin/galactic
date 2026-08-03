@@ -74,7 +74,7 @@ import {
   evaluateAutonomousGate,
 } from "../services/policy-gate.ts";
 import { createApprovalEnvelope } from "../services/agent-approvals.ts";
-import { evaluateCompiledPredicates } from "../services/policy-predicates.ts";
+import { evaluatePolicyLayersForGate } from "../services/policy-predicates.ts";
 import { listAgentReleases } from "../services/app-releases-projection.ts";
 import { createQueuedJob } from "../services/async-jobs.ts";
 import {
@@ -1927,6 +1927,11 @@ async function holdAutonomousCallForApproval(params: {
     policyVersion: number;
     readback: string;
   } | null;
+  judgeRecord?: {
+    modelUsed: string;
+    promptVersion: number;
+    transcriptHash: string;
+  } | null;
   message: string;
 }): Promise<Response> {
   const heldExecutionId = crypto.randomUUID();
@@ -1977,6 +1982,7 @@ async function holdAutonomousCallForApproval(params: {
     policyRevision: params.policyRevision,
     declarationHash: params.declarationHash,
     heldBy: params.heldBy ?? null,
+    judgeRecord: params.judgeRecord ?? null,
   });
   return jsonRpcResponse(params.id, {
     content: [{
@@ -2212,10 +2218,12 @@ async function handleToolsCall(
       }
       // Pillar P4: compiled predicates evaluate after the overlay allows
       // (doc §4 order). First matching rule wins; effects only narrow.
-      const predicateVerdict = await evaluateCompiledPredicates({
+      const predicateVerdict = await evaluatePolicyLayersForGate({
         appId: app.id,
         functionName: rawName,
         args: (args ?? {}) as Record<string, unknown>,
+        userId,
+        userEmail: user?.email ?? null,
       });
       if (predicateVerdict?.effect === "deny") {
         return await denyAutonomousCall({
@@ -2257,6 +2265,7 @@ async function handleToolsCall(
             policyVersion: predicateVerdict.policyVersion,
             readback: predicateVerdict.readback,
           },
+          judgeRecord: predicateVerdict.judge ?? null,
           message:
             `A compiled policy holds this call for the owner's approval — ` +
             `${predicateVerdict.readback} Do not retry it this wake.`,
