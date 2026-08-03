@@ -764,6 +764,7 @@ function AgentStudioPaneContent({
         agentLocator={agentLocator(agent)}
         canRunNow={Boolean(home?.actions.canRunNow)}
         hasMore={Boolean(activityCursor)}
+        itemId={item}
         loading={activityLoading}
         newAgent={Boolean(home && shouldShowAgentSetup(home))}
         onLoadMore={onLoadMoreActivity}

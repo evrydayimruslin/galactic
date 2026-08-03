@@ -6,6 +6,7 @@ import type {
   LaunchAgentActivityPreview,
 } from "../../../../../shared/contracts/launch.ts";
 import {
+  activityFocusTargetId,
   AgentStudioActivity,
   AgentStudioContractBoundary,
   AgentStudioLimits,
@@ -190,6 +191,42 @@ describe("Agent Studio partial screens", () => {
     expect(markup).toContain("Scheduled next");
     expect(markup).toContain("Running now");
     expect(markup).toContain("Finished recently");
+  });
+
+  it("marks the deep-linked run and resolves bare routine-run ids", () => {
+    const items = [
+      activityItem("run:run-14", "Morning triage"),
+      activityItem("run:run-15", "Evening sweep"),
+    ];
+    // Search-index run links carry the bare run id; the item id also works.
+    expect(activityFocusTargetId(items, "run-14")).toBe("run:run-14");
+    expect(activityFocusTargetId(items, "run:run-15")).toBe("run:run-15");
+    // Compute-run ids never appear in the feed → no focus, no crash.
+    expect(activityFocusTargetId(items, "compute-run-9")).toBe(null);
+    expect(activityFocusTargetId(items, undefined)).toBe(null);
+
+    const activity = {
+      generatedAt: "2026-07-27T12:00:00.000Z",
+      items,
+      now: [],
+      recent: [],
+      upNext: null,
+    } as unknown as LaunchAgentActivityPreview;
+    const markup = renderToStaticMarkup(
+      <AgentStudioActivity
+        activity={activity}
+        hasMore={false}
+        itemId="run-14"
+        loading={false}
+        onLoadMore={() => undefined}
+      />,
+    );
+    expect(markup).toContain(
+      'class="agent-studio-activity-run linked" id="agent-studio-activity-run:run-14"',
+    );
+    expect(markup).toContain(
+      'class="agent-studio-activity-run" id="agent-studio-activity-run:run-15"',
+    );
   });
 
   it("renders the New-Agent first-run path without inventing a receipt", () => {

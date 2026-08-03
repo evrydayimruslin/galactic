@@ -1016,6 +1016,11 @@
   box-shadow: var(--card-shadow);
 }
 
+/* The run a deep link landed on — an accent edge, not a spotlight. */
+.agent-studio-activity-run.linked {
+  border-left: 2px solid var(--accent);
+}
+
 .agent-studio-activity-run.open {
   border-color: var(--accent);
 }
