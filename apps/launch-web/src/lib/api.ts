@@ -25,7 +25,10 @@ import type {
   LaunchAgentHomeResponse,
   LaunchAgentKnowledgeAnswerRequest,
   LaunchAgentKnowledgeFact,
+  LaunchAutonomousFunctionPolicyUpdateRequest,
   LaunchAgentKnowledgeFactUpsertRequest,
+  LaunchAgentFunctionPoliciesResponse,
+  LaunchAgentFunctionPolicyUpdateResponse,
   LaunchAgentKnowledgeProjection,
   LaunchAgentKnowledgeQuestion,
   LaunchAgentReleasesResponse,
@@ -522,6 +525,29 @@ export class LaunchApiClient {
         encodeURIComponent(slug)
       }`,
       { method: "POST", body: JSON.stringify(request) },
+    );
+  }
+
+  /** Pillar P2: autonomous policy overlay, defaults merged over the release. */
+  agentFunctionPolicies(
+    idOrSlug: string,
+  ): Promise<LaunchAgentFunctionPoliciesResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/policies`,
+    );
+  }
+
+  /** Full-congruence CAS write; 409 carries `current` for reconcile. */
+  setAgentFunctionPolicy(
+    idOrSlug: string,
+    functionName: string,
+    request: LaunchAutonomousFunctionPolicyUpdateRequest,
+  ): Promise<LaunchAgentFunctionPolicyUpdateResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/policies/${
+        encodeURIComponent(functionName)
+      }`,
+      { method: "PUT", body: JSON.stringify(request) },
     );
   }
 

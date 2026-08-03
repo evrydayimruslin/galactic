@@ -83,6 +83,8 @@ import {
   type LaunchAgentCapacityResponse,
   type LaunchAgentCapacityUpdateRequest,
   type LaunchAgentExtensionHandoffIntent,
+  type LaunchAgentFunctionPoliciesResponse,
+  type LaunchAgentFunctionPolicyUpdateResponse,
   type LaunchAgentFunctionsResponse,
   type LaunchAgentHomeActionRequest,
   type LaunchAgentHomeResponse,
@@ -273,6 +275,14 @@ import type {
 } from "../../shared/contracts/agent-grants.ts";
 import type { SensitiveRoute } from "../services/sensitive-route-rate-limit.ts";
 import { listAgentReleases } from "../services/app-releases-projection.ts";
+import {
+  buildFunctionPolicyProjections,
+  computeDeclarationHash,
+  defaultPolicyRevision,
+  PolicyConflictError,
+  readFunctionPolicy,
+  setFunctionPolicy,
+} from "../services/policy-gate.ts";
 import {
   AgentKnowledgeValidationError,
   answerAgentKnowledgeQuestion,
@@ -1279,6 +1289,20 @@ export async function handleLaunch(
       );
     }
 
+    const agentPoliciesMatch = path.match(
+      /^\/api\/launch\/agents\/([^/]+)\/policies(?:\/([^/]+))?$/,
+    );
+    if (agentPoliciesMatch) {
+      return await privateLaunchRoute(() =>
+        handleLaunchAgentFunctionPolicies(
+          request,
+          agentPoliciesMatch[1],
+          agentPoliciesMatch[2] || null,
+          method,
+        )
+      );
+    }
+
     const agentConceptsMatch = path.match(
       /^\/api\/launch\/agents\/([^/]+)\/concepts(?:\/(suggest)|\/([a-z0-9][a-z0-9-]{0,62}))?$/,
     );
@@ -1718,6 +1742,7 @@ function buildLaunchStatus(request: Request): Record<string, unknown> {
       agentHomePause: "/api/launch/agents/{id}/home/pause",
       agentHomeResume: "/api/launch/agents/{id}/home/resume",
       agentConcepts: "/api/launch/agents/{id}/concepts",
+      agentPolicies: "/api/launch/agents/{id}/policies",
       agentKnowledge: "/api/launch/agents/{id}/knowledge",
       agentReleases: "/api/launch/agents/{id}/releases",
       agentRoutine: "/api/launch/agents/{id}/routine",
@@ -2986,6 +3011,85 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             },
             "403": { description: "Account session required" },
             "404": { description: "Agent not found" },
+          },
+        },
+      },
+      "/api/launch/agents/{id}/policies": {
+        get: {
+          operationId: "listLaunchAgentFunctionPolicies",
+          summary: "Autonomous policy overlay for a private Agent",
+          description:
+            "Account-session and owner-only. Pillar P2: per-function autonomous execution authority (off | ask | free), merged over the current release's declared functions — unset functions project as 'free' attributed to release_default with a deterministic revision a first write must present. Each projection carries the function's consequence group (read | internal_write | external_side_effect | spend), the current declaration hash, and the deciding actor. The gate applies these to the Agent's OWN autonomous calls (scheduled wakes, run-now, retries); direct user calls are a different authority plane. 'ask' stores but stays dormant until approvals ship.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Private Agent id or slug",
+          }],
+          responses: {
+            "200": { description: "Per-function policy projections" },
+            "403": { description: "Account session required" },
+            "404": { description: "Agent not found" },
+          },
+        },
+      },
+      "/api/launch/agents/{id}/policies/{functionName}": {
+        put: {
+          operationId: "setLaunchAgentFunctionPolicy",
+          summary: "Set one function's autonomous policy (full-congruence CAS)",
+          description:
+            "Account-session and owner-only. The write asserts everything the owner SAW: expectedRevision, expectedReleaseId, and expectedDeclarationHash must all match the live state, and idempotencyKey dedupes double-submits. Any drift — a concurrent edit, a redeploy, a changed declaration — returns 409 with `current` attached so the client reconciles and re-confirms instead of blind-writing.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          }, {
+            name: "functionName",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          }],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: [
+                    "policy",
+                    "expectedRevision",
+                    "expectedReleaseId",
+                    "expectedDeclarationHash",
+                    "idempotencyKey",
+                  ],
+                  properties: {
+                    policy: {
+                      type: "string",
+                      enum: ["off", "ask", "free"],
+                    },
+                    expectedRevision: { type: "string" },
+                    expectedReleaseId: { type: "string" },
+                    expectedDeclarationHash: { type: "string" },
+                    idempotencyKey: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": { description: "The updated projection" },
+            "400": { description: "Invalid policy or missing congruence keys" },
+            "404": {
+              description: "Function not declared by the current release",
+            },
+            "409": {
+              description:
+                "State drift — body carries `current` for reconcile",
+            },
           },
         },
       },
@@ -7405,6 +7509,202 @@ async function handleLaunchAgentReleases(
       generatedAt: new Date().toISOString(),
     } satisfies LaunchAgentReleasesResponse,
   );
+}
+
+/**
+ * Pillar P2: the autonomous policy overlay (off | ask | free), owner plane.
+ * GET merges defaults over the current release's declared functions. PUT is
+ * full-congruence CAS: the write asserts the revision, release, and
+ * declaration hash the owner SAW; any drift 409s with `current` attached so
+ * the UI reconciles instead of blind-writing (I5). `ask` stores but stays
+ * dormant until P3 ships holds.
+ */
+async function handleLaunchAgentFunctionPolicies(
+  request: Request,
+  encodedLocator: string,
+  encodedFunctionName: string | null,
+  method: string,
+): Promise<Response> {
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForAgentHome(user);
+  const resolved = await resolveOwnerPrivateRoutineAgent(
+    user,
+    encodedLocator,
+  );
+  if (resolved instanceof Response) {
+    return withPrivateLaunchPrivacy(resolved);
+  }
+  const releases = await listAgentReleases(user.id, resolved.id);
+  const release = releases[0]
+    ? {
+      id: releases[0].id,
+      version: releases[0].version,
+      createdAt: releases[0].createdAt,
+    }
+    : null;
+  const summaries = await buildLaunchFunctionSummaries(resolved, user.id);
+  const facts = summaries.map((fn) => ({
+    name: fn.name,
+    description: fn.description ?? null,
+    inputSchema: fn.inputSchema ?? null,
+    annotations: fn.annotations ?? null,
+    priced: Boolean(fn.pricing),
+  }));
+  const agentHandle = {
+    id: resolved.id,
+    slug: resolved.slug ?? resolved.id,
+    name: resolved.name ?? resolved.slug ?? "Agent",
+    relationship: "owner" as const,
+    publicUrl: null,
+    adminUrl: null,
+  };
+
+  if (encodedFunctionName === null) {
+    if (method !== "GET") {
+      return privateLaunchJson({ error: "Method not allowed" }, 405);
+    }
+    return privateLaunchJson(
+      {
+        agent: agentHandle,
+        currentRelease: release ? { id: release.id, version: release.version } : null,
+        policies: await buildFunctionPolicyProjections({
+          userId: user.id,
+          appId: resolved.id,
+          functions: facts,
+          release,
+        }),
+        generatedAt: new Date().toISOString(),
+      } satisfies LaunchAgentFunctionPoliciesResponse,
+    );
+  }
+
+  if (method !== "PUT") {
+    return privateLaunchJson({ error: "Method not allowed" }, 405);
+  }
+  const functionName = decodeURIComponent(encodedFunctionName);
+  const fn = facts.find((f) => f.name === functionName);
+  if (!fn) {
+    return privateLaunchJson(
+      { error: "This function is not declared by the current release" },
+      404,
+    );
+  }
+  const body = asRecord(await readJsonBody<unknown>(request));
+  const policy = body?.policy;
+  if (
+    policy !== "off" && policy !== "ask" && policy !== "free"
+  ) {
+    return privateLaunchJson(
+      { error: "policy must be off, ask, or free" },
+      400,
+    );
+  }
+  const expectedRevision = typeof body?.expectedRevision === "string"
+    ? body.expectedRevision
+    : null;
+  const expectedReleaseId = typeof body?.expectedReleaseId === "string"
+    ? body.expectedReleaseId
+    : null;
+  const expectedDeclarationHash =
+    typeof body?.expectedDeclarationHash === "string"
+      ? body.expectedDeclarationHash
+      : null;
+  const idempotencyKey = typeof body?.idempotencyKey === "string"
+    ? body.idempotencyKey
+    : null;
+  if (
+    !expectedRevision || !expectedReleaseId || !expectedDeclarationHash ||
+    !idempotencyKey
+  ) {
+    return privateLaunchJson(
+      {
+        error:
+          "expectedRevision, expectedReleaseId, expectedDeclarationHash, and idempotencyKey are required",
+      },
+      400,
+    );
+  }
+
+  const currentProjection = async () => {
+    const projections = await buildFunctionPolicyProjections({
+      userId: user.id,
+      appId: resolved.id,
+      functions: [fn],
+      release,
+    });
+    return projections[0];
+  };
+  const conflict = async (message: string) =>
+    privateLaunchJson(
+      { error: message, current: await currentProjection() },
+      409,
+    );
+
+  if (!release || expectedReleaseId !== release.id) {
+    return await conflict(
+      "The Agent's release changed since you read this policy",
+    );
+  }
+  const declarationHash = await computeDeclarationHash(fn);
+  if (expectedDeclarationHash !== declarationHash) {
+    return await conflict(
+      "This function's declaration changed since you read this policy",
+    );
+  }
+
+  const existing = await readFunctionPolicy(resolved.id, functionName);
+  const finish = async () =>
+    privateLaunchJson(
+      {
+        policy: await currentProjection(),
+        generatedAt: new Date().toISOString(),
+      } satisfies LaunchAgentFunctionPolicyUpdateResponse,
+    );
+  if (
+    existing && existing.policy === policy &&
+    existing.set_by?.idempotencyKey === idempotencyKey
+  ) {
+    // Idempotent replay of a write that already landed (double-submit).
+    return await finish();
+  }
+  const actor = { kind: "user", userId: user.id, idempotencyKey };
+  try {
+    if (!existing) {
+      if (expectedRevision !== defaultPolicyRevision(declarationHash)) {
+        return await conflict(
+          "The policy changed since you read it",
+        );
+      }
+      await setFunctionPolicy({
+        userId: user.id,
+        appId: resolved.id,
+        functionName,
+        policy,
+        expectedRevision: null,
+        declarationHash,
+        actor,
+      });
+    } else {
+      if (expectedRevision !== existing.revision) {
+        return await conflict("The policy changed since you read it");
+      }
+      await setFunctionPolicy({
+        userId: user.id,
+        appId: resolved.id,
+        functionName,
+        policy,
+        expectedRevision: existing.revision,
+        declarationHash,
+        actor,
+      });
+    }
+  } catch (err) {
+    if (err instanceof PolicyConflictError) {
+      return await conflict(err.message);
+    }
+    throw err;
+  }
+  return await finish();
 }
 
 async function handleLaunchOperatorRoutineRun(

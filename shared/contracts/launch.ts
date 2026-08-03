@@ -725,6 +725,25 @@ export interface LaunchAutonomousFunctionPolicyUpdateRequest {
   idempotencyKey: string;
 }
 
+/**
+ * GET /api/launch/agents/{id}/policies — defaults merged over the current
+ * release's declared functions. Unset functions project as `free` attributed
+ * to `release_default`, with a deterministic revision a first write must
+ * present (Pillar P2).
+ */
+export interface LaunchAgentFunctionPoliciesResponse {
+  agent: LaunchAgentHandle;
+  currentRelease: { id: string; version: string } | null;
+  policies: LaunchAutonomousFunctionPolicyProjection[];
+  generatedAt: string;
+}
+
+/** PUT response; a CAS conflict returns 409 with `current` for reconcile. */
+export interface LaunchAgentFunctionPolicyUpdateResponse {
+  policy: LaunchAutonomousFunctionPolicyProjection;
+  generatedAt: string;
+}
+
 export const LAUNCH_APPROVAL_STATUSES = [
   "pending",
   "approved",

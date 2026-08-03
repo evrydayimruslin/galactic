@@ -67,6 +67,12 @@ import {
   settleAndLogGpuExecution,
   settleRuntimeCloudPreflight,
 } from "../services/execution-settlement.ts";
+import { evaluateAutonomousGate } from "../services/policy-gate.ts";
+import {
+  drainEffectEvents,
+  recordEffectEvent,
+} from "../services/effect-event-tracker.ts";
+import { persistEffectEvents } from "../services/effect-event-store.ts";
 import {
   ACCOUNT_CAPACITY_ADMISSION_EXPOSURE_LIGHT,
   ACCOUNT_CAPACITY_EXECUTION_RESOURCE_CEILING_LIGHT,
@@ -1993,7 +1999,75 @@ async function handleToolsCall(
     (!callerContext.routineActor?.handlerFunction ||
       callerContext.routineActor.handlerFunction === rawName)
   ) {
-    // Routine self-invocation: allowed without a connected-agent grant.
+    // Routine self-invocation: allowed without a connected-agent grant —
+    // but Pillar P2 gates it against the OWNER's autonomous policy overlay
+    // (off | ask | free). This is the dispatch gate for the agent's own
+    // wakes: 'off' denies with a structured non-action (a denied ledger row
+    // + an attested effect event), never a silent drop. Fail-closed (I2):
+    // an unreadable policy denies autonomous work rather than guessing.
+    try {
+      const gateVerdict = await evaluateAutonomousGate({
+        appId: app.id,
+        functionName: rawName,
+      });
+      if (gateVerdict.verdict === "deny") {
+        const deniedExecutionId = crypto.randomUUID();
+        recordEffectEvent(deniedExecutionId, {
+          kind: "non_action",
+          channel: `policy:${rawName}`,
+          outcome: "denied: autonomous policy is Off",
+          attestation: "attested",
+        });
+        const drained = drainEffectEvents(deniedExecutionId);
+        await persistEffectEvents({
+          userId,
+          appId: app.id,
+          executionId: deniedExecutionId,
+          runId:
+            (callerContext.routineActor as { runId?: string } | undefined)
+              ?.runId ?? null,
+          events: drained.events,
+        }).catch(() => 0);
+        const serviceKey = getEnv("SUPABASE_SERVICE_ROLE_KEY");
+        await fetch(`${getEnv("SUPABASE_URL")}/rest/v1/async_jobs`, {
+          method: "POST",
+          headers: {
+            apikey: serviceKey,
+            Authorization: `Bearer ${serviceKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            app_id: app.id,
+            user_id: userId,
+            owner_id: app.owner_id,
+            function_name: rawName,
+            status: "denied",
+            args: {},
+            trigger: "schedule",
+            execution_id: deniedExecutionId,
+            policy_version: null,
+            resolved_at: new Date().toISOString(),
+            meta: { policy: "off", policy_revision: gateVerdict.revision },
+          }),
+        }).catch((err) => {
+          console.error("[GATE] denied-ledger write failed:", err);
+        });
+        return jsonRpcErrorResponse(
+          id,
+          INVALID_PARAMS,
+          `POLICY_OFF: the owner set ${rawName} to Off for autonomous runs. ` +
+            "The call was recorded as a deliberate non-action.",
+        );
+      }
+    } catch (gateErr) {
+      console.error("[GATE] evaluation failed — failing closed:", gateErr);
+      return jsonRpcErrorResponse(
+        id,
+        INVALID_PARAMS,
+        "POLICY_UNAVAILABLE: the autonomous policy gate could not be read; " +
+          "this wake's call was not executed (fail-closed).",
+      );
+    }
   } else if (
     callerUsesApiToken(callerContext) ||
     callerUsesRoutineActorToken(callerContext) ||

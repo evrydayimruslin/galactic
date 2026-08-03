@@ -1457,6 +1457,18 @@
     },
     {
       "exports": [
+        "listFunctionPolicies"
+      ],
+      "file": "services/policy-gate.ts",
+      "types": [
+        "AutonomousFunctionPolicy",
+        "DeclaredFunctionFacts",
+        "FunctionPolicyRow",
+        "GateVerdict"
+      ]
+    },
+    {
+      "exports": [
         "diffProjectCapsules"
       ],
       "file": "services/project-capsule.ts",

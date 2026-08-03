@@ -56,12 +56,12 @@ import {
 } from "./agent-studio-routines";
 import {
   AgentStudioActivity,
-  AgentStudioCapabilitiesIntro,
   AgentStudioContractBoundary,
   AgentStudioDirective,
   AgentStudioLimits,
 } from "./agent-studio-screens";
 import { AgentStudioKnowledge } from "./agent-studio-knowledge";
+import { AgentStudioPolicies } from "./agent-studio-policies";
 import {
   AgentStudioShell,
   type AgentStudioTheme,
@@ -845,7 +845,7 @@ function AgentStudioPaneContent({
   if (pane === "capabilities") {
     return (
       <section className="agent-studio-screen agent-studio-legacy-screen">
-        <AgentStudioCapabilitiesIntro />
+        <AgentStudioPolicies agentLocator={agentLocator(agent)} />
         <FunctionsPane
           agent={agent}
           functions={live.data.agentFunctions}

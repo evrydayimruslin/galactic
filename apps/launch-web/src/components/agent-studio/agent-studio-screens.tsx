@@ -391,19 +391,6 @@ export function AgentStudioContractBoundary({
   );
 }
 
-export function AgentStudioCapabilitiesIntro(): ReactElement {
-  return (
-    <div className="agent-studio-capabilities-intro">
-      <strong>Autonomous controls are not available for this Agent.</strong>
-      <p>
-        The published functions below manage which connected Agents may call
-        this Agent. They do not grant this Agent permission to act during its
-        own wakes.
-      </p>
-    </div>
-  );
-}
-
 /** Activity items derived from routine runs carry a `run:{uuid}` id. */
 function activityRunId(item: LaunchAgentActivityItem): string | null {
   if (typeof item.id === "string" && item.id.startsWith("run:")) {
