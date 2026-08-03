@@ -301,7 +301,7 @@ function useClock(interval = 1000): number {
   return now;
 }
 
-function ThemeMotif(): ReactElement {
+export function ThemeMotif(): ReactElement {
   return (
     <div className="neb-theme-motif" aria-hidden="true">
       <div className="neb-theme-eclipse">
@@ -1289,17 +1289,18 @@ export function NebulaFleetApp({
               type="button"
             >
               galactic
-              {signedIn && !settingsOpen
-                ? (
-                  <span className="neb-wordmark-tier">
-                    {(fleet?.accountCapacity.plan ?? "").replace(
-                      "max_5x",
-                      "max",
-                    )
-                      .replace("max_10x", "ultra")}
-                  </span>
-                )
-                : null}
+              {(() => {
+                // Membership is the product's single tier — the wordmark
+                // carries no suffix for it. Only elevated capacity tiers
+                // (max/ultra) still announce themselves.
+                const tier = (fleet?.accountCapacity.plan ?? "")
+                  .replace("max_5x", "max")
+                  .replace("max_10x", "ultra")
+                  .replace(/^pro$/, "");
+                return signedIn && !settingsOpen && tier
+                  ? <span className="neb-wordmark-tier">{tier}</span>
+                  : null;
+              })()}
             </button>
             {settingsOpen
               ? (

@@ -13,6 +13,7 @@ import {
   type AgentStudioPane,
   type AgentStudioPaneGroup,
 } from "../../lib/agent-studio-route";
+import { ThemeMotif } from "../nebula-fleet";
 
 export type AgentStudioTheme = "light" | "dark";
 
@@ -94,7 +95,7 @@ export function AgentStudioShell({
 
   return (
     <div className="agent-studio" data-theme={theme}>
-      <StudioMotif />
+      <ThemeMotif />
       <header className="agent-studio-header">
         <div className="agent-studio-identity">
           <span className="agent-studio-agent-name">{agentName}</span>
@@ -117,9 +118,10 @@ export function AgentStudioShell({
             aria-label="Close the Studio and return to your fleet"
             className="agent-studio-home"
             onClick={onBack}
+            title="Home"
             type="button"
           >
-            Home
+            <HomeGlyph />
           </button>
           <button
             aria-controls="agent-studio-navigation"
@@ -240,19 +242,23 @@ function RailGroupHeader({
   );
 }
 
-function StudioMotif(): ReactElement {
+function HomeGlyph(): ReactElement {
   return (
-    <div className="agent-studio-motif" aria-hidden="true">
-      <div />
-      <svg viewBox="0 0 980 980" fill="none">
-        <circle cx="576" cy="404" r="258.6" />
-        <circle cx="352" cy="490" r="258.6" />
-        <circle cx="500" cy="674" r="258.6" />
-        <circle cx="576" cy="404" r="260" />
-        <circle cx="352" cy="490" r="260" />
-        <circle cx="500" cy="674" r="260" />
-      </svg>
-    </div>
+    <svg
+      aria-hidden="true"
+      fill="none"
+      height="16"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.7"
+      viewBox="0 0 24 24"
+      width="16"
+    >
+      <path d="M3 10.5 12 3l9 7.5" />
+      <path d="M5.5 9.5V21h13V9.5" />
+      <path d="M9.75 21v-6.5h4.5V21" />
+    </svg>
   );
 }
 
