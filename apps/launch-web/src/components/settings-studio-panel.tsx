@@ -72,20 +72,19 @@ function relativePast(
   });
 }
 
-function subscriptionValue(
+export function subscriptionValue(
   subscription: LaunchSubscriptionResponse | undefined,
 ): string {
   if (!subscription) return "Loading…";
-  const price = `$${(subscription.priceCents / 100).toLocaleString()} / month`;
-  if (!subscription.hasActiveSubscription) {
-    return `${price} · subscription required`;
-  }
-  if (!subscription.currentPeriodEnd) return price;
-  const renewal = new Date(subscription.currentPeriodEnd).toLocaleDateString(
+  if (!subscription.hasActiveSubscription) return "subscription required";
+  if (!subscription.currentPeriodEnd) return "active";
+  const boundary = new Date(subscription.currentPeriodEnd).toLocaleDateString(
     undefined,
-    { month: "short", day: "numeric" },
+    { month: "long", day: "numeric", year: "numeric" },
   );
-  return `${price} · renews ${renewal}`;
+  return subscription.cancelAtPeriodEnd
+    ? `ends ${boundary}`
+    : `renews ${boundary}`;
 }
 
 function weeklyUsageValue(
@@ -252,7 +251,7 @@ function SettingsRoot({
               : subscription?.canManage
               ? "Manage"
               : "Subscribe"}
-            label={subscription?.planName ?? "Plan"}
+            label="Standard Membership"
             value={subscriptionValue(subscription)}
           />
           <SettingsRow
