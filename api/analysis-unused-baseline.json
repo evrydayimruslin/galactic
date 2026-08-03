@@ -88,6 +88,15 @@
     },
     {
       "exports": [
+        "APPROVAL_TTL_MS"
+      ],
+      "file": "services/agent-approvals.ts",
+      "types": [
+        "ResolveApprovalDeps"
+      ]
+    },
+    {
+      "exports": [
         "AgentCallerContextError"
       ],
       "file": "services/agent-caller-context.ts",

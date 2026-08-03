@@ -25,8 +25,11 @@ import type {
   LaunchAgentHomeResponse,
   LaunchAgentKnowledgeAnswerRequest,
   LaunchAgentKnowledgeFact,
+  LaunchApprovalActionRequest,
   LaunchAutonomousFunctionPolicyUpdateRequest,
   LaunchAgentKnowledgeFactUpsertRequest,
+  LaunchAgentApprovalActionResponse,
+  LaunchAgentApprovalsResponse,
   LaunchAgentFunctionPoliciesResponse,
   LaunchAgentFunctionPolicyUpdateResponse,
   LaunchAgentKnowledgeProjection,
@@ -523,6 +526,27 @@ export class LaunchApiClient {
     return this.fetchJson(
       `/api/launch/agents/${encodeURIComponent(idOrSlug)}/concepts/${
         encodeURIComponent(slug)
+      }`,
+      { method: "POST", body: JSON.stringify(request) },
+    );
+  }
+
+  /** Pillar P3: approval envelopes for runs held by an 'ask' policy. */
+  agentApprovals(idOrSlug: string): Promise<LaunchAgentApprovalsResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/approvals`,
+    );
+  }
+
+  /** Resolve one envelope (approve | revise | reject) under CAS. */
+  resolveAgentApproval(
+    idOrSlug: string,
+    approvalId: string,
+    request: LaunchApprovalActionRequest,
+  ): Promise<LaunchAgentApprovalActionResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/approvals/${
+        encodeURIComponent(approvalId)
       }`,
       { method: "POST", body: JSON.stringify(request) },
     );

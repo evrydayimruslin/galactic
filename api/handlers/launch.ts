@@ -83,6 +83,8 @@ import {
   type LaunchAgentCapacityResponse,
   type LaunchAgentCapacityUpdateRequest,
   type LaunchAgentExtensionHandoffIntent,
+  type LaunchAgentApprovalActionResponse,
+  type LaunchAgentApprovalsResponse,
   type LaunchAgentFunctionPoliciesResponse,
   type LaunchAgentFunctionPolicyUpdateResponse,
   type LaunchAgentFunctionsResponse,
@@ -278,11 +280,29 @@ import { listAgentReleases } from "../services/app-releases-projection.ts";
 import {
   buildFunctionPolicyProjections,
   computeDeclarationHash,
+  declaredFunctionFactsFromApp,
   defaultPolicyRevision,
   PolicyConflictError,
   readFunctionPolicy,
   setFunctionPolicy,
 } from "../services/policy-gate.ts";
+import {
+  ApprovalNotFoundError,
+  listApprovalEnvelopes,
+  projectEnvelope,
+  readResumedJobStatuses,
+  resolveApproval,
+} from "../services/agent-approvals.ts";
+import {
+  denyHeldJob,
+  resumeHeldJob,
+  reviseHeldJobArgs,
+} from "../services/async-jobs.ts";
+import {
+  drainEffectEvents,
+  recordEffectEvent,
+} from "../services/effect-event-tracker.ts";
+import { persistEffectEvents } from "../services/effect-event-store.ts";
 import {
   AgentKnowledgeValidationError,
   answerAgentKnowledgeQuestion,
@@ -1289,6 +1309,20 @@ export async function handleLaunch(
       );
     }
 
+    const agentApprovalsMatch = path.match(
+      /^\/api\/launch\/agents\/([^/]+)\/approvals(?:\/([^/]+))?$/,
+    );
+    if (agentApprovalsMatch) {
+      return await privateLaunchRoute(() =>
+        handleLaunchAgentApprovals(
+          request,
+          agentApprovalsMatch[1],
+          agentApprovalsMatch[2] || null,
+          method,
+        )
+      );
+    }
+
     const agentPoliciesMatch = path.match(
       /^\/api\/launch\/agents\/([^/]+)\/policies(?:\/([^/]+))?$/,
     );
@@ -1743,6 +1777,7 @@ function buildLaunchStatus(request: Request): Record<string, unknown> {
       agentHomeResume: "/api/launch/agents/{id}/home/resume",
       agentConcepts: "/api/launch/agents/{id}/concepts",
       agentPolicies: "/api/launch/agents/{id}/policies",
+      agentApprovals: "/api/launch/agents/{id}/approvals",
       agentKnowledge: "/api/launch/agents/{id}/knowledge",
       agentReleases: "/api/launch/agents/{id}/releases",
       agentRoutine: "/api/launch/agents/{id}/routine",
@@ -3011,6 +3046,80 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             },
             "403": { description: "Account session required" },
             "404": { description: "Agent not found" },
+          },
+        },
+      },
+      "/api/launch/agents/{id}/approvals": {
+        get: {
+          operationId: "listLaunchAgentApprovals",
+          summary: "Approval envelopes for a private Agent",
+          description:
+            "Account-session and owner-only. Pillar P3: runs held by an 'ask' policy park behind durable approval envelopes — owner-safe projections (sanitized proposal preview + source; raw arguments and secrets never appear). Newest first; overdue pending envelopes settle to 'expired' at read. An envelope in 'resuming' reports 'completed'/'failed' from the resumed job's terminal status.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Private Agent id or slug",
+          }],
+          responses: {
+            "200": { description: "Envelopes, newest first" },
+            "403": { description: "Account session required" },
+            "404": { description: "Agent not found" },
+          },
+        },
+      },
+      "/api/launch/agents/{id}/approvals/{approvalId}": {
+        post: {
+          operationId: "resolveLaunchAgentApproval",
+          summary: "Approve, revise, or reject a held run",
+          description:
+            "Account-session and owner-only. CAS resolution: expectedRevision must match, idempotencyKey dedupes double-submits. Approve (and revise, which first replaces the held input) flips the held job to queued through the durable consumer's own claim filter — exactly-once resumption. Reject records an attested non-action in the effect witness. stopAsking atomically flips the function's policy from ask to free.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          }, {
+            name: "approvalId",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          }],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["action", "expectedRevision", "idempotencyKey"],
+                  properties: {
+                    action: {
+                      type: "string",
+                      enum: ["approve", "revise", "reject"],
+                    },
+                    expectedRevision: { type: "string" },
+                    idempotencyKey: { type: "string" },
+                    revisedInput: {
+                      type: "object",
+                      description: "revise only: replacement input",
+                    },
+                    stopAsking: { type: "boolean" },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": { description: "The resolved envelope" },
+            "400": { description: "Invalid action or missing keys" },
+            "404": { description: "Approval not found" },
+            "409": {
+              description:
+                "Already resolved, expired, or revision drift — body carries `current`",
+            },
           },
         },
       },
@@ -7542,14 +7651,13 @@ async function handleLaunchAgentFunctionPolicies(
       createdAt: releases[0].createdAt,
     }
     : null;
+  // Facts come from THE shared extraction (policy-gate) — the same one the
+  // dispatch gate's hold path hashes and classifies against. Diverging
+  // normalizations here would make declaration-hash congruence lie.
   const summaries = await buildLaunchFunctionSummaries(resolved, user.id);
-  const facts = summaries.map((fn) => ({
-    name: fn.name,
-    description: fn.description ?? null,
-    inputSchema: fn.inputSchema ?? null,
-    annotations: fn.annotations ?? null,
-    priced: Boolean(fn.pricing),
-  }));
+  const facts = summaries
+    .map((fn) => declaredFunctionFactsFromApp(resolved, fn.name))
+    .filter((fact): fact is NonNullable<typeof fact> => fact !== null);
   const agentHandle = {
     id: resolved.id,
     slug: resolved.slug ?? resolved.id,
@@ -7705,6 +7813,173 @@ async function handleLaunchAgentFunctionPolicies(
     throw err;
   }
   return await finish();
+}
+
+/**
+ * Pillar P3: approval envelopes, owner plane. GET lists newest-first
+ * (lazy TTL settle); POST resolves with approve | revise | reject under
+ * full CAS + idempotency key. Approve flips the held job to queued through
+ * the consumer's own claim filter — exactly-once resumption (I9). The
+ * envelope only ever carries sanitized projections (I10).
+ */
+async function handleLaunchAgentApprovals(
+  request: Request,
+  encodedLocator: string,
+  encodedApprovalId: string | null,
+  method: string,
+): Promise<Response> {
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForAgentHome(user);
+  const resolved = await resolveOwnerPrivateRoutineAgent(
+    user,
+    encodedLocator,
+  );
+  if (resolved instanceof Response) {
+    return withPrivateLaunchPrivacy(resolved);
+  }
+  const agentHandle = {
+    id: resolved.id,
+    slug: resolved.slug ?? resolved.id,
+    name: resolved.name ?? resolved.slug ?? "Agent",
+    relationship: "owner" as const,
+    publicUrl: null,
+    adminUrl: null,
+  };
+
+  if (encodedApprovalId === null) {
+    if (method !== "GET") {
+      return privateLaunchJson({ error: "Method not allowed" }, 405);
+    }
+    const rows = await listApprovalEnvelopes(user.id, resolved.id);
+    const resumingJobIds = rows
+      .filter((row) => row.status === "resuming" && row.job_id)
+      .map((row) => row.job_id as string);
+    const jobStatuses = await readResumedJobStatuses(resumingJobIds);
+    return privateLaunchJson(
+      {
+        agent: agentHandle,
+        approvals: rows.map((row) =>
+          projectEnvelope(
+            row,
+            row.job_id ? jobStatuses.get(row.job_id) : undefined,
+          )
+        ),
+        generatedAt: new Date().toISOString(),
+      } satisfies LaunchAgentApprovalsResponse,
+    );
+  }
+
+  if (method !== "POST") {
+    return privateLaunchJson({ error: "Method not allowed" }, 405);
+  }
+  const approvalId = decodeURIComponent(encodedApprovalId);
+  const body = asRecord(await readJsonBody<unknown>(request));
+  const action = body?.action;
+  if (action !== "approve" && action !== "revise" && action !== "reject") {
+    return privateLaunchJson(
+      { error: "action must be approve, revise, or reject" },
+      400,
+    );
+  }
+  const expectedRevision = typeof body?.expectedRevision === "string"
+    ? body.expectedRevision
+    : null;
+  const idempotencyKey = typeof body?.idempotencyKey === "string"
+    ? body.idempotencyKey
+    : null;
+  if (!expectedRevision || !idempotencyKey) {
+    return privateLaunchJson(
+      { error: "expectedRevision and idempotencyKey are required" },
+      400,
+    );
+  }
+  const revisedInput = asRecord(body?.revisedInput);
+  if (action === "revise" && !revisedInput) {
+    return privateLaunchJson(
+      { error: "revise requires a revisedInput object" },
+      400,
+    );
+  }
+  try {
+    const row = await resolveApproval(
+      {
+        userId: user.id,
+        appId: resolved.id,
+        approvalId,
+        action,
+        expectedRevision,
+        idempotencyKey,
+        revisedInput: revisedInput ?? undefined,
+        stopAsking: body?.stopAsking === true,
+      },
+      {
+        reviseHeldJobArgs,
+        resumeHeldJob,
+        denyHeldJob,
+        stopAsking: async (functionName) => {
+          // ask -> free, CAS on the row the envelope was held under. A lost
+          // race means the owner already changed the switch — fine.
+          const policyRow = await readFunctionPolicy(resolved.id, functionName);
+          if (policyRow?.policy === "ask") {
+            await setFunctionPolicy({
+              userId: user.id,
+              appId: resolved.id,
+              functionName,
+              policy: "free",
+              expectedRevision: policyRow.revision,
+              actor: {
+                kind: "user",
+                userId: user.id,
+                via: "approval_stop_asking",
+              },
+            });
+          }
+        },
+        recordResolutionEffect: async (row, outcome) => {
+          // Only a rejection is a witnessed fact about the world-model —
+          // the call will never happen. An approval leads to a real
+          // execution, which witnesses itself (P0).
+          if (!outcome.startsWith("rejected")) return;
+          recordEffectEvent(row.run_id, {
+            kind: "non_action",
+            channel: `policy:${row.function_name}`,
+            outcome: `held call ${outcome}`,
+            attestation: "attested",
+          });
+          const drained = drainEffectEvents(row.run_id);
+          await persistEffectEvents({
+            userId: user.id,
+            appId: resolved.id,
+            executionId: row.run_id,
+            runId: row.routine_run_id,
+            events: drained.events,
+          }).catch(() => 0);
+        },
+      },
+    );
+    return privateLaunchJson(
+      {
+        approval: projectEnvelope(row),
+        generatedAt: new Date().toISOString(),
+      } satisfies LaunchAgentApprovalActionResponse,
+    );
+  } catch (err) {
+    if (err instanceof ApprovalNotFoundError) {
+      return privateLaunchJson({ error: "Approval not found" }, 404);
+    }
+    if (err instanceof PolicyConflictError) {
+      const rows = await listApprovalEnvelopes(user.id, resolved.id);
+      const current = rows.find((row) => row.id === approvalId);
+      return privateLaunchJson(
+        {
+          error: err.message,
+          current: current ? projectEnvelope(current) : null,
+        },
+        409,
+      );
+    }
+    throw err;
+  }
 }
 
 async function handleLaunchOperatorRoutineRun(

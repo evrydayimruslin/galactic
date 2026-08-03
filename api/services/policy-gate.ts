@@ -6,8 +6,8 @@
 // Direct user/interface calls are a different authority plane and are
 // never gated here. Defaults: no row = 'free' (zero behavior change until
 // an owner flips a switch). 'ask' rows are dormant until P3 activates
-// holds — the gate treats them as 'free' WITH a warning, never as 'off'
-// (a stored preference must not brick an agent before holds exist).
+// P3: 'ask' HOLDS the call behind an approval envelope — pending work,
+// neither executed nor denied — while 'off' stays a recorded non-action.
 
 import type {
   LaunchAutonomousFunctionPolicy,
@@ -31,7 +31,7 @@ export interface FunctionPolicyRow {
 }
 
 export interface GateVerdict {
-  verdict: "allow" | "deny";
+  verdict: "allow" | "deny" | "hold";
   /** The layer that decided (I6 — receipts name their decider). */
   layer: "default" | "overlay";
   policy: AutonomousFunctionPolicy | null;
@@ -194,15 +194,18 @@ export async function evaluateAutonomousGate(input: {
     };
   }
   if (row.policy === "ask") {
-    // Dormant until P3: stored preference, not yet an active hold.
-    console.warn(
-      `[GATE] 'ask' policy on ${input.functionName} is dormant until holds ship — allowing.`,
-    );
+    // P3: the call parks behind an approval envelope instead of executing.
+    return {
+      verdict: "hold",
+      layer: "overlay",
+      policy: "ask",
+      revision: row.revision,
+    };
   }
   return {
     verdict: "allow",
     layer: "overlay",
-    policy: row.policy,
+    policy: "free",
     revision: row.revision,
   };
 }
@@ -324,4 +327,108 @@ export async function buildFunctionPolicyProjections(input: {
     });
   }
   return projections;
+}
+
+function toRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+/** Raw SHA-256 hex of a stable (key-sorted) JSON encoding. */
+export async function hashJsonStable(value: unknown): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(stableStringify(value)),
+  );
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
+ * THE extraction the policy plane hashes and classifies against — used by
+ * both the owner routes (projections, CAS congruence) and the dispatch
+ * gate's hold path (envelope consequence). One home on purpose: if two
+ * callers normalized the declaration differently, their hashes would
+ * diverge and congruence checks would lie. Mirrors the launch functions
+ * endpoint's normalization (parameters -> JSON schema with required
+ * defaulting true; annotations filtered to known boolean hints).
+ */
+export function declaredFunctionFactsFromApp(
+  app: { manifest?: unknown; pricing_config?: unknown },
+  functionName: string,
+): DeclaredFunctionFacts | null {
+  let manifest = toRecord(app.manifest);
+  if (!manifest && typeof app.manifest === "string") {
+    try {
+      manifest = toRecord(JSON.parse(app.manifest));
+    } catch {
+      manifest = null;
+    }
+  }
+  const functionDef = toRecord(toRecord(manifest?.functions)?.[functionName]);
+  if (!functionDef) return null;
+
+  const rawAnnotations = toRecord(functionDef.annotations);
+  const annotations: MCPToolAnnotations = {};
+  if (typeof rawAnnotations?.readOnlyHint === "boolean") {
+    annotations.readOnlyHint = rawAnnotations.readOnlyHint;
+  }
+  if (typeof rawAnnotations?.destructiveHint === "boolean") {
+    annotations.destructiveHint = rawAnnotations.destructiveHint;
+  }
+  if (typeof rawAnnotations?.idempotentHint === "boolean") {
+    annotations.idempotentHint = rawAnnotations.idempotentHint;
+  }
+  if (typeof rawAnnotations?.openWorldHint === "boolean") {
+    annotations.openWorldHint = rawAnnotations.openWorldHint;
+  }
+
+  const parameters = toRecord(functionDef.parameters);
+  let inputSchema: Record<string, unknown>;
+  if (!parameters) {
+    inputSchema = { type: "object", properties: {}, required: [] };
+  } else {
+    const properties: Record<string, unknown> = {};
+    const required: string[] = [];
+    for (const [name, rawParam] of Object.entries(parameters)) {
+      const param = toRecord(rawParam);
+      if (!param) continue;
+      properties[name] = Object.fromEntries(
+        Object.entries({
+          type: typeof param.type === "string" ? param.type : "string",
+          description: typeof param.description === "string"
+            ? param.description
+            : null,
+          enum: Array.isArray(param.enum) ? param.enum : undefined,
+          default: param.default,
+          items: param.items,
+          properties: param.properties,
+        }).filter(([, value]) => value !== undefined && value !== null),
+      );
+      if (param.required !== false) required.push(name);
+    }
+    inputSchema = { type: "object", properties, required };
+  }
+
+  const pricingConfig = toRecord(app.pricing_config);
+  const functionPrices = toRecord(pricingConfig?.functions);
+  const priceValue = functionPrices?.[functionName] ??
+    pricingConfig?.default_price_light;
+  const priced = typeof priceValue === "number"
+    ? priceValue > 0
+    : typeof priceValue === "string"
+    ? Number(priceValue) > 0
+    : Boolean(toRecord(priceValue));
+
+  return {
+    name: functionName,
+    description: typeof functionDef.description === "string"
+      ? functionDef.description
+      : null,
+    inputSchema,
+    annotations: Object.keys(annotations).length > 0 ? annotations : null,
+    priced,
+  };
 }

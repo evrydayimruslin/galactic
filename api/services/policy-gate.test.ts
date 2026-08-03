@@ -12,6 +12,7 @@ import {
   buildFunctionPolicyProjections,
   classifyFunctionConsequence,
   computeDeclarationHash,
+  declaredFunctionFactsFromApp,
   defaultPolicyRevision,
   evaluateAutonomousGate,
   PolicyConflictError,
@@ -90,17 +91,20 @@ Deno.test("gate denies on 'off' and names the deciding layer + revision", async 
   );
 });
 
-Deno.test("'ask' stays dormant until P3: allow, attributed to the overlay", async () => {
+Deno.test("'ask' holds: pending work, neither executed nor denied", async () => {
   await withFetchStub(
-    () => new Response(JSON.stringify([policyRow("ask")]), { status: 200 }),
+    () => new Response(JSON.stringify([policyRow("ask", "rev-ask")]), { status: 200 }),
     async () => {
       const verdict = await evaluateAutonomousGate({
         appId: "app-1",
         functionName: "send_reply",
       });
-      assertEquals(verdict.verdict, "allow");
-      assertEquals(verdict.layer, "overlay");
-      assertEquals(verdict.policy, "ask");
+      assertEquals(verdict, {
+        verdict: "hold",
+        layer: "overlay",
+        policy: "ask",
+        revision: "rev-ask",
+      });
     },
   );
 });
@@ -282,5 +286,40 @@ Deno.test("projections: defaults merge over declared functions; rows win", async
       });
       assertEquals(unset.declaredReleaseVersion, "1.2.0");
     },
+  );
+});
+
+Deno.test("declared facts: one extraction home for hashes and consequence", async () => {
+  const app = {
+    manifest: JSON.stringify({
+      functions: {
+        send_reply: {
+          description: "Replies to a conversation",
+          parameters: {
+            to: { type: "string", description: "recipient" },
+            cc: { type: "string", required: false },
+          },
+          annotations: { openWorldHint: true, banana: "ignored" },
+        },
+      },
+    }),
+    pricing_config: { functions: { send_reply: 0 } },
+  };
+  const facts = declaredFunctionFactsFromApp(app, "send_reply");
+  assert(facts);
+  assertEquals(facts.priced, false);
+  assertEquals(facts.annotations, { openWorldHint: true });
+  assertEquals(
+    (facts.inputSchema as { required?: string[] }).required,
+    ["to"],
+  );
+  assertEquals(classifyFunctionConsequence(facts), "external_side_effect");
+  // Absent function -> null (callers 404 rather than hashing nothing).
+  assertEquals(declaredFunctionFactsFromApp(app, "missing"), null);
+  const again = declaredFunctionFactsFromApp(app, "send_reply");
+  assert(again);
+  assertEquals(
+    await computeDeclarationHash(facts),
+    await computeDeclarationHash(again),
   );
 });

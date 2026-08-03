@@ -815,6 +815,19 @@ export type LaunchApprovalActionRequest =
     action: "reject";
   };
 
+/** GET /api/launch/agents/{id}/approvals — envelopes, newest first (P3). */
+export interface LaunchAgentApprovalsResponse {
+  agent: LaunchAgentHandle;
+  approvals: LaunchApprovalEnvelope[];
+  generatedAt: string;
+}
+
+/** POST resolution response; conflicts 409 with `current` for reconcile. */
+export interface LaunchAgentApprovalActionResponse {
+  approval: LaunchApprovalEnvelope;
+  generatedAt: string;
+}
+
 export const LAUNCH_CALLER_FUNCTION_POLICIES = [
   "always",
   "ask",

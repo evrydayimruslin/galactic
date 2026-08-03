@@ -10,6 +10,9 @@ import {
   createQueuedJob,
   failJobIfActive,
   reclaimJobForSyncFallback,
+  denyHeldJob,
+  resumeHeldJob,
+  reviseHeldJobArgs,
 } from "./async-jobs.ts";
 
 const TEST_ENV = {
@@ -486,4 +489,74 @@ Deno.test("completeJob: failure with a non-object error payload still lands {typ
     type: "ExecutionError",
     message: "Execution failed",
   });
+});
+
+Deno.test("createQueuedJob: heldForApproval parks the row as held with the caller's execution id", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  await withMockedDb(
+    (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Response("[]", { status: 201 });
+    },
+    () =>
+      createQueuedJob({
+        appId: "app-1",
+        userId: "user-1",
+        ownerId: "owner-1",
+        functionName: "send_reply",
+        args: { to: "a@b.c" },
+        trigger: "schedule",
+        heldForApproval: true,
+        executionId: "exec-held-1",
+      }),
+  );
+  assertEquals(bodies.length, 1);
+  assertEquals(bodies[0].status, "held");
+  assert(typeof bodies[0].held_at === "string");
+  // The envelope <-> job link: the caller-minted execution id survives.
+  assertEquals(bodies[0].execution_id, "exec-held-1");
+  assertEquals(bodies[0].trigger, "schedule");
+});
+
+Deno.test("resumeHeldJob: held->queued CAS through the consumer's own filter", async () => {
+  const patches: Array<{ url: URL; body: Record<string, unknown> }> = [];
+  const resumed = await withMockedDb(
+    (url, init) => {
+      patches.push({ url, body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify([{ id: "job-1" }]), { status: 200 });
+    },
+    () => resumeHeldJob("job-1"),
+  );
+  assertEquals(resumed, true);
+  assertEquals(patches.length, 1);
+  // The exactly-once guard: only a row still 'held' can flip.
+  assertEquals(patches[0].url.searchParams.get("status"), "eq.held");
+  assertEquals(patches[0].body.status, "queued");
+});
+
+Deno.test("resumeHeldJob/denyHeldJob: a row that already moved reports false", async () => {
+  const resumed = await withMockedDb(
+    () => new Response("[]", { status: 200 }),
+    () => resumeHeldJob("job-gone"),
+  );
+  assertEquals(resumed, false);
+  const denied = await withMockedDb(
+    () => new Response("[]", { status: 200 }),
+    () => denyHeldJob("job-gone"),
+  );
+  assertEquals(denied, false);
+});
+
+Deno.test("reviseHeldJobArgs: replaces input only while the row is held", async () => {
+  const patches: Array<{ url: URL; body: Record<string, unknown> }> = [];
+  const revised = await withMockedDb(
+    (url, init) => {
+      patches.push({ url, body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify([{ id: "job-1" }]), { status: 200 });
+    },
+    () => reviseHeldJobArgs("job-1", { to: "corrected@example.com" }),
+  );
+  assertEquals(revised, true);
+  assertEquals(patches[0].url.searchParams.get("status"), "eq.held");
+  assertEquals(patches[0].body.args, { to: "corrected@example.com" });
 });
