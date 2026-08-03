@@ -311,6 +311,29 @@ flowchart LR
   attested `non_action` witness line. The alert pointer remains deferred —
   no alerts stream exists yet to point from; it lands with that stream.
 
+### 9.2 Amendments (2026-08-03, P5/P6 build)
+
+- **Judge latency budget: 6s**, enforced via request abort; timeout ⇒ hold.
+- **Semantic rules are hold-only by validation** — a model verdict gates
+  for review, never irreversibly denies (deny stays deterministic).
+- **Scoping posture**: every applicable semantic rule (exact function or
+  `*`) rides ONE judge completion — the maximally generous inclusion of
+  §13.5 (a false include costs part of one judge call). `suggest()`-based
+  pruning and approvals-as-case-law appends activate when semantic-rule
+  cardinality demands them; deferred explicitly, not silently.
+- **Judge pin is minted at compile** from the owner's route model and
+  approved as part of the readback; the envelope records the model that
+  ACTUALLY ran + a transcript hash (never the transcript).
+- **Dry-run semantic posture**: deterministic rules replay exactly through
+  the production evaluator; semantic rules report scope ("would consult
+  the judge") rather than paying N speculative judge calls for guessed
+  verdicts.
+- **Attribution source of truth is the envelope ledger** — the same rows
+  the Approvals tab renders; no second bookkeeping to drift. Overlay
+  (switch) holds attribute themselves in Capabilities.
+- **Retention**: still deferred (decision 11) — volumes remain small;
+  revisit when they are not.
+
 ## 10. Risks
 
 | Risk | Mitigation |

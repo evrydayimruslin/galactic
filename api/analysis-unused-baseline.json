@@ -1478,6 +1478,19 @@
     },
     {
       "exports": [
+        "JUDGE_LATENCY_BUDGET_MS"
+      ],
+      "file": "services/policy-judge.ts",
+      "types": [
+        "JudgeDeps",
+        "JudgeOutcome",
+        "JudgeRuleVerdict",
+        "SemanticRuleQuestion"
+      ]
+    },
+    {
+      "exports": [
+        "evaluateCompiledPredicates",
         "renderRuleReadback"
       ],
       "file": "services/policy-predicates.ts",

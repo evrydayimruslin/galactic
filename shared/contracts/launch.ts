@@ -853,17 +853,37 @@ export interface LaunchPolicyRuleCondition {
 
 export interface LaunchPolicyRule {
   id: string;
+  /** A declared function name, or "*" (semantic rules only) for any. */
   functionName: string;
   effect: LaunchPolicyRuleEffect;
-  /** AND of 1–4 conditions; OR = separate rules. First matching rule wins. */
-  when: LaunchPolicyRuleCondition[];
+  /**
+   * P5: absent/"predicate" = deterministic conditions; "semantic" = the
+   * pinned judge evaluates `criterion` against the call's content.
+   */
+  kind?: "predicate" | "semantic";
+  /** Predicate rules: AND of 1–4 conditions; OR = separate rules. */
+  when?: LaunchPolicyRuleCondition[];
+  /**
+   * Semantic rules: the plain-language condition the judge answers.
+   * Semantic rules are HOLD-only — a model verdict can gate for review,
+   * never irreversibly deny (deny stays deterministic).
+   */
+  criterion?: string | null;
   /** Short paraphrase of the source clause (compiler-authored). */
   note?: string | null;
+}
+
+/** P5: the judge pinned by an approved version — verdicts never drift. */
+export interface LaunchPolicyJudgePin {
+  modelId: string;
+  promptVersion: number;
 }
 
 export interface LaunchPolicyArtifact {
   version: 1;
   rules: LaunchPolicyRule[];
+  /** Present iff the artifact contains semantic rules. */
+  judge?: LaunchPolicyJudgePin | null;
 }
 
 export interface LaunchPolicySourceEntry {
@@ -916,6 +936,63 @@ export interface LaunchPolicySetApproveRequest {
 
 export interface LaunchPolicySetApproveResponse {
   policySet: LaunchAgentPolicySet;
+  generatedAt: string;
+}
+
+/**
+ * Pillar P6: policies visibly earning their keep. Counters aggregate the
+ * envelope ledger per rule; dry-run replays RECORDED autonomous
+ * invocations through the same evaluator production uses — one code path,
+ * so a dry-run verdict is a production verdict.
+ */
+export interface LaunchPolicyRuleAttribution {
+  ruleId: string;
+  policyVersion: number;
+  /** The rule's own readback line when known (from the envelope). */
+  readback: string | null;
+  heldLast7d: number;
+  pendingNow: number;
+}
+
+export interface LaunchPolicyAttributionResponse {
+  agent: LaunchAgentHandle;
+  /** Rules that held at least once in the window, most-held first. */
+  rules: LaunchPolicyRuleAttribution[];
+  /** Envelope counts per policy version in the window (version diffs). */
+  versions: Array<{ policyVersion: number; held: number }>;
+  windowDays: number;
+  generatedAt: string;
+}
+
+export interface LaunchPolicyDryRunRequest {
+  artifact: LaunchPolicyArtifact;
+  /** How many recent autonomous invocations to replay (max 200). */
+  limit?: number;
+}
+
+export interface LaunchPolicyDryRunRow {
+  jobId: string;
+  functionName: string;
+  createdAt: string;
+  /** Verdict under the PROPOSED artifact. */
+  proposed: "allow" | "hold" | "deny" | "would_judge";
+  proposedRuleId: string | null;
+  /** Verdict under the CURRENT head (allow when no head). */
+  current: "allow" | "hold" | "deny" | "would_judge";
+  currentRuleId: string | null;
+}
+
+export interface LaunchPolicyDryRunResponse {
+  replayed: number;
+  /** Rows whose verdict CHANGES under the proposal, newest first. */
+  changed: LaunchPolicyDryRunRow[];
+  summary: {
+    newlyHeld: number;
+    newlyDenied: number;
+    newlyAllowed: number;
+    /** Semantic rules match by meaning — dry-run marks scope, not verdicts. */
+    wouldConsultJudge: number;
+  };
   generatedAt: string;
 }
 

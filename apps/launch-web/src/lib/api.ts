@@ -30,7 +30,10 @@ import type {
   LaunchAgentKnowledgeFactUpsertRequest,
   LaunchAgentApprovalActionResponse,
   LaunchAgentPolicySetsResponse,
+  LaunchPolicyAttributionResponse,
   LaunchPolicyCompileRequest,
+  LaunchPolicyDryRunRequest,
+  LaunchPolicyDryRunResponse,
   LaunchPolicyCompileResponse,
   LaunchPolicySetApproveRequest,
   LaunchPolicySetApproveResponse,
@@ -561,6 +564,28 @@ export class LaunchApiClient {
   ): Promise<LaunchPolicySetApproveResponse> {
     return this.fetchJson(
       `/api/launch/agents/${encodeURIComponent(idOrSlug)}/policy-sets`,
+      { method: "POST", body: JSON.stringify(request) },
+    );
+  }
+
+  /** Pillar P6: per-rule hold counters from the envelope ledger. */
+  agentPolicyAttribution(
+    idOrSlug: string,
+  ): Promise<LaunchPolicyAttributionResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${
+        encodeURIComponent(idOrSlug)
+      }/policy-sets/attribution`,
+    );
+  }
+
+  /** Replay recorded invocations under a proposed artifact; persists nothing. */
+  dryRunAgentPolicy(
+    idOrSlug: string,
+    request: LaunchPolicyDryRunRequest,
+  ): Promise<LaunchPolicyDryRunResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/policy-sets/dry-run`,
       { method: "POST", body: JSON.stringify(request) },
     );
   }
