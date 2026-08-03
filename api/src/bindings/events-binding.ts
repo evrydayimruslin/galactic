@@ -6,6 +6,7 @@
 // emitter, the user, or the hop. topic + payload are the only sandbox inputs.
 
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { recordEffectEvent } from "../../services/effect-event-tracker.ts";
 import { emitEvent } from "../../services/agent-events.ts";
 import { verifyCallerContextToken } from "../../services/agent-caller-context.ts";
 import {
@@ -59,6 +60,16 @@ export class EventsBinding
         : {},
       emitHop: verified.claims.hop,
     });
+    // Pillar P0: witnessed at the chokepoint.
+    recordEffectEvent(
+      resolveExecutionContext(execCtxHandle)?.aiExecutionId ?? null,
+      {
+        kind: "event_emit",
+        channel: `topic:${String(topic).slice(0, 100)}`,
+        outcome: out.rejected ? `rejected:${out.rejected}` : "ok",
+        attestation: "attested",
+      },
+    );
     return {
       ok: !out.rejected,
       event_id: out.eventId,

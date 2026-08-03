@@ -725,6 +725,25 @@ export interface LaunchAutonomousFunctionPolicyUpdateRequest {
   idempotencyKey: string;
 }
 
+/**
+ * GET /api/launch/agents/{id}/policies — defaults merged over the current
+ * release's declared functions. Unset functions project as `free` attributed
+ * to `release_default`, with a deterministic revision a first write must
+ * present (Pillar P2).
+ */
+export interface LaunchAgentFunctionPoliciesResponse {
+  agent: LaunchAgentHandle;
+  currentRelease: { id: string; version: string } | null;
+  policies: LaunchAutonomousFunctionPolicyProjection[];
+  generatedAt: string;
+}
+
+/** PUT response; a CAS conflict returns 409 with `current` for reconcile. */
+export interface LaunchAgentFunctionPolicyUpdateResponse {
+  policy: LaunchAutonomousFunctionPolicyProjection;
+  generatedAt: string;
+}
+
 export const LAUNCH_APPROVAL_STATUSES = [
   "pending",
   "approved",
@@ -795,6 +814,19 @@ export type LaunchApprovalActionRequest =
   | LaunchApprovalActionRequestBase & {
     action: "reject";
   };
+
+/** GET /api/launch/agents/{id}/approvals — envelopes, newest first (P3). */
+export interface LaunchAgentApprovalsResponse {
+  agent: LaunchAgentHandle;
+  approvals: LaunchApprovalEnvelope[];
+  generatedAt: string;
+}
+
+/** POST resolution response; conflicts 409 with `current` for reconcile. */
+export interface LaunchAgentApprovalActionResponse {
+  approval: LaunchApprovalEnvelope;
+  generatedAt: string;
+}
 
 export const LAUNCH_CALLER_FUNCTION_POLICIES = [
   "always",
@@ -1908,6 +1940,9 @@ export interface LaunchOperatorRoutineRunDetail {
   diagnostic: LaunchOperatorRunDiagnostic | null;
   steps: LaunchOperatorRoutineRunStep[];
   logReceipts: LaunchOperatorRoutineRunLogReceipt[];
+  /** Pillar P0: the run's witnessed effect stream, attestation-labeled.
+   * Optional: additive contract — older projections omit it. */
+  effects?: LaunchRunEffectEvent[];
   generatedAt: string;
 }
 
@@ -2450,6 +2485,24 @@ export interface LaunchAgentConceptDescribeRequest {
   description?: string | null;
   aliases?: string[];
   status?: "active" | "retired";
+}
+
+/**
+ * Pillar P0: one witnessed effect from an execution's typed stream. The
+ * attestation ladder is the honesty contract — attested (platform witnessed
+ * the channel), observed (platform saw the request, not its meaning),
+ * app_claimed (the app's own account via galactic.evidence).
+ */
+export interface LaunchRunEffectEvent {
+  executionId: string;
+  seq: number;
+  kind: string;
+  channel: string | null;
+  targetDigest: string | null;
+  outcome: string | null;
+  attestation: "attested" | "observed" | "app_claimed";
+  evidence: unknown[];
+  createdAt: string;
 }
 
 /**
