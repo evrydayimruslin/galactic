@@ -4,6 +4,7 @@ import {
   OPERATOR_DIAGNOSTIC_CONTRACT_VERSION,
 } from "../../shared/contracts/launch.ts";
 import { getEnv } from "../lib/env.ts";
+import { readRunEffectEvents } from "./effect-event-store.ts";
 import {
   CallLogForbidden,
   CallLogNotFound,
@@ -213,6 +214,23 @@ export async function readOperatorRoutineRunDetail(
       fetchFn,
     }),
   ]);
+
+  // Pillar P0: the run's witnessed effect stream (attested/observed/
+  // app_claimed). Best-effort — a witness read failure never breaks run
+  // inspection.
+  let effects: Awaited<
+    ReturnType<typeof readRunEffectEvents>
+  > = [];
+  try {
+    effects = await readRunEffectEvents(
+      params.userId,
+      params.agent.id,
+      run.id,
+    );
+  } catch (err) {
+    console.error("[WITNESS] run effects read failed:", err);
+  }
+
   const summary = run.summary
     ? redactOperatorDiagnosticText(
       run.summary,
@@ -259,6 +277,7 @@ export async function readOperatorRoutineRunDetail(
       createdAt: receipt.created_at,
       logsAvailable: receipt.log_object_key !== null,
     })),
+    effects,
     generatedAt: (deps.now ?? (() => new Date()))().toISOString(),
   };
 }

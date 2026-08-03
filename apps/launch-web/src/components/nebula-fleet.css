@@ -834,6 +834,8 @@ html[data-theme="light"] .nebula-root .neb-add-agent-card.copied-prompt {
 .neb-app:has(.neb-settings-panel) { max-width: 100%; padding-top: 80px; }
 .neb-topbar:has(.neb-settings-topbar-crumb) { padding: 20px 26px 18px; }
 
+/* Settings renders directly on the fleet background — no card chrome, so
+   the page motif bleeds through the rows. */
 .neb-inline-panel.neb-settings-panel {
   position: relative;
   display: block;
@@ -841,11 +843,11 @@ html[data-theme="light"] .nebula-root .neb-add-agent-card.copied-prompt {
   height: auto;
   min-height: 0;
   overflow: visible;
-  margin: 46px auto 90px;
-  padding: 40px 46px 46px;
-  border: 1px solid var(--panel-border);
-  background: var(--card);
-  box-shadow: var(--shadow-panel);
+  margin: 56px auto 90px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 .neb-settings-screen { width: 100%; animation: neb-rise .34s cubic-bezier(.22,1,.36,1) backwards; }
 .neb-settings-screen h1 {
@@ -1247,7 +1249,7 @@ html[data-theme="light"] .nebula-root .neb-add-agent-card.copied-prompt {
   .neb-compute-tool-grid, .neb-compute-limit-grid, .neb-compute-secret-destination, .neb-compute-authority-rule { grid-template-columns: 1fr; }.neb-compute-secret-destination { padding-left: 34px; }.neb-compute-run-grid { grid-template-columns: 1fr 1fr; }
   .neb-topbar:has(.neb-settings-topbar-crumb) { padding-right: 16px; padding-left: 16px; }
   .neb-app:has(.neb-settings-panel) { padding-right: 16px; padding-left: 16px; }
-  .neb-inline-panel.neb-settings-panel { width: 100%; margin: 18px auto 56px; padding: 29px 20px 34px; }
+  .neb-inline-panel.neb-settings-panel { width: 100%; margin: 24px auto 56px; padding: 0; }
   .neb-settings-screen h1 { font-size: 31px; }
   .neb-settings-groups { margin-top: 26px; }
   .neb-settings-row { grid-template-columns: minmax(0, 1fr) auto; gap: 5px 12px; }

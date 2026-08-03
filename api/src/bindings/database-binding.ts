@@ -12,6 +12,7 @@
 //     user_id, so it can never read or write another user's rows. (Phase 5.)
 
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { recordEffectEvent } from "../../services/effect-event-tracker.ts";
 import {
   applyD1ConceptIndexing,
   type D1ConceptsIndex,
@@ -149,6 +150,13 @@ export class DatabaseBinding
     const executionId =
       resolveExecutionContext(this.#execCtxHandle)?.aiExecutionId ?? null;
     recordDbMutation(executionId, op, table, meta?.changes);
+    // Pillar P0: the same host-authoritative moment feeds the effect witness.
+    recordEffectEvent(executionId, {
+      kind: "db_mutation",
+      channel: `d1:${table}`,
+      outcome: `${op}:${meta?.changes ?? 0}`,
+      attestation: "attested",
+    });
   }
 
   async #meterD1Result(
