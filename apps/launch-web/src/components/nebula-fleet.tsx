@@ -36,6 +36,7 @@ import type {
   LaunchSubscriptionResponse,
 } from "../../../../shared/contracts/launch.ts";
 import type { LaunchPageProps } from "../App";
+import { rememberAgentNames } from "../lib/agent-name-cache";
 import { type AgentPane, DEFAULT_AGENT_PANE } from "../lib/agent-pane-registry";
 import {
   parseAgentRouteState,
@@ -831,6 +832,9 @@ export function NebulaFleetApp({
   }, []);
   useEffect(() => {
     if (!live.data.fleet) return;
+    // Seed the Studio's header hint so opening an Agent shows its real
+    // name during the first load instead of a placeholder.
+    rememberAgentNames(live.data.fleet.agents.map((entry) => entry.agent));
     setRetainedFleet(live.data.fleet);
     const revision = live.data.fleet.fleetRevision;
     if (!revision) return;

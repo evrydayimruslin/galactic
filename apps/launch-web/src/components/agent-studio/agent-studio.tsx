@@ -35,6 +35,10 @@ import {
   shouldApplyInterfaceFavoritesRead,
   shouldMigrateLegacyInterfaceFavorites,
 } from "../../lib/interface-favorites";
+import {
+  recallAgentName,
+  rememberAgentNames,
+} from "../../lib/agent-name-cache";
 import { dismissLaunchWorkspace } from "../../lib/navigation";
 import { mergeAgentActivityPages } from "../../lib/operator-activity-state";
 import { useTheme } from "../../lib/theme";
@@ -76,8 +80,12 @@ export function AgentStudioApp({
   live,
   location,
   navigate,
+  route,
 }: LaunchPageProps): ReactElement {
   const agent = live.data.agent?.agent ?? live.data.agent?.tool ?? null;
+  const routeSlug = typeof route.params.slug === "string"
+    ? route.params.slug
+    : "";
   const home = live.data.agentHome;
   const interfaceIdsKey = (agent?.interfaces ?? [])
     .map((entry) => entry.id)
@@ -124,6 +132,12 @@ export function AgentStudioApp({
       // Storage denial only means the stale key lingers unused.
     }
   }, []);
+  // Keep the header hint fresh for the next visit (covers direct-URL entry
+  // where the fleet never had a chance to seed it).
+  useEffect(() => {
+    if (!agent) return;
+    rememberAgentNames([agent]);
+  }, [agent?.id, agent?.name, agent?.slug]);
   // Portaled overlays mount outside .agent-studio, so the resolved theme is
   // mirrored on <body> for their selectors.
   useEffect(() => {
@@ -541,7 +555,7 @@ export function AgentStudioApp({
     "alerts";
   return (
     <AgentStudioShell
-      agentName={agent?.name ?? "Loading Agent"}
+      agentName={agent?.name ?? recallAgentName(routeSlug) ?? "Loading Agent"}
       badges={{
         ...(attentionCount ? { alerts: attentionCount } : {}),
       }}
