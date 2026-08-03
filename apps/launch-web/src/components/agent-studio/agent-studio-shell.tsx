@@ -98,6 +98,15 @@ export function AgentStudioShell({
       <ThemeMotif />
       <header className="agent-studio-header">
         <div className="agent-studio-identity">
+          <button
+            aria-label="Back to your fleet"
+            className="agent-studio-back"
+            onClick={onBack}
+            title="Back"
+            type="button"
+          >
+            <BackGlyph />
+          </button>
           <span className="agent-studio-agent-name">{agentName}</span>
           {releaseVersion
             ? (
@@ -114,15 +123,6 @@ export function AgentStudioShell({
           </span>
         </div>
         <div className="agent-studio-header-actions">
-          <button
-            aria-label="Close the Studio and return to your fleet"
-            className="agent-studio-home"
-            onClick={onBack}
-            title="Home"
-            type="button"
-          >
-            <HomeGlyph />
-          </button>
           <button
             aria-controls="agent-studio-navigation"
             aria-expanded={railOpen}
@@ -242,7 +242,7 @@ function RailGroupHeader({
   );
 }
 
-function HomeGlyph(): ReactElement {
+function BackGlyph(): ReactElement {
   return (
     <svg
       aria-hidden="true"
@@ -255,9 +255,8 @@ function HomeGlyph(): ReactElement {
       viewBox="0 0 24 24"
       width="16"
     >
-      <path d="M3 10.5 12 3l9 7.5" />
-      <path d="M5.5 9.5V21h13V9.5" />
-      <path d="M9.75 21v-6.5h4.5V21" />
+      <path d="M19 12H5" />
+      <path d="m12 19-7-7 7-7" />
     </svg>
   );
 }

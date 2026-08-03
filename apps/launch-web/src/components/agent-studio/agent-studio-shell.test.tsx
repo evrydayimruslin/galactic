@@ -24,7 +24,7 @@ describe("AgentStudioShell", () => {
     expect(markup).toContain('class="agent-studio" data-theme="dark"');
     expect(markup).toContain("email-ops");
     expect(markup).toContain("v2.2.0");
-    expect(markup).toContain("Home");
+    expect(markup).toContain("Back to your fleet");
     expect(markup).toContain("Watch");
     expect(markup).toContain("Teach");
     expect(markup).toContain("Grant");
@@ -80,9 +80,11 @@ describe("AgentStudioShell", () => {
     // studio-only backdrop.
     expect(markup).toContain("neb-theme-motif");
     expect(markup).not.toContain("agent-studio-motif");
-    // The Home affordance is an icon button, labeled for readers.
-    expect(markup).toContain('class="agent-studio-home"');
-    expect(markup).toContain("Close the Studio and return to your fleet");
-    expect(markup).toContain('title="Home"');
+    // The exit is a back arrow beside the agent name; the old Home icon
+    // is gone.
+    expect(markup).toContain('class="agent-studio-back"');
+    expect(markup).toContain("Back to your fleet");
+    expect(markup).toContain('title="Back"');
+    expect(markup).not.toContain("agent-studio-home");
   });
 });

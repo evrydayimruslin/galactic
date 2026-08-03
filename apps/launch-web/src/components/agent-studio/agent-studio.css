@@ -105,9 +105,10 @@
    same ThemeProvider that stamps the root element. */
 
 /* The Studio sits in a centered measure: the header hairline runs full
-   bleed, the agent name aligns with the rail's item text (container +
-   18px rail padding + 10px item padding), and the Home icon holds the
-   viewport's far right. */
+   bleed while the agent name aligns with the rail's item text (container
+   + 18px rail padding + 10px item padding). The back arrow (28px) and
+   identity gap (10px) precede the name, so the header retreats 38px from
+   that x — floored so the arrow never hugs the viewport edge. */
 .agent-studio-header {
   position: relative;
   z-index: 4;
@@ -117,7 +118,7 @@
   justify-content: space-between;
   gap: 20px;
   padding: 20px 26px 20px
-    calc(max(0px, (100% - var(--studio-measure)) / 2) + 28px);
+    max(18px, calc((100% - var(--studio-measure)) / 2 - 10px));
   border-bottom: 1px solid var(--rail-line);
   background: transparent;
 }
@@ -187,7 +188,24 @@
   gap: 9px;
 }
 
-.agent-studio-home,
+.agent-studio-back {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  align-self: center;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--ink-2);
+}
+
+.agent-studio-back:hover {
+  color: var(--ink);
+}
+
 .agent-studio-menu-button {
   height: 36px;
   border: 1px solid var(--line-2);
@@ -195,7 +213,6 @@
   box-shadow: var(--chip-shadow);
 }
 
-.agent-studio-home,
 .agent-studio-menu-button {
   display: inline-flex;
   width: 36px;
@@ -203,10 +220,6 @@
   justify-content: center;
   padding: 0;
   color: var(--ink-2);
-}
-
-.agent-studio-home:hover {
-  color: var(--ink);
 }
 
 .agent-studio-menu-button {
