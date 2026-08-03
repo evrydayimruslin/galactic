@@ -92,6 +92,7 @@
       ],
       "file": "services/agent-approvals.ts",
       "types": [
+        "ExpirySettleDeps",
         "ResolveApprovalDeps"
       ]
     },

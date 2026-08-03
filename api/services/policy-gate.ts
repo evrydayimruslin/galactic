@@ -36,6 +36,13 @@ export interface GateVerdict {
   layer: "default" | "overlay";
   policy: AutonomousFunctionPolicy | null;
   revision: string | null;
+  /**
+   * Decision 4: the stored policy was set for a DIFFERENT declaration of
+   * this function. A 'free' consent does not carry across a redeclaration
+   * — the verdict downgrades to hold (ask) so the owner re-confirms.
+   * 'off' is exempt: resetting a never-run to ask would WIDEN (I1).
+   */
+  declarationChanged?: boolean;
 }
 
 export class PolicyConflictError extends Error {
@@ -180,12 +187,20 @@ export async function setFunctionPolicy(input: {
 export async function evaluateAutonomousGate(input: {
   appId: string;
   functionName: string;
+  /**
+   * The live declaration's hash (from declaredFunctionFactsFromApp +
+   * computeDeclarationHash). When provided and a stored row carries a
+   * different hash, non-'off' policies downgrade to hold (decision 4:
+   * a changed declaration resets the conversation).
+   */
+  currentDeclarationHash?: string | null;
 }): Promise<GateVerdict> {
   const row = await readFunctionPolicy(input.appId, input.functionName);
   if (!row) {
     return { verdict: "allow", layer: "default", policy: null, revision: null };
   }
   if (row.policy === "off") {
+    // Never-widen (I1): a redeclaration must not re-enable a never-run.
     return {
       verdict: "deny",
       layer: "overlay",
@@ -193,13 +208,18 @@ export async function evaluateAutonomousGate(input: {
       revision: row.revision,
     };
   }
-  if (row.policy === "ask") {
+  const declarationChanged = Boolean(
+    input.currentDeclarationHash && row.declaration_hash &&
+      row.declaration_hash !== input.currentDeclarationHash,
+  );
+  if (row.policy === "ask" || declarationChanged) {
     // P3: the call parks behind an approval envelope instead of executing.
     return {
       verdict: "hold",
       layer: "overlay",
-      policy: "ask",
+      policy: row.policy,
       revision: row.revision,
+      ...(declarationChanged ? { declarationChanged: true } : {}),
     };
   }
   return {

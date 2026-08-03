@@ -47,6 +47,7 @@ export interface ApprovalRow {
   routine_run_id: string | null;
   trace_id: string | null;
   policy_revision: string;
+  declaration_hash: string | null;
   source: Record<string, unknown>;
   proposal: Record<string, unknown>;
   resolved_by: Record<string, unknown> | null;
@@ -136,6 +137,8 @@ export async function createApprovalEnvelope(input: {
   routineRunId: string | null;
   traceId: string | null;
   policyRevision: string;
+  /** The declaration this hold was filed under (approve revalidates it). */
+  declarationHash?: string | null;
 }): Promise<ApprovalRow> {
   const { argKeys, preview, lossless } = sanitizeProposal(input.args);
   const now = Date.now();
@@ -160,6 +163,7 @@ export async function createApprovalEnvelope(input: {
       routine_run_id: input.routineRunId,
       trace_id: input.traceId,
       policy_revision: input.policyRevision,
+      declaration_hash: input.declarationHash ?? null,
       source: {
         kind: input.routineId ? "routine_wake" : "autonomous_call",
         routineId: input.routineId,
@@ -176,6 +180,29 @@ export async function createApprovalEnvelope(input: {
     throw new Error(`Failed to create approval envelope: ${err}`);
   }
   return ((await res.json()) as ApprovalRow[])[0];
+}
+
+/**
+ * The envelope for a held invocation, by its execution identity. The claim
+ * gate consults this: a 'resuming' envelope IS the owner's authorization
+ * for exactly this invocation, so a re-claimed resumed job proceeds
+ * instead of re-holding forever.
+ */
+export async function readApprovalByRunId(
+  runId: string,
+): Promise<ApprovalRow | null> {
+  const res = await fetch(
+    restUrl(
+      `agent_approvals?run_id=eq.${encodeURIComponent(runId)}&limit=1`,
+    ),
+    { headers: supabaseHeaders() },
+  );
+  if (!res.ok) {
+    const err = await res.text().catch(() => res.statusText);
+    throw new Error(`Failed to read approval by run: ${err}`);
+  }
+  const rows = await res.json() as ApprovalRow[];
+  return rows[0] ?? null;
 }
 
 async function readApproval(
@@ -202,10 +229,18 @@ async function readApproval(
  * first (best-effort CAS by revision — a lost race means someone resolved
  * them, which the re-read reflects).
  */
+export interface ExpirySettleDeps {
+  /** held -> denied for the parked job; idempotent. */
+  denyHeldJob?: (jobId: string) => Promise<boolean>;
+  /** Attested witness line: the held call will never run. */
+  recordExpiryEffect?: (row: ApprovalRow) => Promise<void>;
+}
+
 export async function listApprovalEnvelopes(
   userId: string,
   appId: string,
   limit = 50,
+  settleDeps: ExpirySettleDeps = {},
 ): Promise<ApprovalRow[]> {
   const query = `agent_approvals?app_id=eq.${encodeURIComponent(appId)}` +
     `&user_id=eq.${encodeURIComponent(userId)}` +
@@ -220,15 +255,15 @@ export async function listApprovalEnvelopes(
     row.status === "pending" && Date.parse(row.expires_at) < Date.now()
   );
   if (overdue.length > 0) {
-    await Promise.all(overdue.map((row) =>
-      fetch(
+    await Promise.all(overdue.map(async (row) => {
+      const res = await fetch(
         restUrl(
           `agent_approvals?id=eq.${row.id}&status=eq.pending` +
             `&revision=eq.${encodeURIComponent(row.revision)}`,
         ),
         {
           method: "PATCH",
-          headers: supabaseHeaders(),
+          headers: { ...supabaseHeaders(), Prefer: "return=representation" },
           body: JSON.stringify({
             status: "expired",
             revision: crypto.randomUUID(),
@@ -236,8 +271,21 @@ export async function listApprovalEnvelopes(
             resolved_by: { kind: "system", source: "ttl" },
           }),
         },
-      ).catch(() => null)
-    ));
+      ).catch(() => null);
+      if (!res || !res.ok) {
+        await res?.body?.cancel();
+        return;
+      }
+      const settled = ((await res.json().catch(() => [])) as unknown[]).length;
+      if (settled === 0) return; // lost the race — someone resolved it
+      // Doc §4: expiry => denied + non-action. The parked job settles and
+      // the witness records that the call will never run. (The doc's alert
+      // pointer waits for an alerts stream to exist — noted in §8.)
+      if (row.job_id) {
+        await settleDeps.denyHeldJob?.(row.job_id).catch(() => false);
+      }
+      await settleDeps.recordExpiryEffect?.(row).catch(() => undefined);
+    }));
     const reread = await fetch(restUrl(query), { headers: supabaseHeaders() });
     if (reread.ok) rows = await reread.json() as ApprovalRow[];
   }
@@ -316,6 +364,8 @@ async function transitionApproval(
   next: {
     status: LaunchApprovalStatus;
     resolvedBy: Record<string, unknown>;
+    /** Extra row fields to write atomically with the transition. */
+    extra?: Record<string, unknown>;
   },
 ): Promise<ApprovalRow | null> {
   const res = await fetch(
@@ -331,6 +381,7 @@ async function transitionApproval(
         revision: crypto.randomUUID(),
         resolved_at: new Date().toISOString(),
         resolved_by: next.resolvedBy,
+        ...(next.extra ?? {}),
       }),
     },
   );
@@ -343,6 +394,13 @@ async function transitionApproval(
 }
 
 export interface ResolveApprovalDeps {
+  /**
+   * Decision 5: approve-time revalidation. Returns a refusal message when
+   * the world moved against the hold (function now Off, or redeclared since
+   * filing) — the envelope stays PENDING so the owner keeps agency (reject
+   * it, or change the switch and approve again). Null = proceed.
+   */
+  revalidateForApprove?: (row: ApprovalRow) => Promise<string | null>;
   /** Replace the held job's args (revise). False = job vanished/not held. */
   reviseHeldJobArgs: (
     jobId: string,
@@ -389,10 +447,17 @@ export async function resolveApproval(
     );
   }
   if (Date.parse(row.expires_at) < Date.now()) {
-    await transitionApproval(row, row.revision, {
+    const settled = await transitionApproval(row, row.revision, {
       status: "expired",
       resolvedBy: { kind: "system", source: "ttl" },
     }).catch(() => null);
+    if (settled && row.job_id) {
+      await deps.denyHeldJob(row.job_id).catch(() => false);
+    }
+    if (settled) {
+      await deps.recordResolutionEffect?.(row, "expired unanswered")
+        .catch(() => undefined);
+    }
     throw new PolicyConflictError("This approval expired before resolution.");
   }
   if (input.expectedRevision !== row.revision) {
@@ -431,6 +496,13 @@ export async function resolveApproval(
       "This approval has no resumable work attached.",
     );
   }
+  const refusal = await deps.revalidateForApprove?.(row);
+  if (refusal) {
+    // Fail closed (decision 5) WITHOUT resolving: the hold outlives the
+    // refusal so the owner decides what happens to it.
+    throw new PolicyConflictError(refusal);
+  }
+  let revisedEnvelopeFacts: Record<string, unknown> = {};
   if (input.action === "revise") {
     if (!input.revisedInput) {
       throw new Error("revise requires revisedInput");
@@ -444,10 +516,20 @@ export async function resolveApproval(
         "The held run is no longer revisable.",
       );
     }
+    // The record must show what was actually approved (ruling 2026-08-03:
+    // revise-in-place) — re-sanitize and re-hash the replacement input.
+    const { argKeys, preview, lossless } = sanitizeProposal(
+      input.revisedInput,
+    );
+    revisedEnvelopeFacts = {
+      proposal: { argKeys, preview, lossless, revised: true },
+      input_hash: await hashJsonStable(input.revisedInput),
+    };
   }
   const transitioned = await transitionApproval(row, input.expectedRevision, {
     status: "resuming",
     resolvedBy,
+    extra: revisedEnvelopeFacts,
   });
   if (!transitioned) {
     throw new PolicyConflictError("This approval changed since you read it.");

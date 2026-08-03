@@ -69,6 +69,7 @@ import {
 } from "../services/execution-settlement.ts";
 import {
   classifyFunctionConsequence,
+  computeDeclarationHash,
   declaredFunctionFactsFromApp,
   evaluateAutonomousGate,
 } from "../services/policy-gate.ts";
@@ -2013,9 +2014,18 @@ async function handleToolsCall(
     // + an attested effect event), never a silent drop. Fail-closed (I2):
     // an unreadable policy denies autonomous work rather than guessing.
     try {
+      // Declaration facts + hash come from THE shared extraction (pure
+      // CPU, app row in hand). The gate compares the stored policy's hash
+      // against this one — decision 4: a redeclared function's 'free'
+      // consent does not carry; the verdict downgrades to hold.
+      const gateFacts = declaredFunctionFactsFromApp(app, rawName);
+      const gateDeclarationHash = gateFacts
+        ? await computeDeclarationHash(gateFacts)
+        : null;
       const gateVerdict = await evaluateAutonomousGate({
         appId: app.id,
         functionName: rawName,
+        currentDeclarationHash: gateDeclarationHash,
       });
       if (gateVerdict.verdict === "deny") {
         const deniedExecutionId = crypto.randomUUID();
@@ -2075,7 +2085,7 @@ async function handleToolsCall(
         // than an error (pending work is not a failure).
         const heldExecutionId = crypto.randomUUID();
         const routineCtx = routineTraceContextFromCaller(callerContext);
-        const facts = declaredFunctionFactsFromApp(app, rawName);
+        const facts = gateFacts;
         const releases = await listAgentReleases(app.owner_id, app.id);
         const release = releases[0] ?? null;
         const executionPolicy = resolveFunctionExecutionPolicy(app, rawName);
@@ -2113,6 +2123,7 @@ async function handleToolsCall(
           routineRunId: routineCtx?.routineRunId ?? null,
           traceId: routineCtx?.traceId ?? null,
           policyRevision: gateVerdict.revision ?? "",
+          declarationHash: gateDeclarationHash,
         });
         return jsonRpcResponse(id, {
           content: [{
@@ -2121,10 +2132,13 @@ async function handleToolsCall(
               _held: true,
               approval_id: envelope.id,
               status: "pending",
-              message:
-                `'${rawName}' is set to Ask. The call is held for the ` +
-                "owner's approval and will run if approved. Do not retry " +
-                "it this wake.",
+              message: gateVerdict.declarationChanged
+                ? `'${rawName}' was redeclared since its policy was set — ` +
+                  "the call is held for the owner to re-confirm. Do not " +
+                  "retry it this wake."
+                : `'${rawName}' is set to Ask. The call is held for the ` +
+                  "owner's approval and will run if approved. Do not retry " +
+                  "it this wake.",
             }),
           }],
         });
