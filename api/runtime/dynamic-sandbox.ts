@@ -292,6 +292,7 @@ interface DynamicWorkerEntrypointExports {
     input: {
       props: {
         databaseId: string;
+        conceptsIndex?: string[];
         appId: string;
         userId: string;
         allowRead: boolean;
@@ -1507,6 +1508,7 @@ export default {
             databaseId: dbId,
             appId: config.appId,
             userId: config.userId,
+            conceptsIndex: config.conceptsIndex,
             allowRead: allowsDatabaseRead,
             allowWrite: allowsDatabaseWrite,
             operationMetering: bindingOperationMetering,

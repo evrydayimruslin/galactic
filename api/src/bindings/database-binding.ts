@@ -12,6 +12,13 @@
 //     user_id, so it can never read or write another user's rows. (Phase 5.)
 
 import { WorkerEntrypoint } from "cloudflare:workers";
+import {
+  applyD1ConceptIndexing,
+  type D1ConceptsIndex,
+  extractRowIds,
+  parseConceptsIndex,
+  planD1ConceptIndexing,
+} from "./d1-concepts.ts";
 import { getEnv } from "../../lib/env.ts";
 import {
   assertExecutionContext,
@@ -67,6 +74,10 @@ interface DatabaseBindingProps {
       | "d1WriteRowsPerCloudUnit"
     >
     | null;
+  /** WO-6 D1 tier-1: manifest `concepts_index` entries ("table.column").
+   * Declared text columns participate in concept indexing at this write
+   * chokepoint with exact row identity (RETURNING rowid). */
+  conceptsIndex?: string[];
   // Set for bindings loaded into a REUSABLE isolate (loader.get): every public
   // method then refuses to run without a resolvable per-call context handle,
   // so a direct-binding bypass can never ride the stale frozen props.
@@ -96,6 +107,14 @@ export class DatabaseBinding
   // public method entry; meterD1Result resolves the CURRENT metering context
   // from it, so a warm-reused isolate never meters against a stale baked hold.
   #execCtxHandle?: string;
+  #conceptsIndexCache?: D1ConceptsIndex;
+
+  #conceptsIndex(): D1ConceptsIndex {
+    this.#conceptsIndexCache ??= parseConceptsIndex(
+      this.ctx.props.conceptsIndex,
+    );
+    return this.#conceptsIndexCache;
+  }
 
   #meteringContext() {
     // Handle threaded (even if it resolves to null) → resolve-or-FAIL-CLOSED:
@@ -277,8 +296,30 @@ export class DatabaseBinding
     assertBindingEffectAuthority(this.ctx.props.allowWrite, "database.write");
     if (execCtxHandle !== undefined) this.#execCtxHandle = execCtxHandle;
     assertExecutionContext(this.#execCtxHandle, this.ctx.props.requireExecCtx);
-    const r = await this.#runBuilt(buildInsert(op, this.#scopeUserId));
+    const rows = Array.isArray(op.values) ? op.values : [op.values];
+    const plan = planD1ConceptIndexing({
+      index: this.#conceptsIndex(),
+      kind: "insert",
+      table: op.table,
+      written: rows,
+    });
+    const r = await this.#runBuilt(buildInsert(
+      op,
+      this.#scopeUserId,
+      plan.needRowIds ? { returning: "rowid" } : undefined,
+    ));
     this.#recordDiff("insert", op.table, r.meta);
+    if (r.success && plan.needRowIds) {
+      await applyD1ConceptIndexing({
+        userId: this.ctx.props.userId,
+        appId: this.ctx.props.appId,
+        table: op.table,
+        kind: "insert",
+        columns: plan.columns,
+        written: rows,
+        rowIds: extractRowIds(r.results),
+      });
+    }
     return {
       success: r.success,
       id: r.meta?.last_row_id ?? 0,
@@ -290,8 +331,29 @@ export class DatabaseBinding
     assertBindingEffectAuthority(this.ctx.props.allowWrite, "database.write");
     if (execCtxHandle !== undefined) this.#execCtxHandle = execCtxHandle;
     assertExecutionContext(this.#execCtxHandle, this.ctx.props.requireExecCtx);
-    const r = await this.#runBuilt(buildUpdate(op, this.#scopeUserId));
+    const plan = planD1ConceptIndexing({
+      index: this.#conceptsIndex(),
+      kind: "update",
+      table: op.table,
+      written: [op.set ?? {}],
+    });
+    const r = await this.#runBuilt(buildUpdate(
+      op,
+      this.#scopeUserId,
+      plan.needRowIds ? { returning: "rowid" } : undefined,
+    ));
     this.#recordDiff("update", op.table, r.meta);
+    if (r.success && plan.needRowIds) {
+      await applyD1ConceptIndexing({
+        userId: this.ctx.props.userId,
+        appId: this.ctx.props.appId,
+        table: op.table,
+        kind: "update",
+        columns: plan.columns,
+        written: [op.set ?? {}],
+        rowIds: extractRowIds(r.results),
+      });
+    }
     return { success: r.success, meta: this.#shapeMeta(r.meta) };
   }
 
@@ -299,8 +361,29 @@ export class DatabaseBinding
     assertBindingEffectAuthority(this.ctx.props.allowWrite, "database.write");
     if (execCtxHandle !== undefined) this.#execCtxHandle = execCtxHandle;
     assertExecutionContext(this.#execCtxHandle, this.ctx.props.requireExecCtx);
-    const r = await this.#runBuilt(buildDelete(op, this.#scopeUserId));
+    const plan = planD1ConceptIndexing({
+      index: this.#conceptsIndex(),
+      kind: "delete",
+      table: op.table,
+      written: [],
+    });
+    const r = await this.#runBuilt(buildDelete(
+      op,
+      this.#scopeUserId,
+      plan.needRowIds ? { returning: "rowid" } : undefined,
+    ));
     this.#recordDiff("delete", op.table, r.meta);
+    if (r.success && plan.needRowIds) {
+      await applyD1ConceptIndexing({
+        userId: this.ctx.props.userId,
+        appId: this.ctx.props.appId,
+        table: op.table,
+        kind: "delete",
+        columns: plan.columns,
+        written: [],
+        rowIds: extractRowIds(r.results),
+      });
+    }
     return { success: r.success, meta: this.#shapeMeta(r.meta) };
   }
 
@@ -308,8 +391,33 @@ export class DatabaseBinding
     assertBindingEffectAuthority(this.ctx.props.allowWrite, "database.write");
     if (execCtxHandle !== undefined) this.#execCtxHandle = execCtxHandle;
     assertExecutionContext(this.#execCtxHandle, this.ctx.props.requireExecCtx);
-    const r = await this.#runBuilt(buildUpsert(op, this.#scopeUserId));
+    const upsertWritten = [{
+      ...(op.values ?? {}),
+      ...(op.set ?? {}),
+    }];
+    const plan = planD1ConceptIndexing({
+      index: this.#conceptsIndex(),
+      kind: "upsert",
+      table: op.table,
+      written: upsertWritten,
+    });
+    const r = await this.#runBuilt(buildUpsert(
+      op,
+      this.#scopeUserId,
+      plan.needRowIds ? { returning: "rowid" } : undefined,
+    ));
     this.#recordDiff("upsert", op.table, r.meta);
+    if (r.success && plan.needRowIds) {
+      await applyD1ConceptIndexing({
+        userId: this.ctx.props.userId,
+        appId: this.ctx.props.appId,
+        table: op.table,
+        kind: "upsert",
+        columns: plan.columns,
+        written: upsertWritten,
+        rowIds: extractRowIds(r.results),
+      });
+    }
     return { success: r.success, meta: this.#shapeMeta(r.meta) };
   }
 

@@ -90,6 +90,10 @@ export interface RuntimeConfig {
   // Default-deny egress allowlist (manifest network.allowed_destinations as
   // canonical hosts). Undefined is treated as [] in the sandbox — no outbound.
   allowedDestinations?: string[];
+  // WO-6 D1 tier-1: manifest concepts_index ("table.column") — declared D1
+  // text columns indexed for [[slug]] concept mentions at the database
+  // binding's write chokepoint (exact row identity via RETURNING rowid).
+  conceptsIndex?: string[];
   // Per-user secrets, decrypted, keyed by env var name (Phase 3 vault). Consumed
   // ONLY host-side by the CredentialBinding / NET binding — NEVER stringified
   // into the sandbox. The sandbox references these by key, never by value.

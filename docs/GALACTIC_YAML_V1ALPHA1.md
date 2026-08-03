@@ -248,6 +248,25 @@ later releases; it never deletes the concept or its accrued history. Prose
 `[[slug]]` mentions in descriptions remain plain associations — structure
 declares identity, prose declares association.
 
+### `concepts_index` (top-level key, optional)
+
+Declares which D1 text columns participate in concept indexing, as
+`"table.column"` strings:
+
+```yaml
+concepts_index:
+  - conversations.notes
+  - bookings.memo
+```
+
+Writes through `galactic.db` to a declared column are parsed for `[[slug]]`
+mentions with exact row identity (the platform appends `RETURNING rowid`
+only when indexing needs it — undeclared tables and bracket-free inserts pay
+nothing). Mentions stay derived: editing a row's text re-indexes it, editing
+brackets away clears them, and deleting the row removes its mentions.
+Malformed entries are dropped, never fatal. Undeclared columns are never
+parsed — tenant data stays private by default.
+
 For the launch slice, `ask` and `free` are review/activation policy, not a
 generic prompt injected before every SDK call. Deployment remains private and
 `setup_required`, routines remain paused, and setup must obtain approval for

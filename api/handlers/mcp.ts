@@ -112,7 +112,10 @@ import {
   resolveRuntimeAppCallDependencies,
   SupabaseConfigMigrationRequiredError,
 } from "../services/app-runtime-resources.ts";
-import { getManifestAllowedDestinations } from "../services/trust.ts";
+import {
+  getManifestAllowedDestinations,
+  getManifestConceptsIndex,
+} from "../services/trust.ts";
 import { parseAppManifest } from "../services/app-settings.ts";
 import {
   ANONYMOUS_USER_ID,
@@ -3291,6 +3294,7 @@ async function executeAppFunction(
       declaredEffects,
       flightRecorder: flightRecorderEnabled,
       allowedDestinations: getManifestAllowedDestinations(app.manifest),
+        conceptsIndex: getManifestConceptsIndex(app.manifest),
       userApiKey: runtimeAI.userApiKey,
       aiUnavailableReason: runtimeAI.unavailableReason,
       aiRoute: runtimeAI.route,

@@ -1930,6 +1930,13 @@
       ]
     },
     {
+      "file": "src/bindings/d1-concepts.ts",
+      "types": [
+        "D1ConceptPlan",
+        "D1MutationKind"
+      ]
+    },
+    {
       "exports": [
         "EMBEDDING_RESERVATION_TOKEN_OVERHEAD"
       ],
@@ -1947,6 +1954,12 @@
       "types": [
         "GuardedFetchOptions",
         "OutboundVerdict"
+      ]
+    },
+    {
+      "file": "src/bindings/scoped-query.ts",
+      "types": [
+        "BuildMutationOptions"
       ]
     }
   ]

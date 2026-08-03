@@ -43,6 +43,17 @@ export interface BuiltQuery {
   params: SqlValue[];
 }
 
+/** WO-6 D1 tier-1: mutation builders can request exact affected-row identity.
+ * `RETURNING rowid` is appended ONLY when concept indexing needs it, so SQL,
+ * result shape, and metering stay byte-identical for everyone else. */
+export interface BuildMutationOptions {
+  returning?: "rowid";
+}
+
+function returningSuffix(opts?: BuildMutationOptions): string {
+  return opts?.returning === "rowid" ? " RETURNING rowid" : "";
+}
+
 // ── Structured op shapes (developer-facing) ──
 
 export type WhereCondition =
@@ -548,7 +559,7 @@ export function buildCount(op: CountOp, userId: string): BuiltQuery {
   };
 }
 
-export function buildInsert(op: InsertOp, userId: string): BuiltQuery {
+export function buildInsert(op: InsertOp, userId: string, opts?: BuildMutationOptions): BuiltQuery {
   const table = assertTable(op.table);
   const rows = Array.isArray(op.values) ? op.values : [op.values];
   if (rows.length === 0) {
@@ -583,7 +594,8 @@ export function buildInsert(op: InsertOp, userId: string): BuiltQuery {
 
   const cols = columns.map((c) => ident(c, "column")).join(", ");
   return {
-    sql: `INSERT INTO ${ident(table)} (${cols}) VALUES ${tuples.join(", ")}`,
+    sql: `INSERT INTO ${ident(table)} (${cols}) VALUES ${tuples.join(", ")}` +
+      returningSuffix(opts),
     params,
   };
 }
@@ -652,25 +664,30 @@ function buildWriteWhere(
   return appClause ? `${appClause} AND ${userClause}` : userClause;
 }
 
-export function buildUpdate(op: UpdateOp, userId: string): BuiltQuery {
+export function buildUpdate(op: UpdateOp, userId: string, opts?: BuildMutationOptions): BuiltQuery {
   const table = assertTable(op.table);
   const params: SqlValue[] = [];
   const setSql = buildSetClause(op.set, params);
   const whereSql = buildWriteWhere(op.where, userId, params);
   return {
-    sql: `UPDATE ${ident(table)} SET ${setSql} WHERE ${whereSql}`,
+    sql: `UPDATE ${ident(table)} SET ${setSql} WHERE ${whereSql}` +
+      returningSuffix(opts),
     params,
   };
 }
 
-export function buildDelete(op: DeleteOp, userId: string): BuiltQuery {
+export function buildDelete(op: DeleteOp, userId: string, opts?: BuildMutationOptions): BuiltQuery {
   const table = assertTable(op.table);
   const params: SqlValue[] = [];
   const whereSql = buildWriteWhere(op.where, userId, params);
-  return { sql: `DELETE FROM ${ident(table)} WHERE ${whereSql}`, params };
+  return {
+    sql: `DELETE FROM ${ident(table)} WHERE ${whereSql}` +
+      returningSuffix(opts),
+    params,
+  };
 }
 
-export function buildUpsert(op: UpsertOp, userId: string): BuiltQuery {
+export function buildUpsert(op: UpsertOp, userId: string, opts?: BuildMutationOptions): BuiltQuery {
   const table = assertTable(op.table);
   if (!Array.isArray(op.onConflict) || op.onConflict.length === 0) {
     throw new ScopedQueryError("upsert requires a non-empty onConflict[].");
@@ -708,7 +725,7 @@ export function buildUpsert(op: UpsertOp, userId: string): BuiltQuery {
   }
 
   return {
-    sql: `${insert.sql} ON CONFLICT (${conflictTarget}) DO UPDATE SET ${setSql}`,
+    sql: `${insert.sql} ON CONFLICT (${conflictTarget}) DO UPDATE SET ${setSql}` + returningSuffix(opts),
     params,
   };
 }
