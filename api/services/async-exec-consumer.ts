@@ -30,6 +30,8 @@ interface ExecConsumerDeps {
       deferGeneration: number;
     }
   >;
+  /** Pillar P3.5 seam: the claim-point policy gate (test injection). */
+  claimGate?: (job: AsyncJob) => Promise<"proceed" | "denied" | "held">;
 }
 
 function deferMessageBody(
@@ -142,6 +144,29 @@ export async function processExecMessage(
   // write/read/delete cycles from the durable deferral count and pass the
   // trusted envelope to the execution/settlement layer in job.meta.
   job = withAsyncJobQueueOperationCounts(job);
+
+  // Pillar P3.5: the claim point is the dispatch gate's second checkpoint —
+  // every autonomous path (schedule/manual/event/retry/recovery) passes one
+  // evaluator before tenant code runs. 'denied' and 'held' have already
+  // settled the row and witnessed the outcome; the message just acks.
+  try {
+    const claimGate = deps.claimGate ??
+      (await import("./consumer-claim-gate.ts")).gateClaimedAutonomousJob;
+    const gateOutcome = await claimGate(job);
+    if (gateOutcome !== "proceed") return "ack";
+  } catch (err) {
+    // Fail closed (I2): the job is claimed and ungated — park it rather
+    // than execute past a broken gate. holdClaimedJob CAS-guards 'running'.
+    console.error(`[QUEUE-EXEC] claim gate failed for job ${jobId}:`, err);
+    const { holdClaimedJob } = await import("./async-jobs.ts");
+    const parked = await holdClaimedJob(jobId).catch(() => false);
+    if (parked) return "ack";
+    await failJobIfActive(jobId, {
+      type: "ClaimGateError",
+      message: err instanceof Error ? err.message : String(err),
+    }, 0).catch(() => {});
+    return "ack";
+  }
 
   try {
     // Lazy import keeps the handler graph out of this module's load path

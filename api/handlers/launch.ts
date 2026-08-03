@@ -7850,7 +7850,25 @@ async function handleLaunchAgentApprovals(
     if (method !== "GET") {
       return privateLaunchJson({ error: "Method not allowed" }, 405);
     }
-    const rows = await listApprovalEnvelopes(user.id, resolved.id);
+    const rows = await listApprovalEnvelopes(user.id, resolved.id, 50, {
+      denyHeldJob,
+      recordExpiryEffect: async (row) => {
+        recordEffectEvent(row.run_id, {
+          kind: "non_action",
+          channel: `policy:${row.function_name}`,
+          outcome: "held call expired unanswered",
+          attestation: "attested",
+        });
+        const drained = drainEffectEvents(row.run_id);
+        await persistEffectEvents({
+          userId: user.id,
+          appId: resolved.id,
+          executionId: row.run_id,
+          runId: row.routine_run_id,
+          events: drained.events,
+        }).catch(() => 0);
+      },
+    });
     const resumingJobIds = rows
       .filter((row) => row.status === "resuming" && row.job_id)
       .map((row) => row.job_id as string);
@@ -7916,6 +7934,34 @@ async function handleLaunchAgentApprovals(
         reviseHeldJobArgs,
         resumeHeldJob,
         denyHeldJob,
+        revalidateForApprove: async (row) => {
+          // Decision 5: the world may have moved against the hold. The
+          // function now Off, or redeclared since filing => refuse without
+          // resolving; the owner keeps agency over the pending envelope.
+          const policyRow = await readFunctionPolicy(
+            resolved.id,
+            row.function_name,
+          );
+          if (policyRow?.policy === "off") {
+            return `${row.function_name} is now Off for autonomous runs — ` +
+              "flip the switch in Capabilities to approve this, or reject it.";
+          }
+          if (row.declaration_hash) {
+            const fact = declaredFunctionFactsFromApp(
+              resolved,
+              row.function_name,
+            );
+            const currentHash = fact
+              ? await computeDeclarationHash(fact)
+              : null;
+            if (currentHash && currentHash !== row.declaration_hash) {
+              return `${row.function_name} was redeclared since this was ` +
+                "held — the proposal you see no longer matches the " +
+                "function. Reject it; the agent will re-ask on its next run.";
+            }
+          }
+          return null;
+        },
         stopAsking: async (functionName) => {
           // ask -> free, CAS on the row the envelope was held under. A lost
           // race means the owner already changed the switch — fine.

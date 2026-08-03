@@ -323,3 +323,56 @@ Deno.test("declared facts: one extraction home for hashes and consequence", asyn
     await computeDeclarationHash(again),
   );
 });
+
+Deno.test("decision 4: a redeclared function's free consent downgrades to hold", async () => {
+  const row = {
+    ...policyRow("free", "rev-f"),
+    declaration_hash: "hash-OLD",
+  };
+  await withFetchStub(
+    () => new Response(JSON.stringify([row]), { status: 200 }),
+    async () => {
+      const held = await evaluateAutonomousGate({
+        appId: "app-1",
+        functionName: "send_reply",
+        currentDeclarationHash: "hash-NEW",
+      });
+      assertEquals(held.verdict, "hold");
+      assertEquals(held.declarationChanged, true);
+      const same = await evaluateAutonomousGate({
+        appId: "app-1",
+        functionName: "send_reply",
+        currentDeclarationHash: "hash-OLD",
+      });
+      assertEquals(same.verdict, "allow");
+      // No hash provided (or none stored): no basis to downgrade.
+      const noHash = await evaluateAutonomousGate({
+        appId: "app-1",
+        functionName: "send_reply",
+      });
+      assertEquals(noHash.verdict, "allow");
+    },
+  );
+});
+
+Deno.test("decision 4 x I1: 'off' never widens to ask on redeclaration", async () => {
+  await withFetchStub(
+    () =>
+      new Response(
+        JSON.stringify([{
+          ...policyRow("off", "rev-o"),
+          declaration_hash: "hash-OLD",
+        }]),
+        { status: 200 },
+      ),
+    async () => {
+      const verdict = await evaluateAutonomousGate({
+        appId: "app-1",
+        functionName: "send_reply",
+        currentDeclarationHash: "hash-NEW",
+      });
+      assertEquals(verdict.verdict, "deny");
+      assertEquals(verdict.declarationChanged, undefined);
+    },
+  );
+});

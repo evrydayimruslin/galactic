@@ -11,6 +11,7 @@ import {
 import {
   type ApprovalRow,
   deriveEnvelopeStatus,
+  listApprovalEnvelopes,
   projectEnvelope,
   resolveApproval,
   sanitizeProposal,
@@ -64,6 +65,7 @@ function approvalRow(overrides: Partial<ApprovalRow> = {}): ApprovalRow {
     routine_run_id: "run-1",
     trace_id: null,
     policy_revision: "prev-1",
+    declaration_hash: "decl-hash-1",
     source: { kind: "routine_wake" },
     proposal: { argKeys: ["to"], preview: { to: "a@b.c" }, lossless: true },
     resolved_by: null,
@@ -342,6 +344,187 @@ Deno.test("resolve revise: replaces held input before the transition", async () 
         "transition",
         "resume:job-1",
       ]);
+    },
+  );
+});
+
+Deno.test("decision 5: revalidation refusal blocks approve, envelope stays pending", async () => {
+  const patches: string[] = [];
+  await withFetchStub(
+    (_url, init) => {
+      if (init.method === undefined || init.method === "GET") {
+        return new Response(JSON.stringify([approvalRow()]), { status: 200 });
+      }
+      patches.push(String(init.method));
+      return new Response("[]", { status: 200 });
+    },
+    async () => {
+      await assertRejects(
+        () =>
+          resolveApproval(
+            {
+              userId: "user-1",
+              appId: "app-1",
+              approvalId: "appr-1",
+              action: "approve",
+              expectedRevision: "rev-1",
+              idempotencyKey: "idem-reval",
+            },
+            {
+              ...NOOP_DEPS,
+              revalidateForApprove: () =>
+                Promise.resolve("send_reply is now Off for autonomous runs"),
+            },
+          ),
+        PolicyConflictError,
+        "now Off",
+      );
+      // Fail closed WITHOUT resolving: no transition PATCH was attempted.
+      assertEquals(patches, []);
+    },
+  );
+});
+
+Deno.test("revise re-records the envelope: input hash + proposal ride the transition", async () => {
+  let transitionBody: Record<string, unknown> | null = null;
+  await withFetchStub(
+    (_url, init) => {
+      if (init.method === undefined || init.method === "GET") {
+        return new Response(JSON.stringify([approvalRow()]), { status: 200 });
+      }
+      transitionBody = JSON.parse(String(init.body));
+      return new Response(
+        JSON.stringify([approvalRow({ status: "resuming" })]),
+        { status: 200 },
+      );
+    },
+    async () => {
+      await resolveApproval(
+        {
+          userId: "user-1",
+          appId: "app-1",
+          approvalId: "appr-1",
+          action: "revise",
+          expectedRevision: "rev-1",
+          idempotencyKey: "idem-rev2",
+          revisedInput: { to: "corrected@example.com" },
+        },
+        NOOP_DEPS,
+      );
+      assert(transitionBody);
+      const body = transitionBody as Record<string, unknown>;
+      assertEquals(typeof body.input_hash, "string");
+      const proposal = body.proposal as Record<string, unknown>;
+      assertEquals(proposal.revised, true);
+      assertEquals(
+        (proposal.preview as Record<string, unknown>).to,
+        "corrected@example.com",
+      );
+      assertEquals(proposal.lossless, true);
+    },
+  );
+});
+
+Deno.test("expiry at resolve settles the job and witnesses the non-run", async () => {
+  const calls: string[] = [];
+  await withFetchStub(
+    (_url, init) => {
+      if (init.method === undefined || init.method === "GET") {
+        return new Response(
+          JSON.stringify([approvalRow({
+            expires_at: new Date(Date.now() - 1000).toISOString(),
+          })]),
+          { status: 200 },
+        );
+      }
+      return new Response(
+        JSON.stringify([approvalRow({ status: "expired" })]),
+        { status: 200 },
+      );
+    },
+    async () => {
+      await assertRejects(
+        () =>
+          resolveApproval(
+            {
+              userId: "user-1",
+              appId: "app-1",
+              approvalId: "appr-1",
+              action: "approve",
+              expectedRevision: "rev-1",
+              idempotencyKey: "idem-exp2",
+            },
+            {
+              ...NOOP_DEPS,
+              denyHeldJob: (jobId) => {
+                calls.push(`deny:${jobId}`);
+                return Promise.resolve(true);
+              },
+              recordResolutionEffect: (_row, outcome) => {
+                calls.push(`witness:${outcome}`);
+                return Promise.resolve();
+              },
+            },
+          ),
+        PolicyConflictError,
+      );
+      assertEquals(calls, ["deny:job-1", "witness:expired unanswered"]);
+    },
+  );
+});
+
+Deno.test("lazy expiry on list settles jobs and witnesses only when the CAS wins", async () => {
+  const calls: string[] = [];
+  const overdue = approvalRow({
+    expires_at: new Date(Date.now() - 1000).toISOString(),
+  });
+  await withFetchStub(
+    (url, init) => {
+      if (init.method === "PATCH") {
+        return new Response(JSON.stringify([{ ...overdue, status: "expired" }]), {
+          status: 200,
+        });
+      }
+      return new Response(JSON.stringify([overdue]), { status: 200 });
+    },
+    async () => {
+      await listApprovalEnvelopes("user-1", "app-1", 50, {
+        denyHeldJob: (jobId) => {
+          calls.push(`deny:${jobId}`);
+          return Promise.resolve(true);
+        },
+        recordExpiryEffect: (row) => {
+          calls.push(`witness:${row.id}`);
+          return Promise.resolve();
+        },
+      });
+      assertEquals(calls, ["deny:job-1", "witness:appr-1"]);
+      calls.length = 0;
+      // Lost CAS (someone resolved it first): no settle side effects.
+      const original = globalThis.fetch;
+      globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+        if (init?.method === "PATCH") {
+          return Promise.resolve(new Response("[]", { status: 200 }));
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify([overdue]), { status: 200 }),
+        );
+      }) as typeof fetch;
+      try {
+        await listApprovalEnvelopes("user-1", "app-1", 50, {
+          denyHeldJob: (jobId) => {
+            calls.push(`deny:${jobId}`);
+            return Promise.resolve(true);
+          },
+          recordExpiryEffect: (row) => {
+            calls.push(`witness:${row.id}`);
+            return Promise.resolve();
+          },
+        });
+      } finally {
+        globalThis.fetch = original;
+      }
+      assertEquals(calls, []);
     },
   );
 });

@@ -825,6 +825,54 @@ export async function resumeHeldJob(jobId: string): Promise<boolean> {
   return true;
 }
 
+/**
+ * Pillar P3.5: consumer-claim gate transitions. A job the consumer already
+ * claimed (running) can be denied (policy Off) or re-parked as held (policy
+ * ask / declaration drift) BEFORE tenant code runs. CAS on 'running' — the
+ * claim owner is the only writer, so a lost race means settlement won.
+ */
+export async function denyClaimedJob(jobId: string): Promise<boolean> {
+  const res = await fetch(
+    `${
+      getEnv("SUPABASE_URL")
+    }/rest/v1/async_jobs?id=eq.${jobId}&status=eq.running`,
+    {
+      method: "PATCH",
+      headers: { ...supabaseHeaders(), Prefer: "return=representation" },
+      body: JSON.stringify({
+        status: "denied",
+        resolved_at: new Date().toISOString(),
+      }),
+    },
+  );
+  if (!res.ok) {
+    await res.body?.cancel();
+    return false;
+  }
+  return ((await res.json()) as unknown[]).length > 0;
+}
+
+export async function holdClaimedJob(jobId: string): Promise<boolean> {
+  const res = await fetch(
+    `${
+      getEnv("SUPABASE_URL")
+    }/rest/v1/async_jobs?id=eq.${jobId}&status=eq.running`,
+    {
+      method: "PATCH",
+      headers: { ...supabaseHeaders(), Prefer: "return=representation" },
+      body: JSON.stringify({
+        status: "held",
+        held_at: new Date().toISOString(),
+      }),
+    },
+  );
+  if (!res.ok) {
+    await res.body?.cancel();
+    return false;
+  }
+  return ((await res.json()) as unknown[]).length > 0;
+}
+
 /** Pillar P3: held -> denied (owner rejected). Idempotent by status filter. */
 export async function denyHeldJob(jobId: string): Promise<boolean> {
   const res = await fetch(

@@ -131,7 +131,11 @@ release ceiling (exists today — manifest declarations, runtime-enforced)
 `off` → deny + structured `non_action` event. `ask`/predicate-hold/judge-hold →
 invocation `held` + envelope minted. Approve → same invocation → `queued`
 (exactly-once via claim, I9). Reject → `denied` + non-action. Revise →
-new invocation referencing the original (lineage), original closed.
+**in-place** (ruled 2026-08-03, superseding the earlier lineage sketch):
+the held invocation's input is replaced while still `held` — sealed the
+moment it leaves that status — and the envelope re-records the sanitized
+proposal and input hash atomically with the resolution, so the record shows
+what was actually approved.
 
 **Adopted decisions** (from the validated assessment + sessions):
 manual "Run now" passes the same gate (execution principal is the agent);
@@ -283,6 +287,29 @@ flowchart LR
     forward re-release referencing an immutable prior artifact through the
     existing promotion validation; small schema allowance for releases minted
     from prior releases — build when demanded).
+
+### 9.1 Amendments (2026-08-03, P3.5 hardening)
+
+- **Decision 4 mechanics (ruled: enforce).** The gate compares the stored
+  policy row's `declaration_hash` against the live declaration's hash at
+  every evaluation (dispatch and claim). Mismatch downgrades non-`off`
+  policies to **hold** — a `free` consent does not carry across a
+  redeclaration. `off` is exempt: resetting a never-run to ask would widen
+  (I1). Envelopes record the hash they were held under; approve-time
+  revalidation (decision 5) refuses — without resolving — when the function
+  is now `off` or was redeclared since filing, so the owner keeps agency
+  over the pending envelope.
+- **Revise shape (ruled: in-place).** See §4 — the lineage design is
+  retired; `UNIQUE (run_id)` enforces one envelope per held invocation.
+- **Claim checkpoint shipped.** The queue consumer evaluates the gate after
+  the `queued → running` claim and before tenant code, for autonomous
+  triggers only; jobs minted by an approved envelope (`meta.approvalHold`)
+  skip it, and a `resuming` envelope for the same invocation IS the
+  authorization on re-claim. Fail-closed: a broken gate parks the job as
+  `held`, never executes past it.
+- **Expiry settles fully**: envelope → `expired`, held job → `denied`,
+  attested `non_action` witness line. The alert pointer remains deferred —
+  no alerts stream exists yet to point from; it lands with that stream.
 
 ## 10. Risks
 
