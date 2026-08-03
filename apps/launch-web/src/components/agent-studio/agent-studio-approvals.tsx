@@ -56,6 +56,15 @@ export function formatExpiry(expiresAt: string, now = Date.now()): string {
   return `expires in ${Math.ceil(hours / 24)}d`;
 }
 
+function heldByReadback(envelope: LaunchApprovalEnvelope): string | null {
+  const heldBy = envelope.source?.heldBy;
+  if (!heldBy || typeof heldBy !== "object" || Array.isArray(heldBy)) {
+    return null;
+  }
+  const readback = (heldBy as { readback?: unknown }).readback;
+  return typeof readback === "string" ? readback : null;
+}
+
 function previewEntries(
   envelope: LaunchApprovalEnvelope,
 ): Array<[string, string]> {
@@ -224,6 +233,11 @@ export function AgentStudioApprovals({
               <h4>
                 <code>{envelope.functionName}</code>
               </h4>
+              {heldByReadback(envelope) ? (
+                <p className="agent-studio-approval-held-by">
+                  Held by your policy — {heldByReadback(envelope)}
+                </p>
+              ) : null}
               {previewEntries(envelope).length > 0 ? (
                 <dl className="agent-studio-approval-proposal">
                   {previewEntries(envelope).map(([key, value]) => (

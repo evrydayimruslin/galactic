@@ -61,6 +61,15 @@ function responseFixture(): LaunchAgentApprovalsResponse {
         id: "appr-2",
         functionName: "buy_credits",
         consequence: "spend",
+        source: {
+          kind: "routine_wake",
+          heldBy: {
+            ruleId: "r1",
+            policyVersion: 3,
+            readback:
+              "r1: Hold every `buy_credits` call whose `amount` is greater than 50 — you approve each one in Approvals before it runs.",
+          },
+        },
         proposal: {
           argKeys: ["amount", "api_key"],
           preview: { amount: 20, api_key: "•••" },
@@ -103,6 +112,9 @@ describe("Agent Studio approvals (Pillar P3)", () => {
     expect(markup).toContain("Reject");
     expect(markup).toContain("stop asking for this function");
     expect(markup).toContain("expires in 5d");
+    // P4: a rule-held card names the rule in the owner's own readback words.
+    expect(markup).toContain("Held by your policy —");
+    expect(markup).toContain("is greater than 50");
     // The redacted card never leaks and never offers Edit.
     expect(markup).toContain("•••");
     expect(markup).not.toContain("sk-live");

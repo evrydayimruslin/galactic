@@ -139,6 +139,12 @@ export async function createApprovalEnvelope(input: {
   policyRevision: string;
   /** The declaration this hold was filed under (approve revalidates it). */
   declarationHash?: string | null;
+  /** P4: which compiled rule held this (I6 — the decider is named). */
+  heldBy?: {
+    ruleId: string;
+    policyVersion: number;
+    readback: string;
+  } | null;
 }): Promise<ApprovalRow> {
   const { argKeys, preview, lossless } = sanitizeProposal(input.args);
   const now = Date.now();
@@ -169,6 +175,7 @@ export async function createApprovalEnvelope(input: {
         routineId: input.routineId,
         routineRunId: input.routineRunId,
         trigger: input.trigger,
+        ...(input.heldBy ? { heldBy: input.heldBy } : {}),
       },
       proposal: { argKeys, preview, lossless },
       created_at: new Date(now).toISOString(),

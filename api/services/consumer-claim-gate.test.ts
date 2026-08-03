@@ -120,11 +120,147 @@ Deno.test("user-plane and already-approved jobs pass without any reads", async (
   assertEquals(log, []);
 });
 
-Deno.test("no policy row: proceed after exactly one read", async () => {
-  const { log } = await withRoutes([policyRoute([])], async () => {
-    assertEquals(await gateClaimedAutonomousJob(job()), "proceed");
+function policySetRoute(rows: unknown[]): Route {
+  return {
+    match: (url) => url.pathname.endsWith("/agent_policy_sets"),
+    respond: () => new Response(JSON.stringify(rows), { status: 200 }),
+  };
+}
+
+const HOLD_RULE_HEAD = {
+  app_id: "app-1",
+  user_id: "user-1",
+  version: 3,
+  source: [],
+  artifact: {
+    version: 1,
+    rules: [{
+      id: "r1",
+      functionName: "send_reply",
+      effect: "hold",
+      when: [{ path: "to", op: "contains", value: "@competitor.com" }],
+    }],
+  },
+  compile_model: "claude-sonnet-5",
+  created_at: "2026-08-03T00:00:00.000Z",
+};
+
+Deno.test("no policy row and no compiled rules: proceed after two reads", async () => {
+  const { log } = await withRoutes(
+    [policyRoute([]), policySetRoute([])],
+    async () => {
+      assertEquals(await gateClaimedAutonomousJob(job()), "proceed");
+    },
+  );
+  // One overlay read + one policy-set head read — the full policy plane.
+  assertEquals(log.length, 2);
+});
+
+Deno.test("P4: a matching predicate holds the claim and names the rule", async () => {
+  const writes: Record<string, unknown>[] = [];
+  const routes: Route[] = [
+    policyRoute([]),
+    policySetRoute([HOLD_RULE_HEAD]),
+    APP_ROUTE,
+    envelopeLookupRoute([]),
+    {
+      match: (url, init) =>
+        url.pathname.endsWith("/async_jobs") && init.method === "PATCH",
+      respond: (_url, init) => {
+        writes.push({ kind: "job", status: JSON.parse(String(init.body)).status });
+        return new Response(JSON.stringify([{ id: "job-1" }]), { status: 200 });
+      },
+    },
+    {
+      match: (url, init) =>
+        url.pathname.endsWith("/agent_approvals") && init.method === "POST",
+      respond: (_url, init) => {
+        const body = JSON.parse(String(init.body));
+        writes.push({
+          kind: "envelope",
+          policyRevision: body.policy_revision,
+          heldBy: (body.source as { heldBy?: { ruleId?: string } }).heldBy
+            ?.ruleId,
+        });
+        return new Response(JSON.stringify([body]), { status: 201 });
+      },
+    },
+  ];
+  await withRoutes(routes, async () => {
+    assertEquals(
+      await gateClaimedAutonomousJob(
+        job({ args: { to: "sales@competitor.com" } } as never),
+      ),
+      "held",
+    );
   });
-  assertEquals(log.length, 1);
+  assertEquals(writes, [
+    { kind: "job", status: "held" },
+    { kind: "envelope", policyRevision: "policyset:v3:r1", heldBy: "r1" },
+  ]);
+});
+
+Deno.test("P4: non-matching args pass the predicate layer untouched", async () => {
+  await withRoutes(
+    [policyRoute([]), policySetRoute([HOLD_RULE_HEAD])],
+    async () => {
+      assertEquals(
+        await gateClaimedAutonomousJob(
+          job({ args: { to: "customer@example.com" } } as never),
+        ),
+        "proceed",
+      );
+    },
+  );
+});
+
+Deno.test("P4: a deny rule settles the claim with a rule-attributed witness", async () => {
+  const writes: string[] = [];
+  const denyHead = {
+    ...HOLD_RULE_HEAD,
+    artifact: {
+      version: 1,
+      rules: [{
+        id: "r1",
+        functionName: "send_reply",
+        effect: "deny",
+        when: [{ path: "to", op: "contains", value: "@competitor.com" }],
+      }],
+    },
+  };
+  const routes: Route[] = [
+    policyRoute([]),
+    policySetRoute([denyHead]),
+    {
+      match: (url, init) =>
+        url.pathname.endsWith("/async_jobs") && init.method === "PATCH",
+      respond: (_url, init) => {
+        writes.push(`job:${JSON.parse(String(init.body)).status}`);
+        return new Response(JSON.stringify([{ id: "job-1" }]), { status: 200 });
+      },
+    },
+    {
+      match: (url, init) =>
+        url.pathname.endsWith("/agent_effect_events") &&
+        init.method === "POST",
+      respond: (_url, init) => {
+        const events = JSON.parse(String(init.body)) as Array<
+          { channel?: string }
+        >;
+        writes.push(`witness:${events[0]?.channel}`);
+        return new Response("[]", { status: 201 });
+      },
+    },
+  ];
+  await withRoutes(routes, async () => {
+    assertEquals(
+      await gateClaimedAutonomousJob(
+        job({ args: { to: "x@competitor.com" } } as never),
+      ),
+      "denied",
+    );
+  });
+  assertEquals(writes, ["job:denied", "witness:policy:rule:r1"]);
 });
 
 Deno.test("Off denies before tenant code: row settles, witness records it", async () => {
