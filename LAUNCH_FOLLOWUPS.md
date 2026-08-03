@@ -229,3 +229,20 @@ of launch-relevant follow-ups discovered during implementation.
   production desktop builds so staging/internal builds never self-update into
   public releases. A dedicated beta feed can be added later if it becomes
   useful.
+
+## UI sharpening (2026-08-03)
+
+- **Run search-result routes still say `pane=compute`:** the Studio removed
+  its Compute pane; the web router now aliases `compute → activity` (see
+  `legacyPaneAliases` in `apps/launch-web/src/lib/agent-studio-route.ts`), so
+  every stored and freshly minted run deep-link lands on Activity with its
+  `item` intact. The server-side cleanup — retargeting the two route
+  templates in `api/services/operator-projections.ts` (routine-run and
+  compute-run search projections) to `pane=activity`, plus widening
+  `LaunchAgentPane` if the contract union should gain `"activity"` — is
+  deliberately deferred: both files sit next to the pillar P0 activity/
+  projection work, and the client alias makes the retarget cosmetic. Fold it
+  into whichever pillar PR next touches those projections. The ⌘K allowlist
+  (`ALLOWED_PANES_BY_KIND.run` in `search-panel.tsx`) must keep accepting
+  `"compute"` until the server route templates flip, or run results get
+  dropped by `stableAgentSearchHref`.

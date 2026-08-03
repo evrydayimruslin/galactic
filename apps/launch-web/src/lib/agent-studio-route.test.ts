@@ -20,7 +20,6 @@ describe("Agent Studio routing", () => {
       "knowledge",
       "capabilities",
       "connections",
-      "compute",
       "limits",
       "settings",
     ]);
@@ -29,6 +28,9 @@ describe("Agent Studio routing", () => {
   it("preserves legacy Agent deep links", () => {
     expect(normalizeAgentStudioPane("functions")).toBe("capabilities");
     expect(normalizeAgentStudioPane("access")).toBe("connections");
+    expect(normalizeAgentStudioPane("compute")).toBe("activity");
+    expect(parseAgentStudioRouteState("?pane=compute&item=run-14"))
+      .toEqual({ pane: "activity", item: "run-14" });
     expect(parseAgentStudioRouteState("?pane=functions&item=send_reply"))
       .toEqual({ pane: "capabilities", item: "send_reply" });
     expect(parseAgentStudioRouteState("?item=activity"))

@@ -1,4 +1,5 @@
 .agent-studio {
+  --studio-measure: 1120px;
   --ground: #efe9e1;
   --card: #efe9e1;
   --line: #e2d9cc;
@@ -163,6 +164,9 @@
   stroke: rgba(0, 0, 0, 0.5);
 }
 
+/* The Studio sits in a centered measure: the header hairline runs full
+   bleed, while its contents — and the rail+content grid below — share
+   --studio-measure with side margins letting the motif breathe. */
 .agent-studio-header {
   position: relative;
   z-index: 4;
@@ -171,7 +175,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 20px 26px;
+  padding: 20px max(26px, calc((100% - var(--studio-measure)) / 2));
   border-bottom: 1px solid var(--rail-line);
   background: transparent;
 }
@@ -186,23 +190,6 @@
   min-width: 0;
   align-items: baseline;
   gap: 10px;
-}
-
-.agent-studio-wordmark {
-  border: 0;
-  padding: 0;
-  background: transparent;
-  color: var(--ink);
-  font-family: var(--display) !important;
-  font-size: 16px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-}
-
-.agent-studio-slash {
-  color: var(--ink-3);
-  font-family: var(--mono);
-  font-size: 11px;
 }
 
 .agent-studio-agent-name {
@@ -258,34 +245,7 @@
   gap: 9px;
 }
 
-.agent-studio-segmented {
-  display: flex;
-  border: 1px solid var(--line-2);
-}
-
-.agent-studio-segmented button {
-  height: 34px;
-  border: 0;
-  border-right: 1px solid var(--line);
-  padding: 0 12px;
-  background: transparent;
-  color: var(--ink-3);
-  font-family: var(--mono);
-  font-size: 10px;
-}
-
-.agent-studio-segmented button:last-child {
-  border-right: 0;
-}
-
-.agent-studio-segmented button[aria-pressed="true"] {
-  background: var(--fill-2);
-  box-shadow: var(--press);
-  color: var(--ink);
-}
-
-.agent-studio-run,
-.agent-studio-settings-button,
+.agent-studio-home,
 .agent-studio-menu-button {
   height: 36px;
   border: 1px solid var(--line-2);
@@ -293,15 +253,18 @@
   box-shadow: var(--chip-shadow);
 }
 
-.agent-studio-run {
+.agent-studio-home {
   padding: 0 14px;
-  border-color: var(--accent);
-  background: var(--accent-fill);
+  color: var(--ink-2);
   font-family: var(--mono) !important;
   font-size: 11px;
+  letter-spacing: 0.04em;
 }
 
-.agent-studio-settings-button,
+.agent-studio-home:hover {
+  color: var(--ink);
+}
+
 .agent-studio-menu-button {
   display: inline-flex;
   width: 36px;
@@ -328,6 +291,7 @@
   z-index: 2;
   display: grid;
   min-height: calc(100dvh - 77px);
+  padding-inline: max(0px, calc((100% - var(--studio-measure)) / 2));
   grid-template-columns: 208px minmax(0, 1fr);
 }
 
@@ -1637,8 +1601,7 @@ body[data-agent-studio-theme="light"] .neb-modal-overlay .neb-modal {
     padding: 16px 18px;
   }
 
-  .agent-studio-release,
-  .agent-studio-segmented {
+  .agent-studio-release {
     display: none;
   }
 
@@ -1694,11 +1657,6 @@ body[data-agent-studio-theme="light"] .neb-modal-overlay .neb-modal {
     gap: 10px;
   }
 
-  .agent-studio-rail-mobile-meta .agent-studio-segmented {
-    display: flex;
-    width: max-content;
-  }
-
   .agent-studio-content {
     padding: 26px 22px 64px;
   }
@@ -1738,11 +1696,7 @@ body[data-agent-studio-theme="light"] .neb-modal-overlay .neb-modal {
     gap: 6px;
   }
 
-  .agent-studio-settings-button {
-    display: none;
-  }
-
-  .agent-studio-run {
+  .agent-studio-home {
     padding: 0 10px;
   }
 

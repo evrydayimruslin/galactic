@@ -157,7 +157,6 @@ import {
   parseConnectTutorialContext,
 } from "../lib/connect-tutorial";
 import { signOutToConnect } from "../lib/sign-out-transition";
-import { AgentComputePane } from "./agent-compute-pane";
 import { ConnectTutorialPanel } from "./connect-tutorial";
 import { useSignInModal } from "./sign-in-modal";
 import { AgentOverviewLayout } from "./nebula/agent-overview-layout";
@@ -2925,15 +2924,6 @@ function AgentPanel({
                 itemId={itemId}
                 live={live}
                 onNavigate={onNavigate}
-              />
-            )
-            : null}
-          {pane === "compute"
-            ? (
-              <AgentComputePane
-                agent={agent}
-                itemId={itemId}
-                onClearItem={() => navigateToAgentItem("compute", null)}
               />
             )
             : null}

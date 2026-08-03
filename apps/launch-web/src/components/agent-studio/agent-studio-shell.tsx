@@ -19,15 +19,11 @@ export type AgentStudioTheme = "light" | "dark";
 interface AgentStudioShellProps {
   agentName: string;
   badges?: Partial<Record<AgentStudioPane, number>>;
-  canRunNow: boolean;
   children: ReactNode;
   onBack: () => void;
   onPaneChange: (pane: AgentStudioPane) => void;
-  onRunNow: () => void;
-  onThemeChange: (theme: AgentStudioTheme) => void;
   pane: AgentStudioPane;
   releaseVersion: string | null;
-  runBusy: boolean;
   statusLabel: string;
   statusTone: "live" | "waiting" | "stopped";
   theme: AgentStudioTheme;
@@ -42,15 +38,11 @@ const primaryGroups: readonly Exclude<AgentStudioPaneGroup, "settings">[] = [
 export function AgentStudioShell({
   agentName,
   badges = {},
-  canRunNow,
   children,
   onBack,
   onPaneChange,
-  onRunNow,
-  onThemeChange,
   pane,
   releaseVersion,
-  runBusy,
   statusLabel,
   statusTone,
   theme,
@@ -105,14 +97,6 @@ export function AgentStudioShell({
       <StudioMotif />
       <header className="agent-studio-header">
         <div className="agent-studio-identity">
-          <button
-            className="agent-studio-wordmark"
-            onClick={onBack}
-            type="button"
-          >
-            galactic
-          </button>
-          <span className="agent-studio-slash" aria-hidden="true">/</span>
           <span className="agent-studio-agent-name">{agentName}</span>
           {releaseVersion
             ? (
@@ -129,37 +113,13 @@ export function AgentStudioShell({
           </span>
         </div>
         <div className="agent-studio-header-actions">
-          <div
-            aria-label="Studio theme"
-            className="agent-studio-segmented"
-            role="group"
-          >
-            {(["light", "dark"] as const).map((option) => (
-              <button
-                aria-pressed={theme === option}
-                key={option}
-                onClick={() => onThemeChange(option)}
-                type="button"
-              >
-                {option[0].toUpperCase() + option.slice(1)}
-              </button>
-            ))}
-          </div>
           <button
-            className="agent-studio-run"
-            disabled={!canRunNow || runBusy}
-            onClick={onRunNow}
+            aria-label="Close the Studio and return to your fleet"
+            className="agent-studio-home"
+            onClick={onBack}
             type="button"
           >
-            {runBusy ? "Starting…" : "Run now"}
-          </button>
-          <button
-            aria-label="Open Agent settings"
-            className="agent-studio-settings-button"
-            onClick={() => selectPane("settings")}
-            type="button"
-          >
-            <StudioSettingsGlyph />
+            Home
           </button>
           <button
             aria-controls="agent-studio-navigation"
@@ -205,22 +165,6 @@ export function AgentStudioShell({
                 <span aria-hidden="true" />
                 {statusLabel}
               </span>
-            </div>
-            <div
-              aria-label="Studio theme"
-              className="agent-studio-segmented"
-              role="group"
-            >
-              {(["light", "dark"] as const).map((option) => (
-                <button
-                  aria-pressed={theme === option}
-                  key={option}
-                  onClick={() => onThemeChange(option)}
-                  type="button"
-                >
-                  {option[0].toUpperCase() + option.slice(1)}
-                </button>
-              ))}
             </div>
           </div>
           {primaryGroups.map((group) => (
@@ -312,19 +256,3 @@ function StudioMotif(): ReactElement {
   );
 }
 
-function StudioSettingsGlyph(): ReactElement {
-  return (
-    <svg
-      aria-hidden="true"
-      fill="none"
-      height="16"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      viewBox="0 0 24 24"
-      width="16"
-    >
-      <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2v.2a2 2 0 1 1-4 0V21a1.7 1.7 0 0 0-3-1.1l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 14.2h-.2a2 2 0 1 1 0-4H3a1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10 3V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.2l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0 1.2 2.9h.2a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1Z" />
-    </svg>
-  );
-}

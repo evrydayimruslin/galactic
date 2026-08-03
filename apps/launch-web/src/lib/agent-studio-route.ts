@@ -67,12 +67,6 @@ export const AGENT_STUDIO_PANE_REGISTRY = [
     label: "Connections",
   },
   {
-    availability: "ready",
-    group: "grant",
-    id: "compute",
-    label: "Compute",
-  },
-  {
     availability: "partial",
     group: "grant",
     id: "limits",
@@ -125,6 +119,9 @@ const paneIds = new Set<string>(
 
 const legacyPaneAliases: Readonly<Record<string, AgentStudioPane>> = {
   access: "connections",
+  // Compute left the Studio; its run deep-links (search index still mints
+  // and stores them) land on the Activity evidence trail instead.
+  compute: "activity",
   functions: "capabilities",
 };
 

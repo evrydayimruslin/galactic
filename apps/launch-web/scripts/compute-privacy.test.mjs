@@ -1,10 +1,9 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const computePane = readFileSync(
-  new URL("../src/components/agent-compute-pane.tsx", import.meta.url),
-  "utf8",
-);
+// The Compute pane itself left the Studio (config moved to skills/docs);
+// the privacy contract lives on for the browser-side compute types and the
+// overview surfaces that still exist.
 const computeContract = readFileSync(
   new URL("../src/lib/compute.ts", import.meta.url),
   "utf8",
@@ -15,17 +14,6 @@ const agentOverview = readFileSync(
 );
 
 describe("user-facing Compute privacy contracts", () => {
-  it("never renders exact monetary accounting or receipt data", () => {
-    expect(computePane).not.toMatch(/\bLight\b/);
-    expect(computePane).not.toMatch(/run\.usage/);
-    expect(computePane).not.toMatch(/run\.billingMode/);
-    expect(computePane).not.toMatch(/run\.receipt(?:Id|Url)/);
-    expect(computePane).not.toMatch(
-      /<small>(?:Reserved|Actual|True-up|Backed by)<\/small>/,
-    );
-    expect(computePane).not.toMatch(/Receipt (?:pending|\{)/);
-  });
-
   it("does not model private monetary fields in the browser contract", () => {
     expect(computeContract).not.toMatch(/\bLight\b/);
     expect(computeContract).not.toMatch(/interface LaunchComputeUsage/);
