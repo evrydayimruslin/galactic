@@ -442,6 +442,19 @@ export function getManifestPermissions(
 // Canonical outbound hosts an app has declared in network.allowed_destinations.
 // Tolerates the pre-Phase-1 (no network) and string-form manifests; returns the
 // deduped, lowercased host list used as the sandbox egress allowlist.
+/** WO-6 D1 tier-1: manifest `concepts_index` — declared "table.column"
+ * text columns that participate in concept indexing at the database
+ * binding's write chokepoint. Defensive: non-arrays and malformed entries
+ * yield [] / are dropped (the binding re-validates shape). */
+export function getManifestConceptsIndex(
+  manifest: AppManifest | string | null | undefined,
+): string[] {
+  const parsed = parseAppManifest(manifest);
+  const raw = (parsed as { concepts_index?: unknown } | null)?.concepts_index;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((entry): entry is string => typeof entry === "string");
+}
+
 export function getManifestAllowedDestinations(
   manifest: AppManifest | string | null | undefined,
 ): string[] {

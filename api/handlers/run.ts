@@ -42,7 +42,10 @@ import {
   resolveRuntimeAppCallDependencies,
   SupabaseConfigMigrationRequiredError,
 } from "../services/app-runtime-resources.ts";
-import { getManifestAllowedDestinations } from "../services/trust.ts";
+import {
+  getManifestAllowedDestinations,
+  getManifestConceptsIndex,
+} from "../services/trust.ts";
 import { parseAppManifest } from "../services/app-settings.ts";
 import { buildGpuStatusDiagnostics } from "../services/gpu/status.ts";
 import {
@@ -757,6 +760,7 @@ export async function handleRun(
         flightRecorder:
           parseAppManifest(app.manifest)?.flight_recorder === true,
         allowedDestinations: getManifestAllowedDestinations(app.manifest),
+        conceptsIndex: getManifestConceptsIndex(app.manifest),
         userApiKey: runtimeAI.userApiKey,
         aiUnavailableReason: runtimeAI.unavailableReason,
         aiRoute: runtimeAI.route,
