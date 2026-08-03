@@ -1472,9 +1472,18 @@
       "file": "services/policy-gate.ts",
       "types": [
         "AutonomousFunctionPolicy",
-        "DeclaredFunctionFacts",
         "FunctionPolicyRow",
         "GateVerdict"
+      ]
+    },
+    {
+      "exports": [
+        "renderRuleReadback"
+      ],
+      "file": "services/policy-predicates.ts",
+      "types": [
+        "CompilePolicyDeps",
+        "PredicateVerdict"
       ]
     },
     {

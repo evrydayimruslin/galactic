@@ -29,6 +29,11 @@ import type {
   LaunchAutonomousFunctionPolicyUpdateRequest,
   LaunchAgentKnowledgeFactUpsertRequest,
   LaunchAgentApprovalActionResponse,
+  LaunchAgentPolicySetsResponse,
+  LaunchPolicyCompileRequest,
+  LaunchPolicyCompileResponse,
+  LaunchPolicySetApproveRequest,
+  LaunchPolicySetApproveResponse,
   LaunchAgentApprovalsResponse,
   LaunchAgentFunctionPoliciesResponse,
   LaunchAgentFunctionPolicyUpdateResponse,
@@ -527,6 +532,35 @@ export class LaunchApiClient {
       `/api/launch/agents/${encodeURIComponent(idOrSlug)}/concepts/${
         encodeURIComponent(slug)
       }`,
+      { method: "POST", body: JSON.stringify(request) },
+    );
+  }
+
+  /** Pillar P4: compiled policy versions — head + history. */
+  agentPolicySets(idOrSlug: string): Promise<LaunchAgentPolicySetsResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/policy-sets`,
+    );
+  }
+
+  /** Compile sentences into rules on the owner's BYOK model; persists nothing. */
+  compileAgentPolicy(
+    idOrSlug: string,
+    request: LaunchPolicyCompileRequest,
+  ): Promise<LaunchPolicyCompileResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/policy-sets/compile`,
+      { method: "POST", body: JSON.stringify(request) },
+    );
+  }
+
+  /** Approve a compiled artifact as the next immutable version (head CAS). */
+  approveAgentPolicySet(
+    idOrSlug: string,
+    request: LaunchPolicySetApproveRequest & { compileModel?: string },
+  ): Promise<LaunchPolicySetApproveResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/policy-sets`,
       { method: "POST", body: JSON.stringify(request) },
     );
   }

@@ -86,6 +86,11 @@ import {
   type LaunchAgentApprovalActionResponse,
   type LaunchAgentApprovalsResponse,
   type LaunchAgentFunctionPoliciesResponse,
+  type LaunchAgentPolicySetsResponse,
+  type LaunchPolicyArtifact,
+  type LaunchPolicyCompileResponse,
+  type LaunchPolicySetApproveResponse,
+  type LaunchPolicySourceEntry,
   type LaunchAgentFunctionPolicyUpdateResponse,
   type LaunchAgentFunctionsResponse,
   type LaunchAgentHomeActionRequest,
@@ -293,6 +298,15 @@ import {
   readResumedJobStatuses,
   resolveApproval,
 } from "../services/agent-approvals.ts";
+import {
+  compilePolicyText,
+  insertPolicySet,
+  listPolicySetSummaries,
+  PolicyCompileError,
+  readPolicySetHead,
+  renderPolicyReadback,
+  validatePolicyArtifact,
+} from "../services/policy-predicates.ts";
 import {
   denyHeldJob,
   resumeHeldJob,
@@ -1323,6 +1337,20 @@ export async function handleLaunch(
       );
     }
 
+    const agentPolicySetsMatch = path.match(
+      /^\/api\/launch\/agents\/([^/]+)\/policy-sets(?:\/(compile))?$/,
+    );
+    if (agentPolicySetsMatch) {
+      return await privateLaunchRoute(() =>
+        handleLaunchAgentPolicySets(
+          request,
+          agentPolicySetsMatch[1],
+          agentPolicySetsMatch[2] === "compile",
+          method,
+        )
+      );
+    }
+
     const agentPoliciesMatch = path.match(
       /^\/api\/launch\/agents\/([^/]+)\/policies(?:\/([^/]+))?$/,
     );
@@ -1777,6 +1805,7 @@ function buildLaunchStatus(request: Request): Record<string, unknown> {
       agentHomeResume: "/api/launch/agents/{id}/home/resume",
       agentConcepts: "/api/launch/agents/{id}/concepts",
       agentPolicies: "/api/launch/agents/{id}/policies",
+      agentPolicySets: "/api/launch/agents/{id}/policy-sets",
       agentApprovals: "/api/launch/agents/{id}/approvals",
       agentKnowledge: "/api/launch/agents/{id}/knowledge",
       agentReleases: "/api/launch/agents/{id}/releases",
@@ -3046,6 +3075,99 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             },
             "403": { description: "Account session required" },
             "404": { description: "Agent not found" },
+          },
+        },
+      },
+      "/api/launch/agents/{id}/policy-sets": {
+        get: {
+          operationId: "listLaunchAgentPolicySets",
+          summary: "Compiled policy versions for a private Agent",
+          description:
+            "Account-session and owner-only. Pillar P4: immutable versions of compiled policy predicates. Each version stores the owner's source sentences, the schema-validated artifact, and the model that compiled it (BYOK — the platform never supplies the compiler). The readback in responses is re-rendered deterministically from the artifact by code templates, so it can never drift from what executes. The head version's rules evaluate in the dispatch gate after the overlay switches: first matching rule wins, effects only narrow (hold | deny — never allow).",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+            description: "Private Agent id or slug",
+          }],
+          responses: {
+            "200": { description: "Head version + history summaries" },
+            "403": { description: "Account session required" },
+            "404": { description: "Agent not found" },
+          },
+        },
+        post: {
+          operationId: "approveLaunchAgentPolicySet",
+          summary: "Approve a compiled artifact as the next policy version",
+          description:
+            "Account-session and owner-only. The server re-validates the artifact against the live release declarations and re-renders the readback — what persists is exactly what the readback described (the owner approves what will execute, not what they typed). Head-version CAS: expectedHeadVersion must match the current head (0 when none); drift returns 409 with the live head so the client reloads and re-reads before retrying. Versions are immutable; rollback is approving a prior artifact as a new version.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          }],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["artifact", "expectedHeadVersion"],
+                  properties: {
+                    artifact: { type: "object" },
+                    source: { type: "array", items: { type: "object" } },
+                    compileModel: { type: "string" },
+                    expectedHeadVersion: { type: "integer", minimum: 0 },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": { description: "The new immutable version" },
+            "400": { description: "Missing artifact or head version" },
+            "409": { description: "Head moved — body carries currentHeadVersion" },
+            "422": { description: "Artifact no longer validates — body carries errors" },
+          },
+        },
+      },
+      "/api/launch/agents/{id}/policy-sets/compile": {
+        post: {
+          operationId: "compileLaunchAgentPolicy",
+          summary: "Compile policy sentences into rules (nothing persists)",
+          description:
+            "Account-session and owner-only. Runs the owner's plain-language policy through THEIR configured BYOK model and returns the compiled artifact plus the deterministic code-rendered readback for approval. Nothing is saved by this call. A model that needs clarification, produces rules that fail the schema-validation floor (unknown function, unknown path, type mismatch), or has no BYOK route configured returns 422 with the precise reason — vague policies never enter the gate.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          }],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["text"],
+                  properties: {
+                    text: { type: "string", maxLength: 4000 },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": { description: "Artifact + readback, awaiting approval" },
+            "422": {
+              description:
+                "Clarification needed, validation errors, or no BYOK route — body carries kind + errors",
+            },
           },
         },
       },
@@ -8023,6 +8145,167 @@ async function handleLaunchAgentApprovals(
         },
         409,
       );
+    }
+    throw err;
+  }
+}
+
+/**
+ * Pillar P4: compiled policy versions, owner plane. POST /compile runs the
+ * owner's sentences through THEIR model (BYOK — I8) and returns artifact +
+ * code-rendered readback WITHOUT persisting anything; clarification and
+ * validation failures are save errors. POST approves an artifact as the
+ * next immutable version (head CAS + primary-key backstop) — the server
+ * re-validates and re-renders, so what persists is exactly what the
+ * readback described. GET lists head + history.
+ */
+async function handleLaunchAgentPolicySets(
+  request: Request,
+  encodedLocator: string,
+  isCompile: boolean,
+  method: string,
+): Promise<Response> {
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForAgentHome(user);
+  const resolved = await resolveOwnerPrivateRoutineAgent(
+    user,
+    encodedLocator,
+  );
+  if (resolved instanceof Response) {
+    return withPrivateLaunchPrivacy(resolved);
+  }
+  const agentHandle = {
+    id: resolved.id,
+    slug: resolved.slug ?? resolved.id,
+    name: resolved.name ?? resolved.slug ?? "Agent",
+    relationship: "owner" as const,
+    publicUrl: null,
+    adminUrl: null,
+  };
+  const summaries = await buildLaunchFunctionSummaries(resolved, user.id);
+  const facts = summaries
+    .map((fn) => declaredFunctionFactsFromApp(resolved, fn.name))
+    .filter((fact): fact is NonNullable<typeof fact> => fact !== null);
+
+  if (isCompile) {
+    if (method !== "POST") {
+      return privateLaunchJson({ error: "Method not allowed" }, 405);
+    }
+    const body = asRecord(await readJsonBody<unknown>(request));
+    const text = typeof body?.text === "string" ? body.text.trim() : "";
+    if (!text || text.length > 4000) {
+      return privateLaunchJson(
+        { error: "text is required (at most 4000 characters)" },
+        400,
+      );
+    }
+    try {
+      const compiled = await compilePolicyText({
+        userId: user.id,
+        userEmail: user.email ?? "",
+        text,
+        facts,
+      });
+      return privateLaunchJson(
+        {
+          artifact: compiled.artifact,
+          source: compiled.source,
+          readback: renderPolicyReadback(compiled.artifact),
+          compileModel: compiled.compileModel,
+          generatedAt: new Date().toISOString(),
+        } satisfies LaunchPolicyCompileResponse,
+      );
+    } catch (err) {
+      if (err instanceof PolicyCompileError) {
+        // Doc §6: clarification/validation surface as the save error.
+        return privateLaunchJson(
+          { error: err.message, kind: err.kind, errors: err.errors },
+          422,
+        );
+      }
+      throw err;
+    }
+  }
+
+  if (method === "GET") {
+    const [head, versions] = await Promise.all([
+      readPolicySetHead(resolved.id),
+      listPolicySetSummaries(user.id, resolved.id),
+    ]);
+    return privateLaunchJson(
+      {
+        agent: agentHandle,
+        head,
+        versions,
+        generatedAt: new Date().toISOString(),
+      } satisfies LaunchAgentPolicySetsResponse,
+    );
+  }
+  if (method !== "POST") {
+    return privateLaunchJson({ error: "Method not allowed" }, 405);
+  }
+  const body = asRecord(await readJsonBody<unknown>(request));
+  const artifact = asRecord(body?.artifact) as
+    | LaunchPolicyArtifact
+    | null;
+  const expectedHeadVersion = typeof body?.expectedHeadVersion === "number" &&
+      Number.isInteger(body.expectedHeadVersion) &&
+      body.expectedHeadVersion >= 0
+    ? body.expectedHeadVersion
+    : null;
+  if (!artifact || expectedHeadVersion === null) {
+    return privateLaunchJson(
+      { error: "artifact and expectedHeadVersion are required" },
+      400,
+    );
+  }
+  const source = Array.isArray(body?.source)
+    ? body.source as LaunchPolicySourceEntry[]
+    : [];
+  // Server-authoritative: re-validate against the live declarations. A
+  // stale compile (redeploy in between) fails here rather than persisting.
+  const validation = validatePolicyArtifact(artifact, facts);
+  if (!validation.ok) {
+    return privateLaunchJson(
+      {
+        error: "The rules no longer validate against the current release.",
+        errors: validation.errors,
+      },
+      422,
+    );
+  }
+  const head = await readPolicySetHead(resolved.id);
+  if ((head?.version ?? 0) !== expectedHeadVersion) {
+    return privateLaunchJson(
+      {
+        error:
+          "Another policy version was approved since you compiled — reload and re-read the readback.",
+        currentHeadVersion: head?.version ?? 0,
+      },
+      409,
+    );
+  }
+  try {
+    const policySet = await insertPolicySet({
+      appId: resolved.id,
+      userId: user.id,
+      expectedHeadVersion,
+      source,
+      artifact,
+      compileModel: typeof body?.compileModel === "string"
+        ? body.compileModel
+        : "unrecorded",
+      createdBy: user.id,
+    });
+    return privateLaunchJson(
+      {
+        policySet,
+        generatedAt: new Date().toISOString(),
+      } satisfies LaunchPolicySetApproveResponse,
+    );
+  } catch (err) {
+    if (err instanceof PolicyConflictError) {
+      return privateLaunchJson({ error: err.message }, 409);
     }
     throw err;
   }
