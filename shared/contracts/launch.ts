@@ -1908,6 +1908,9 @@ export interface LaunchOperatorRoutineRunDetail {
   diagnostic: LaunchOperatorRunDiagnostic | null;
   steps: LaunchOperatorRoutineRunStep[];
   logReceipts: LaunchOperatorRoutineRunLogReceipt[];
+  /** Pillar P0: the run's witnessed effect stream, attestation-labeled.
+   * Optional: additive contract — older projections omit it. */
+  effects?: LaunchRunEffectEvent[];
   generatedAt: string;
 }
 
@@ -2450,6 +2453,24 @@ export interface LaunchAgentConceptDescribeRequest {
   description?: string | null;
   aliases?: string[];
   status?: "active" | "retired";
+}
+
+/**
+ * Pillar P0: one witnessed effect from an execution's typed stream. The
+ * attestation ladder is the honesty contract — attested (platform witnessed
+ * the channel), observed (platform saw the request, not its meaning),
+ * app_claimed (the app's own account via galactic.evidence).
+ */
+export interface LaunchRunEffectEvent {
+  executionId: string;
+  seq: number;
+  kind: string;
+  channel: string | null;
+  targetDigest: string | null;
+  outcome: string | null;
+  attestation: "attested" | "observed" | "app_claimed";
+  evidence: unknown[];
+  createdAt: string;
 }
 
 /**

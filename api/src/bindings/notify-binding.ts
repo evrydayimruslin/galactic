@@ -9,7 +9,11 @@
 // containment rationale.
 
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { assertExecutionContext } from "../../services/execution-context-registry.ts";
+import { recordEffectEvent } from "../../services/effect-event-tracker.ts";
+import {
+  assertExecutionContext,
+  resolveExecutionContext,
+} from "../../services/execution-context-registry.ts";
 import {
   type AgentNotifyInput,
   type AgentNotifyResult,
@@ -31,10 +35,21 @@ export class NotifyBinding
     execCtxHandle?: string,
   ): Promise<AgentNotifyResult> {
     assertExecutionContext(execCtxHandle, this.ctx.props.requireExecCtx);
-    return await notifyOwnerFromAgent(
+    const outcome = await notifyOwnerFromAgent(
       this.ctx.props.appId,
       this.ctx.props.userId,
       input ?? {},
     );
+    // Pillar P0: witnessed at the chokepoint — created vs deduped vs capped.
+    recordEffectEvent(
+      resolveExecutionContext(execCtxHandle)?.aiExecutionId ?? null,
+      {
+        kind: "notification",
+        channel: "owner_inbox",
+        outcome: outcome.created ? "created" : outcome.reason ?? "skipped",
+        attestation: "attested",
+      },
+    );
+    return outcome;
   }
 }

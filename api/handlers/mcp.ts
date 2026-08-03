@@ -3336,6 +3336,12 @@ async function executeAppFunction(
         reuseKeyHash?: string;
         flightAi?: Array<Record<string, unknown>>;
         flightDb?: DbDiffTally;
+        flightEvidence?: Array<{
+          kind?: string;
+          target?: string;
+          label?: string;
+          at?: string;
+        }>;
       },
     ) => {
       const runtimeDiagnosticSecrets = collectRuntimeDiagnosticSecrets(
@@ -3444,6 +3450,8 @@ async function executeAppFunction(
         routineContext: meta?.routineContext,
         flightAiExchanges: flightRecorderEnabled ? result.flightAi : undefined,
         flightDbTally: flightRecorderEnabled ? result.flightDb : undefined,
+        executionId,
+        flightEvidence: result.flightEvidence,
         widgetAction: meta?.widgetAction,
         agenticSurfaceAction: meta?.agenticSurfaceAction,
       });

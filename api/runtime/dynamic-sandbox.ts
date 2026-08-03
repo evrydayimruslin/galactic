@@ -1128,6 +1128,10 @@ globalThis.ultralight = {
   },
   // Owner notifications: one report to the CURRENT user's inbox bell. Kind,
   // identity, dedupe namespacing, and rate caps are enforced host-side.
+  // Pillar P0: app-claimed evidence for the effect witness. Free-form but
+  // clipped + capped in-sandbox; persisted at settlement as app_claimed —
+  // rendered as the app's own account, never as platform fact.
+  evidence(o) { try { var f = globalThis.__flight; if (f && f.evidence && f.evidence.length < 20) f.evidence.push({ kind: String((o && o.kind) || 'external_url').slice(0, 40), target: String((o && o.target) || '').slice(0, 500), label: String((o && o.label) || '').slice(0, 200), at: new Date().toISOString() }); } catch (_e) {} return Promise.resolve({ recorded: true }); },
   notify(o) { if (!${allowsNotify}) return Promise.reject(new Error('notification.owner.write authority not granted for this function.')); const e = __rpcEnv; return e.NOTIFY ? e.NOTIFY.notifyOwner(o || {}, globalThis.__execHandle) : Promise.reject(new Error('Notifications not available')); },
   compute: __galacticCompute,
   ai(r) { const e = __rpcEnv; if (!e.AI) return Promise.reject(new Error('galactic.ai unavailable: ai:call permission not granted or no authenticated user context.')); var __t0 = Date.now(); var __clip = function(v){ try { var s = typeof v === 'string' ? v : JSON.stringify(v); return s && s.length > 2000 ? s.slice(0, 2000) + '…[truncated]' : (s || ''); } catch (_e) { return ''; } }; var __rec = function(resp, errMsg){ try { var f = globalThis.__flight; if (f && f.ai && f.ai.length < 20) f.ai.push({ at: new Date().toISOString(), ms: Date.now() - __t0, model: (resp && resp.model) || (r && r.model) || null, cost_light: (resp && resp.usage && resp.usage.cost_light) || 0, prompt: __clip(r && r.messages), response: errMsg ? ('[error] ' + __clip(errMsg)) : __clip(resp && resp.content) }); } catch (_e) {} }; return e.AI.call(r, globalThis.__execHandle).then(function(resp){ if (resp && resp.error) { __rec(null, resp.error); var err = new Error('galactic.ai failed: ' + resp.error); if (resp.error_code) err.code = resp.error_code; throw err; } try { globalThis.__aiCostLight = (globalThis.__aiCostLight || 0) + ((resp && resp.usage && resp.usage.cost_light) || 0); } catch (_e) {} __rec(resp); return resp; }); },
@@ -1332,7 +1336,7 @@ export default {
     // prompt/response), returned in the result envelope. Persistence is the
     // HOST's decision (manifest flight_recorder + routine context) — capture
     // itself is unconditional so the baked module text never varies.
-    globalThis.__flight = { ai: [] };
+    globalThis.__flight = { ai: [], evidence: [] };
 
     const logs = [];
     const con = {
@@ -2033,7 +2037,15 @@ export default {
       // Flight capture (bounded, clipped in-sandbox): ai() exchanges for this
       // execution. Persisted host-side only when the app opted in via the
       // manifest flight_recorder flag and a routine context is present.
-      flight?: { ai?: FlightAiExchange[] };
+      flight?: {
+        ai?: FlightAiExchange[];
+        evidence?: Array<{
+          kind?: string;
+          target?: string;
+          label?: string;
+          at?: string;
+        }>;
+      };
       error?: {
         type: string;
         message: string;
@@ -2093,6 +2105,13 @@ export default {
       ...(testMode ? { observedEffects } : {}),
       ...(Array.isArray(data.flight?.ai) && data.flight.ai.length > 0
         ? { flightAi: data.flight.ai }
+        : {}),
+      // Evidence is a deliberate app call (galactic.evidence), not
+      // recorder telemetry — it flows regardless of ai activity or the
+      // flight_recorder manifest flag.
+      ...(Array.isArray(data.flight?.evidence) &&
+          data.flight.evidence.length > 0
+        ? { flightEvidence: data.flight.evidence }
         : {}),
       ...(flightDb ? { flightDb } : {}),
       ...(reuseKeyHash ? { reuseKeyHash } : {}),

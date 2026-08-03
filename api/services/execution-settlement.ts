@@ -400,6 +400,16 @@ export interface SettleAndLogAppExecutionParams {
   agenticSurfaceAction?: AgenticSurfaceActionCallMetadata;
   /** Actual private weighted work already settled against account capacity. */
   subscriptionCapacityLight?: number;
+  /** Pillar P0: the sandbox execution id the effect witness is keyed by. */
+  executionId?: string | null;
+  /** Pillar P0: app-claimed evidence captured in-sandbox (galactic.evidence),
+   * clipped + capped there; persisted as app_claimed effect events. */
+  flightEvidence?: Array<{
+    kind?: string;
+    target?: string;
+    label?: string;
+    at?: string;
+  }> | null;
 }
 
 interface ExecutionSettlementDeps {
@@ -1803,6 +1813,66 @@ export async function settleAndLogAppExecution(
     // await so the write is ordered and deterministic (tests, direct callers).
     if (ctx?.waitUntil) ctx.waitUntil(persistFlight);
     else await persistFlight;
+  }
+
+  // Pillar P0: drain this execution's witnessed effects (host-chokepoint
+  // taps collected in effect-event-tracker) plus in-sandbox app-claimed
+  // evidence, cap the stream with the function's own terminal event, and
+  // batch-persist off the response path. Best-effort by contract.
+  if (params.executionId) {
+    const { drainEffectEvents } = await import("./effect-event-tracker.ts");
+    const { persistEffectEvents } = await import("./effect-event-store.ts");
+    const drained = drainEffectEvents(params.executionId);
+    const witnessed = [...drained.events];
+    for (const item of (params.flightEvidence ?? []).slice(0, 20)) {
+      witnessed.push({
+        kind: "evidence",
+        channel: "galactic.evidence",
+        targetDigest: typeof item?.target === "string"
+          ? item.target.slice(0, 200)
+          : null,
+        outcome: typeof item?.label === "string"
+          ? item.label.slice(0, 200)
+          : null,
+        attestation: "app_claimed",
+        evidence: [{
+          kind: typeof item?.kind === "string"
+            ? item.kind.slice(0, 40)
+            : "external_url",
+          target: typeof item?.target === "string"
+            ? item.target.slice(0, 500)
+            : "",
+          label: typeof item?.label === "string"
+            ? item.label.slice(0, 200)
+            : "",
+        }],
+      });
+    }
+    witnessed.push({
+      kind: params.success ? "function_completed" : "function_failed",
+      channel: `function:${params.functionName}`,
+      outcome: params.success
+        ? `ok in ${params.durationMs}ms`
+        : (params.errorMessage ?? "failed").slice(0, 200),
+      attestation: "attested",
+    });
+    const persistWitness = persistEffectEvents({
+      userId: params.userId,
+      appId: params.app.id,
+      executionId: params.executionId,
+      runId:
+        (params.routineContext as { runId?: string } | null | undefined)
+          ?.runId ?? null,
+      receiptId: params.receiptId ?? null,
+      events: witnessed,
+    }).then(() => undefined).catch((err) => {
+      console.error("[WITNESS] settlement drain failed:", err);
+    });
+    const witnessCtx = (globalThis as {
+      __ctx?: { waitUntil?: (p: Promise<unknown>) => void };
+    }).__ctx;
+    if (witnessCtx?.waitUntil) witnessCtx.waitUntil(persistWitness);
+    else await persistWitness;
   }
 
   const routineStep = routineContribution ? await routineContribution : null;
