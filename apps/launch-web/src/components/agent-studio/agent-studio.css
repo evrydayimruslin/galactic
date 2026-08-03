@@ -2360,3 +2360,143 @@ body[data-agent-studio-theme="light"] .neb-modal-overlay .neb-modal {
 .agent-studio-approvals-resolved code {
   color: var(--ink);
 }
+
+/* Pillar P4: Directive tab — compiled policy compose/readback/history. */
+.agent-studio-directive-policy {
+  margin: 26px 0 0;
+}
+
+.agent-studio-directive-policy header h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.agent-studio-directive-policy header p {
+  margin: 0 0 14px;
+  max-width: 62ch;
+  color: var(--ink-3);
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+
+.agent-studio-directive-policy-error,
+.agent-studio-directive-policy-empty {
+  margin: 0 0 12px;
+  color: var(--ink-3);
+  font-size: 10.5px;
+}
+
+.agent-studio-directive-policy-notice {
+  margin: 0 0 12px;
+  padding: 8px 11px;
+  border: 1px solid var(--accent);
+  background: var(--accent-fill);
+  color: var(--ink);
+  font-size: 10.5px;
+}
+
+.agent-studio-directive-policy-head,
+.agent-studio-directive-policy-readback {
+  margin: 0 0 16px;
+  border: 1px solid var(--line);
+  padding: 12px 14px;
+}
+
+.agent-studio-directive-policy-head h4,
+.agent-studio-directive-policy-readback h4,
+.agent-studio-directive-policy-history h4 {
+  margin: 0 0 7px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.agent-studio-directive-policy-head ul,
+.agent-studio-directive-policy-readback ul {
+  margin: 0;
+  padding: 0 0 0 16px;
+  font-size: 11px;
+  color: var(--ink);
+  line-height: 1.6;
+}
+
+.agent-studio-directive-policy-compose {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 0 0 14px;
+}
+
+.agent-studio-directive-policy-compose textarea {
+  flex: 1;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 8px;
+}
+
+.agent-studio-directive-policy-compose button,
+.agent-studio-directive-policy-actions button {
+  padding: 5px 14px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.agent-studio-directive-policy-compose button:disabled,
+.agent-studio-directive-policy-actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.agent-studio-directive-policy-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.agent-studio-directive-policy-actions button:first-child {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+
+.agent-studio-directive-policy-meta {
+  margin: 8px 0;
+  font-size: 9.5px;
+  color: var(--ink-3);
+}
+
+.agent-studio-directive-policy-history ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+}
+
+.agent-studio-directive-policy-history li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 11px;
+  font-size: 10px;
+  color: var(--ink-3);
+}
+
+.agent-studio-directive-policy-history li + li {
+  border-top: 1px solid var(--line);
+}
+
+.agent-studio-approval-held-by {
+  margin: -4px 0 9px;
+  font-size: 10px;
+  color: var(--ink-3);
+}

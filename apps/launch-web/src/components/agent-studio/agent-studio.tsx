@@ -63,6 +63,7 @@ import {
 import { AgentStudioKnowledge } from "./agent-studio-knowledge";
 import { AgentStudioPolicies } from "./agent-studio-policies";
 import { AgentStudioApprovals } from "./agent-studio-approvals";
+import { AgentStudioDirectivePolicy } from "./agent-studio-directive-policy";
 import { AgentStudioShell } from "./agent-studio-shell";
 
 import "./agent-studio.css";
@@ -803,9 +804,13 @@ function AgentStudioPaneContent({
     );
   }
   if (pane === "directive") {
-    return home
-      ? <AgentStudioDirective home={home} onOpenPane={onOpenPane} />
-      : <StudioLoading error={live.data.agentHomeError} />;
+    if (!home) return <StudioLoading error={live.data.agentHomeError} />;
+    return (
+      <>
+        <AgentStudioDirective home={home} onOpenPane={onOpenPane} />
+        <AgentStudioDirectivePolicy agentLocator={agentLocator(agent)} />
+      </>
+    );
   }
   if (pane === "routines") {
     return (

@@ -74,6 +74,7 @@ import {
   evaluateAutonomousGate,
 } from "../services/policy-gate.ts";
 import { createApprovalEnvelope } from "../services/agent-approvals.ts";
+import { evaluateCompiledPredicates } from "../services/policy-predicates.ts";
 import { listAgentReleases } from "../services/app-releases-projection.ts";
 import { createQueuedJob } from "../services/async-jobs.ts";
 import {
@@ -1845,6 +1846,151 @@ async function handleToolsList(
 /**
  * Handle tools/call request - execute a tool
  */
+/**
+ * Pillar P2/P4 shared deny: a structured non-action for an autonomous call
+ * the gate refused — attested witness line, denied ledger row, and a
+ * jsonRpc error naming the deciding layer (I6). Never a silent drop.
+ */
+async function denyAutonomousCall(params: {
+  id: JsonRpcId;
+  app: App;
+  rawName: string;
+  userId: string;
+  callerContext: RequestCallerContext;
+  witnessOutcome: string;
+  witnessChannel: string;
+  ledgerMeta: Record<string, unknown>;
+  policyVersion?: number | null;
+  errorMessage: string;
+}): Promise<Response> {
+  const deniedExecutionId = crypto.randomUUID();
+  recordEffectEvent(deniedExecutionId, {
+    kind: "non_action",
+    channel: params.witnessChannel,
+    outcome: params.witnessOutcome,
+    attestation: "attested",
+  });
+  const drained = drainEffectEvents(deniedExecutionId);
+  await persistEffectEvents({
+    userId: params.userId,
+    appId: params.app.id,
+    executionId: deniedExecutionId,
+    runId: routineTraceContextFromCaller(params.callerContext)?.routineRunId ??
+      null,
+    events: drained.events,
+  }).catch(() => 0);
+  const serviceKey = getEnv("SUPABASE_SERVICE_ROLE_KEY");
+  await fetch(`${getEnv("SUPABASE_URL")}/rest/v1/async_jobs`, {
+    method: "POST",
+    headers: {
+      apikey: serviceKey,
+      Authorization: `Bearer ${serviceKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      app_id: params.app.id,
+      user_id: params.userId,
+      owner_id: params.app.owner_id,
+      function_name: params.rawName,
+      status: "denied",
+      args: {},
+      trigger: "schedule",
+      execution_id: deniedExecutionId,
+      policy_version: params.policyVersion ?? null,
+      resolved_at: new Date().toISOString(),
+      meta: params.ledgerMeta,
+    }),
+  }).catch((err) => {
+    console.error("[GATE] denied-ledger write failed:", err);
+  });
+  return jsonRpcErrorResponse(params.id, INVALID_PARAMS, params.errorMessage);
+}
+
+/**
+ * Pillar P3/P4 shared hold: park the call on a held job (full input,
+ * service plane) + file the owner-safe envelope, and return a structured
+ * held RESULT — pending work is not a failure. Used by the overlay's
+ * 'ask' and by compiled predicate holds; heldBy names the rule (I6).
+ */
+async function holdAutonomousCallForApproval(params: {
+  id: JsonRpcId;
+  app: App;
+  rawName: string;
+  args: Record<string, unknown>;
+  userId: string;
+  callerContext: RequestCallerContext;
+  facts: ReturnType<typeof declaredFunctionFactsFromApp>;
+  declarationHash: string | null;
+  policyRevision: string;
+  heldBy?: {
+    ruleId: string;
+    policyVersion: number;
+    readback: string;
+  } | null;
+  message: string;
+}): Promise<Response> {
+  const heldExecutionId = crypto.randomUUID();
+  const routineCtx = routineTraceContextFromCaller(params.callerContext);
+  const releases = await listAgentReleases(
+    params.app.owner_id,
+    params.app.id,
+  );
+  const release = releases[0] ?? null;
+  const executionPolicy = resolveFunctionExecutionPolicy(
+    params.app,
+    params.rawName,
+  );
+  const heldJobId = await createQueuedJob({
+    appId: params.app.id,
+    userId: params.userId,
+    ownerId: params.app.owner_id,
+    functionName: params.rawName,
+    args: params.args,
+    trigger: "schedule",
+    heldForApproval: true,
+    executionId: heldExecutionId,
+    meta: {
+      approvalHold: true,
+      executionTimeoutMs: executionPolicy.timeoutMs,
+      capacityAgentId:
+        params.callerContext.routineActor?.composerAppId ||
+        params.app.id,
+    },
+  });
+  const envelope = await createApprovalEnvelope({
+    appId: params.app.id,
+    userId: params.userId,
+    ownerId: params.app.owner_id,
+    jobId: heldJobId,
+    executionId: heldExecutionId,
+    functionName: params.rawName,
+    consequence: params.facts
+      ? classifyFunctionConsequence(params.facts)
+      : "external_side_effect",
+    args: params.args,
+    trigger: "schedule",
+    releaseId: release?.id ?? null,
+    releaseVersion: release?.version ?? null,
+    routineId: routineCtx?.routineId ?? null,
+    routineRunId: routineCtx?.routineRunId ?? null,
+    traceId: routineCtx?.traceId ?? null,
+    policyRevision: params.policyRevision,
+    declarationHash: params.declarationHash,
+    heldBy: params.heldBy ?? null,
+  });
+  return jsonRpcResponse(params.id, {
+    content: [{
+      type: "text",
+      text: JSON.stringify({
+        _held: true,
+        approval_id: envelope.id,
+        status: "pending",
+        message: params.message,
+      }),
+    }],
+  });
+}
+
 async function handleToolsCall(
   id: JsonRpcId,
   app: App,
@@ -2028,119 +2174,92 @@ async function handleToolsCall(
         currentDeclarationHash: gateDeclarationHash,
       });
       if (gateVerdict.verdict === "deny") {
-        const deniedExecutionId = crypto.randomUUID();
-        recordEffectEvent(deniedExecutionId, {
-          kind: "non_action",
-          channel: `policy:${rawName}`,
-          outcome: "denied: autonomous policy is Off",
-          attestation: "attested",
-        });
-        const drained = drainEffectEvents(deniedExecutionId);
-        await persistEffectEvents({
-          userId,
-          appId: app.id,
-          executionId: deniedExecutionId,
-          runId:
-            (callerContext.routineActor as { runId?: string } | undefined)
-              ?.runId ?? null,
-          events: drained.events,
-        }).catch(() => 0);
-        const serviceKey = getEnv("SUPABASE_SERVICE_ROLE_KEY");
-        await fetch(`${getEnv("SUPABASE_URL")}/rest/v1/async_jobs`, {
-          method: "POST",
-          headers: {
-            apikey: serviceKey,
-            Authorization: `Bearer ${serviceKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            app_id: app.id,
-            user_id: userId,
-            owner_id: app.owner_id,
-            function_name: rawName,
-            status: "denied",
-            args: {},
-            trigger: "schedule",
-            execution_id: deniedExecutionId,
-            policy_version: null,
-            resolved_at: new Date().toISOString(),
-            meta: { policy: "off", policy_revision: gateVerdict.revision },
-          }),
-        }).catch((err) => {
-          console.error("[GATE] denied-ledger write failed:", err);
-        });
-        return jsonRpcErrorResponse(
+        return await denyAutonomousCall({
           id,
-          INVALID_PARAMS,
-          `POLICY_OFF: the owner set ${rawName} to Off for autonomous runs. ` +
+          app,
+          rawName,
+          userId,
+          callerContext,
+          witnessChannel: `policy:${rawName}`,
+          witnessOutcome: "denied: autonomous policy is Off",
+          ledgerMeta: { policy: "off", policy_revision: gateVerdict.revision },
+          errorMessage:
+            `POLICY_OFF: the owner set ${rawName} to Off for autonomous runs. ` +
             "The call was recorded as a deliberate non-action.",
-        );
+        });
       }
       if (gateVerdict.verdict === "hold") {
-        // Pillar P3: 'ask' parks the call behind an approval envelope. The
-        // full input goes on a held async_jobs row (service plane); the
-        // owner sees only the sanitized envelope. Approval flips the row
-        // held->queued and the ordinary durable consumer executes it —
-        // the wake itself continues with a structured held result rather
-        // than an error (pending work is not a failure).
-        const heldExecutionId = crypto.randomUUID();
-        const routineCtx = routineTraceContextFromCaller(callerContext);
-        const facts = gateFacts;
-        const releases = await listAgentReleases(app.owner_id, app.id);
-        const release = releases[0] ?? null;
-        const executionPolicy = resolveFunctionExecutionPolicy(app, rawName);
-        const heldJobId = await createQueuedJob({
-          appId: app.id,
-          userId,
-          ownerId: app.owner_id,
-          functionName: rawName,
+        // Pillar P3: 'ask' parks the call behind an approval envelope; the
+        // wake continues with a structured held result.
+        return await holdAutonomousCallForApproval({
+          id,
+          app,
+          rawName,
           args: (args ?? {}) as Record<string, unknown>,
-          trigger: "schedule",
-          heldForApproval: true,
-          executionId: heldExecutionId,
-          meta: {
-            approvalHold: true,
-            executionTimeoutMs: executionPolicy.timeoutMs,
-            capacityAgentId: callerContext.routineActor?.composerAppId ||
-              app.id,
-          },
-        });
-        const envelope = await createApprovalEnvelope({
-          appId: app.id,
           userId,
-          ownerId: app.owner_id,
-          jobId: heldJobId,
-          executionId: heldExecutionId,
-          functionName: rawName,
-          consequence: facts
-            ? classifyFunctionConsequence(facts)
-            : "external_side_effect",
-          args: (args ?? {}) as Record<string, unknown>,
-          trigger: "schedule",
-          releaseId: release?.id ?? null,
-          releaseVersion: release?.version ?? null,
-          routineId: routineCtx?.routineId ?? null,
-          routineRunId: routineCtx?.routineRunId ?? null,
-          traceId: routineCtx?.traceId ?? null,
-          policyRevision: gateVerdict.revision ?? "",
+          callerContext,
+          facts: gateFacts,
           declarationHash: gateDeclarationHash,
+          policyRevision: gateVerdict.revision ?? "",
+          message: gateVerdict.declarationChanged
+            ? `'${rawName}' was redeclared since its policy was set — ` +
+              "the call is held for the owner to re-confirm. Do not " +
+              "retry it this wake."
+            : `'${rawName}' is set to Ask. The call is held for the ` +
+              "owner's approval and will run if approved. Do not retry " +
+              "it this wake.",
         });
-        return jsonRpcResponse(id, {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              _held: true,
-              approval_id: envelope.id,
-              status: "pending",
-              message: gateVerdict.declarationChanged
-                ? `'${rawName}' was redeclared since its policy was set — ` +
-                  "the call is held for the owner to re-confirm. Do not " +
-                  "retry it this wake."
-                : `'${rawName}' is set to Ask. The call is held for the ` +
-                  "owner's approval and will run if approved. Do not retry " +
-                  "it this wake.",
-            }),
-          }],
+      }
+      // Pillar P4: compiled predicates evaluate after the overlay allows
+      // (doc §4 order). First matching rule wins; effects only narrow.
+      const predicateVerdict = await evaluateCompiledPredicates({
+        appId: app.id,
+        functionName: rawName,
+        args: (args ?? {}) as Record<string, unknown>,
+      });
+      if (predicateVerdict?.effect === "deny") {
+        return await denyAutonomousCall({
+          id,
+          app,
+          rawName,
+          userId,
+          callerContext,
+          witnessChannel: `policy:rule:${predicateVerdict.ruleId}`,
+          witnessOutcome:
+            `denied by policy rule ${predicateVerdict.ruleId} ` +
+            `(v${predicateVerdict.policyVersion})`,
+          ledgerMeta: {
+            policy: "rule",
+            rule_id: predicateVerdict.ruleId,
+            policy_version: predicateVerdict.policyVersion,
+          },
+          policyVersion: predicateVerdict.policyVersion,
+          errorMessage:
+            `POLICY_RULE: a compiled policy forbids this call — ` +
+            `${predicateVerdict.readback} It was recorded as a deliberate ` +
+            "non-action.",
+        });
+      }
+      if (predicateVerdict?.effect === "hold") {
+        return await holdAutonomousCallForApproval({
+          id,
+          app,
+          rawName,
+          args: (args ?? {}) as Record<string, unknown>,
+          userId,
+          callerContext,
+          facts: gateFacts,
+          declarationHash: gateDeclarationHash,
+          policyRevision:
+            `policyset:v${predicateVerdict.policyVersion}:${predicateVerdict.ruleId}`,
+          heldBy: {
+            ruleId: predicateVerdict.ruleId,
+            policyVersion: predicateVerdict.policyVersion,
+            readback: predicateVerdict.readback,
+          },
+          message:
+            `A compiled policy holds this call for the owner's approval — ` +
+            `${predicateVerdict.readback} Do not retry it this wake.`,
         });
       }
     } catch (gateErr) {

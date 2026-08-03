@@ -815,6 +815,110 @@ export type LaunchApprovalActionRequest =
     action: "reject";
   };
 
+/**
+ * Pillar P4: compiled policy predicates. Deterministic, schema-validated
+ * rules produced from the owner's sentences by THEIR model (I8), approved
+ * via a code-rendered readback, and stored as immutable versions. Effects
+ * can only narrow (hold | deny) — there is no allow effect by construction
+ * (I1).
+ */
+export const LAUNCH_POLICY_RULE_OPS = [
+  "eq",
+  "neq",
+  "gt",
+  "gte",
+  "lt",
+  "lte",
+  "contains",
+  "in",
+  "exists",
+  "absent",
+] as const;
+
+export type LaunchPolicyRuleOp = typeof LAUNCH_POLICY_RULE_OPS[number];
+
+export const LAUNCH_POLICY_RULE_EFFECTS = ["hold", "deny"] as const;
+
+export type LaunchPolicyRuleEffect = typeof LAUNCH_POLICY_RULE_EFFECTS[number];
+
+export type LaunchPolicyScalar = string | number | boolean;
+
+export interface LaunchPolicyRuleCondition {
+  /** Dot path into the function's declared args (e.g. "amount"). */
+  path: string;
+  op: LaunchPolicyRuleOp;
+  /** Absent for exists/absent. */
+  value?: LaunchPolicyScalar | LaunchPolicyScalar[];
+}
+
+export interface LaunchPolicyRule {
+  id: string;
+  functionName: string;
+  effect: LaunchPolicyRuleEffect;
+  /** AND of 1–4 conditions; OR = separate rules. First matching rule wins. */
+  when: LaunchPolicyRuleCondition[];
+  /** Short paraphrase of the source clause (compiler-authored). */
+  note?: string | null;
+}
+
+export interface LaunchPolicyArtifact {
+  version: 1;
+  rules: LaunchPolicyRule[];
+}
+
+export interface LaunchPolicySourceEntry {
+  text: string;
+  ruleIds: string[];
+}
+
+export interface LaunchAgentPolicySet {
+  version: number;
+  source: LaunchPolicySourceEntry[];
+  artifact: LaunchPolicyArtifact;
+  /** Deterministic code-template rendering — derived, never stored. */
+  readback: string[];
+  compileModel: string;
+  createdAt: string;
+}
+
+export interface LaunchAgentPolicySetSummary {
+  version: number;
+  createdAt: string;
+  compileModel: string;
+  ruleCount: number;
+}
+
+export interface LaunchAgentPolicySetsResponse {
+  agent: LaunchAgentHandle;
+  head: LaunchAgentPolicySet | null;
+  versions: LaunchAgentPolicySetSummary[];
+  generatedAt: string;
+}
+
+export interface LaunchPolicyCompileRequest {
+  text: string;
+}
+
+export interface LaunchPolicyCompileResponse {
+  artifact: LaunchPolicyArtifact;
+  source: LaunchPolicySourceEntry[];
+  readback: string[];
+  compileModel: string;
+  generatedAt: string;
+}
+
+export interface LaunchPolicySetApproveRequest {
+  artifact: LaunchPolicyArtifact;
+  source: LaunchPolicySourceEntry[];
+  /** Head-version CAS: 0 when no version exists yet. */
+  expectedHeadVersion: number;
+}
+
+export interface LaunchPolicySetApproveResponse {
+  policySet: LaunchAgentPolicySet;
+  generatedAt: string;
+}
+
 /** GET /api/launch/agents/{id}/approvals — envelopes, newest first (P3). */
 export interface LaunchAgentApprovalsResponse {
   agent: LaunchAgentHandle;
