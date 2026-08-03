@@ -2,6 +2,7 @@ import {
   type FormEvent,
   type ReactElement,
   useEffect,
+  useRef,
   useState,
 } from "react";
 
@@ -20,6 +21,7 @@ export function AgentStudioActivity({
   activity,
   agentLocator,
   canRunNow = false,
+  itemId,
   loading,
   newAgent = false,
   onLoadMore,
@@ -30,6 +32,8 @@ export function AgentStudioActivity({
   /** Agent id/slug for lazy run-detail fetches; detail is hidden without it. */
   agentLocator?: string;
   canRunNow?: boolean;
+  /** Deep-linked target: an activity item id or a bare routine-run id. */
+  itemId?: string;
   hasMore: boolean;
   loading: boolean;
   newAgent?: boolean;
@@ -45,6 +49,20 @@ export function AgentStudioActivity({
       ...(activity?.now ?? []),
       ...(activity?.recent ?? []),
     ];
+  const focusTargetId = activityFocusTargetId(items, itemId);
+  const consumedFocus = useRef<string | null>(null);
+  // Expand and reveal the linked run once per deep link; afterwards the
+  // reader keeps normal control (collapsing it must not re-trigger).
+  useEffect(() => {
+    if (!itemId || !focusTargetId) return;
+    if (consumedFocus.current === itemId) return;
+    consumedFocus.current = itemId;
+    setExpanded(focusTargetId);
+    document.getElementById(activityRowDomId(focusTargetId))?.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+  }, [focusTargetId, itemId]);
   const visibleItems = items.filter((item) =>
     matchesActivityFilter(item, filter)
   );
@@ -88,6 +106,7 @@ export function AgentStudioActivity({
             expanded={expanded === item.id}
             item={item}
             key={item.id}
+            linked={focusTargetId === item.id}
             onToggle={() =>
               setExpanded((current) => current === item.id ? null : item.id)}
           />
@@ -151,6 +170,28 @@ export function AgentStudioActivity({
 }
 
 type ActivityFilter = "all" | "needed_you" | "changed" | "failed";
+
+/**
+ * Resolve an Activity deep link to the activity item it names. Accepts the
+ * full item id and the bare routine-run id — the form stored search-index
+ * run links carry (they predate the Activity pane and arrive via the
+ * compute→activity route alias). Compute-run ids never appear in this feed,
+ * so those links resolve to null and the list renders unfocused.
+ */
+export function activityFocusTargetId(
+  items: readonly LaunchAgentActivityItem[],
+  itemId: string | undefined,
+): string | null {
+  if (!itemId) return null;
+  const match = items.find((entry) =>
+    entry.id === itemId || activityRunId(entry) === itemId
+  );
+  return match?.id ?? null;
+}
+
+function activityRowDomId(itemId: string): string {
+  return `agent-studio-activity-${itemId}`;
+}
 
 export function matchesActivityFilter(
   item: LaunchAgentActivityItem,
@@ -524,17 +565,24 @@ function StudioActivityRun({
   agentLocator,
   expanded,
   item,
+  linked = false,
   onToggle,
 }: {
   agentLocator?: string;
   expanded: boolean;
   item: LaunchAgentActivityItem;
+  linked?: boolean;
   onToggle: () => void;
 }): ReactElement {
   const occurredAt = item.occurredAt ?? item.scheduledAt;
   const runId = activityRunId(item);
   return (
-    <article className={`agent-studio-activity-run${expanded ? " open" : ""}`}>
+    <article
+      className={`agent-studio-activity-run${expanded ? " open" : ""}${
+        linked ? " linked" : ""
+      }`}
+      id={activityRowDomId(item.id)}
+    >
       <button
         aria-expanded={expanded}
         className="agent-studio-activity-run-summary"
