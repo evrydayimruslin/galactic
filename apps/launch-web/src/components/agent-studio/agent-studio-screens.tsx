@@ -11,6 +11,7 @@ import type {
   LaunchAgentCapacityResponse,
   LaunchAgentHomeResponse,
   LaunchOperatorRoutineRunDetail,
+  LaunchRunEffectEvent,
 } from "../../../../../shared/contracts/launch.ts";
 import type { AgentStudioPane } from "../../lib/agent-studio-route";
 import { launchApi } from "../../lib/api";
@@ -390,19 +391,6 @@ export function AgentStudioContractBoundary({
   );
 }
 
-export function AgentStudioCapabilitiesIntro(): ReactElement {
-  return (
-    <div className="agent-studio-capabilities-intro">
-      <strong>Autonomous controls are not available for this Agent.</strong>
-      <p>
-        The published functions below manage which connected Agents may call
-        this Agent. They do not grant this Agent permission to act during its
-        own wakes.
-      </p>
-    </div>
-  );
-}
-
 /** Activity items derived from routine runs carry a `run:{uuid}` id. */
 function activityRunId(item: LaunchAgentActivityItem): string | null {
   if (typeof item.id === "string" && item.id.startsWith("run:")) {
@@ -457,6 +445,7 @@ export function StudioRunSteps({
           </ol>
         )
         : <p>No function calls were recorded for this run.</p>}
+      <StudioRunEffects effects={detail.effects ?? []} />
       <p className="agent-studio-run-steps-footer">
         {detail.run.summary ? `${detail.run.summary} · ` : ""}
         Usage {detail.run.usage}
@@ -466,6 +455,85 @@ export function StudioRunSteps({
           }`
           : ""}
       </p>
+    </div>
+  );
+}
+
+/** Pillar P0: the run's witnessed effect stream, grouped by honesty grade.
+ * Attested/observed = the platform's own account of what changed in the
+ * world; non_action = what it deliberately did not do; app_claimed =
+ * evidence the app attached (labeled as its own account). */
+export function StudioRunEffects({
+  effects,
+}: {
+  effects: LaunchRunEffectEvent[];
+}): ReactElement | null {
+  if (!effects || effects.length === 0) return null;
+  const changed = effects.filter(
+    (e) =>
+      (e.attestation === "attested" || e.attestation === "observed") &&
+      e.kind !== "non_action" &&
+      !e.kind.startsWith("function_"),
+  );
+  const nonActions = effects.filter((e) => e.kind === "non_action");
+  const claimed = effects.filter((e) => e.attestation === "app_claimed");
+  return (
+    <div className="agent-studio-run-effects">
+      {changed.length > 0
+        ? (
+          <>
+            <div className="agent-studio-section-label">
+              What changed in the world
+            </div>
+            <ul>
+              {changed.map((event) => (
+                <li key={`${event.executionId}:${event.seq}`}>
+                  <code>{event.channel ?? event.kind}</code>
+                  <span>{event.outcome ?? event.kind}</span>
+                  <em data-attestation={event.attestation}>
+                    {event.attestation}
+                  </em>
+                </li>
+              ))}
+            </ul>
+          </>
+        )
+        : null}
+      {nonActions.length > 0
+        ? (
+          <>
+            <div className="agent-studio-section-label">
+              What it decided not to do
+            </div>
+            <ul>
+              {nonActions.map((event) => (
+                <li key={`${event.executionId}:${event.seq}`}>
+                  <span>{event.outcome ?? "no action"}</span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )
+        : null}
+      {claimed.length > 0
+        ? (
+          <>
+            <div className="agent-studio-section-label">
+              Evidence (the agent's own account)
+            </div>
+            <ul>
+              {claimed.map((event) => (
+                <li key={`${event.executionId}:${event.seq}`}>
+                  <span>{event.outcome ?? "evidence"}</span>
+                  {event.targetDigest
+                    ? <small>{event.targetDigest}</small>
+                    : null}
+                </li>
+              ))}
+            </ul>
+          </>
+        )
+        : null}
     </div>
   );
 }

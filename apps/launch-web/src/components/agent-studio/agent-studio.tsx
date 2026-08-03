@@ -56,12 +56,13 @@ import {
 } from "./agent-studio-routines";
 import {
   AgentStudioActivity,
-  AgentStudioCapabilitiesIntro,
   AgentStudioContractBoundary,
   AgentStudioDirective,
   AgentStudioLimits,
 } from "./agent-studio-screens";
 import { AgentStudioKnowledge } from "./agent-studio-knowledge";
+import { AgentStudioPolicies } from "./agent-studio-policies";
+import { AgentStudioApprovals } from "./agent-studio-approvals";
 import {
   AgentStudioShell,
   type AgentStudioTheme,
@@ -755,20 +756,7 @@ function AgentStudioPaneContent({
     );
   }
   if (pane === "approvals") {
-    return (
-      <AgentStudioContractBoundary
-        body="Use the Agent’s published Interfaces for approval workflows it owns today. Galactic will show held work here once it can safely present the proposed action and resume the exact run."
-        description="Work the Agent deliberately stopped before changing the world."
-        details={[
-          "What prompted the held action",
-          "What the Agent proposes to do",
-          "Approve, revise, or reject",
-        ]}
-        eyebrow="Not available for this Agent"
-        heading="No Studio approvals are available yet."
-        title="Approvals"
-      />
-    );
+    return <AgentStudioApprovals agentLocator={agentLocator(agent)} />;
   }
   if (pane === "activity") {
     return (
@@ -845,7 +833,7 @@ function AgentStudioPaneContent({
   if (pane === "capabilities") {
     return (
       <section className="agent-studio-screen agent-studio-legacy-screen">
-        <AgentStudioCapabilitiesIntro />
+        <AgentStudioPolicies agentLocator={agentLocator(agent)} />
         <FunctionsPane
           agent={agent}
           functions={live.data.agentFunctions}

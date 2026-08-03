@@ -25,7 +25,13 @@ import type {
   LaunchAgentHomeResponse,
   LaunchAgentKnowledgeAnswerRequest,
   LaunchAgentKnowledgeFact,
+  LaunchApprovalActionRequest,
+  LaunchAutonomousFunctionPolicyUpdateRequest,
   LaunchAgentKnowledgeFactUpsertRequest,
+  LaunchAgentApprovalActionResponse,
+  LaunchAgentApprovalsResponse,
+  LaunchAgentFunctionPoliciesResponse,
+  LaunchAgentFunctionPolicyUpdateResponse,
   LaunchAgentKnowledgeProjection,
   LaunchAgentKnowledgeQuestion,
   LaunchAgentReleasesResponse,
@@ -522,6 +528,50 @@ export class LaunchApiClient {
         encodeURIComponent(slug)
       }`,
       { method: "POST", body: JSON.stringify(request) },
+    );
+  }
+
+  /** Pillar P3: approval envelopes for runs held by an 'ask' policy. */
+  agentApprovals(idOrSlug: string): Promise<LaunchAgentApprovalsResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/approvals`,
+    );
+  }
+
+  /** Resolve one envelope (approve | revise | reject) under CAS. */
+  resolveAgentApproval(
+    idOrSlug: string,
+    approvalId: string,
+    request: LaunchApprovalActionRequest,
+  ): Promise<LaunchAgentApprovalActionResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/approvals/${
+        encodeURIComponent(approvalId)
+      }`,
+      { method: "POST", body: JSON.stringify(request) },
+    );
+  }
+
+  /** Pillar P2: autonomous policy overlay, defaults merged over the release. */
+  agentFunctionPolicies(
+    idOrSlug: string,
+  ): Promise<LaunchAgentFunctionPoliciesResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/policies`,
+    );
+  }
+
+  /** Full-congruence CAS write; 409 carries `current` for reconcile. */
+  setAgentFunctionPolicy(
+    idOrSlug: string,
+    functionName: string,
+    request: LaunchAutonomousFunctionPolicyUpdateRequest,
+  ): Promise<LaunchAgentFunctionPolicyUpdateResponse> {
+    return this.fetchJson(
+      `/api/launch/agents/${encodeURIComponent(idOrSlug)}/policies/${
+        encodeURIComponent(functionName)
+      }`,
+      { method: "PUT", body: JSON.stringify(request) },
     );
   }
 

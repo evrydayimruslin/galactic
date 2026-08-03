@@ -88,6 +88,15 @@
     },
     {
       "exports": [
+        "APPROVAL_TTL_MS"
+      ],
+      "file": "services/agent-approvals.ts",
+      "types": [
+        "ResolveApprovalDeps"
+      ]
+    },
+    {
+      "exports": [
         "AgentCallerContextError"
       ],
       "file": "services/agent-caller-context.ts",
@@ -826,6 +835,21 @@
       ]
     },
     {
+      "file": "services/effect-event-store.ts",
+      "types": [
+        "PersistEffectEventsInput"
+      ]
+    },
+    {
+      "exports": [
+        "_effectTrackerSize"
+      ],
+      "file": "services/effect-event-tracker.ts",
+      "types": [
+        "DrainedEffects"
+      ]
+    },
+    {
       "file": "services/embed-bridge.ts",
       "types": [
         "EmbedBridgeAudience",
@@ -1438,6 +1462,18 @@
         "ValidatedWalletFundingPayload",
         "ValidatedWireFundingPayload",
         "ValidatedWithdrawalPayload"
+      ]
+    },
+    {
+      "exports": [
+        "listFunctionPolicies"
+      ],
+      "file": "services/policy-gate.ts",
+      "types": [
+        "AutonomousFunctionPolicy",
+        "DeclaredFunctionFacts",
+        "FunctionPolicyRow",
+        "GateVerdict"
       ]
     },
     {

@@ -353,6 +353,13 @@ export interface ExecutionResult {
   // ran; persisted at settlement when manifest flight_recorder is on and the
   // run has a routine context.
   flightDb?: DbDiffTally;
+  /** Pillar P0: in-sandbox galactic.evidence() captures (app-claimed). */
+  flightEvidence?: Array<{
+    kind?: string;
+    target?: string;
+    label?: string;
+    at?: string;
+  }>;
 }
 
 // ============================================

@@ -81,6 +81,41 @@ function runDetailFixture(): LaunchOperatorRoutineRunDetail {
       functionName: "send_reply",
       createdAt: "2026-08-01T14:32:04.000Z",
     }],
+    effects: [
+      {
+        executionId: "exec-1",
+        seq: 0,
+        kind: "db_mutation",
+        channel: "d1:conversations",
+        targetDigest: null,
+        outcome: "insert:1",
+        attestation: "attested",
+        evidence: [],
+        createdAt: "2026-08-01T14:32:02.000Z",
+      },
+      {
+        executionId: "exec-1",
+        seq: 1,
+        kind: "non_action",
+        channel: null,
+        targetDigest: null,
+        outcome: "Did not reply to 2 automatic acknowledgements",
+        attestation: "attested",
+        evidence: [],
+        createdAt: "2026-08-01T14:32:03.000Z",
+      },
+      {
+        executionId: "exec-1",
+        seq: 2,
+        kind: "evidence",
+        channel: "galactic.evidence",
+        targetDigest: "conv:8841",
+        outcome: "Sent the reply",
+        attestation: "app_claimed",
+        evidence: [],
+        createdAt: "2026-08-01T14:32:04.000Z",
+      },
+    ],
     generatedAt: "2026-08-01T14:32:05.000Z",
   } as unknown as LaunchOperatorRoutineRunDetail;
 }
@@ -100,6 +135,12 @@ describe("Studio run steps (WO-3 thin slice)", () => {
     expect(markup).toContain("SMTP refused the send on the first attempt.");
     expect(markup).toContain("Checked the inbox, drafted 2 replies, sent 1.");
     expect(markup).toContain("1 log receipt");
+    // Pillar P0: the witnessed effect stream renders, honesty-labeled.
+    expect(markup).toContain("What changed in the world");
+    expect(markup).toContain("insert:1");
+    expect(markup).toContain("What it decided not to do");
+    expect(markup).toContain("automatic acknowledgements");
+    expect(markup).toContain("the agent&#x27;s own account");
     // The owner-safe projection has no argument/result content to leak.
     expect(markup).not.toContain("args");
   });

@@ -1164,8 +1164,7 @@
   margin-top: 18px;
 }
 
-.agent-studio-contract-note,
-.agent-studio-capabilities-intro {
+.agent-studio-contract-note {
   margin-top: 24px;
   padding: 11px 13px;
   border: 1px solid var(--line);
@@ -1395,17 +1394,6 @@
   content: "—";
 }
 
-.agent-studio-capabilities-intro {
-  margin: 0 0 22px;
-  border-color: var(--accent);
-  background: var(--accent-fill);
-}
-
-.agent-studio-capabilities-intro strong {
-  color: var(--ink);
-  font-family: var(--display);
-  font-size: 12px;
-}
 
 .agent-studio-capabilities-intro p {
   margin: 4px 0 0;
@@ -2109,4 +2097,307 @@ body[data-agent-studio-theme="light"] .neb-modal-overlay .neb-modal {
 .agent-studio-concepts-error {
   font-size: 0.9em;
   opacity: 0.85;
+}
+
+/* Pillar P2: the autonomous policy panel (Capabilities pane). */
+.agent-studio-policies {
+  margin: 0 0 26px;
+}
+
+.agent-studio-policies-header h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.agent-studio-policies-header p {
+  margin: 0 0 14px;
+  max-width: 62ch;
+  color: var(--ink-3);
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+
+.agent-studio-policies-notice {
+  margin: 0 0 12px;
+  padding: 8px 11px;
+  border: 1px solid var(--accent);
+  background: var(--accent-fill);
+  color: var(--ink);
+  font-size: 10.5px;
+}
+
+.agent-studio-policies-error,
+.agent-studio-policies-empty {
+  margin: 0 0 12px;
+  color: var(--ink-3);
+  font-size: 10.5px;
+}
+
+.agent-studio-policies-group {
+  margin: 0 0 16px;
+}
+
+.agent-studio-policies-group h4 {
+  margin: 0 0 6px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.agent-studio-policies-group ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+}
+
+.agent-studio-policies-group li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+}
+
+.agent-studio-policies-group li + li {
+  border-top: 1px solid var(--line);
+}
+
+.agent-studio-policies-fn {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.agent-studio-policies-fn code {
+  font-size: 11px;
+  color: var(--ink);
+}
+
+.agent-studio-policies-audit,
+.agent-studio-policies-ask-note {
+  color: var(--ink-3);
+  font-size: 9.5px;
+}
+
+.agent-studio-policies-toggle {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  flex: none;
+}
+
+.agent-studio-policies-toggle button {
+  padding: 4px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.agent-studio-policies-toggle button + button {
+  border-left: 1px solid var(--line);
+}
+
+.agent-studio-policies-toggle button[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.agent-studio-policies-toggle button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* Pillar P3: the Approvals pane — held work as owner-safe cards. */
+.agent-studio-approvals-header h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.agent-studio-approvals-header p {
+  margin: 0 0 16px;
+  max-width: 62ch;
+  color: var(--ink-3);
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+
+.agent-studio-approvals-notice {
+  margin: 0 0 12px;
+  padding: 8px 11px;
+  border: 1px solid var(--accent);
+  background: var(--accent-fill);
+  color: var(--ink);
+  font-size: 10.5px;
+}
+
+.agent-studio-approvals-error,
+.agent-studio-approvals-empty {
+  margin: 0 0 12px;
+  color: var(--ink-3);
+  font-size: 10.5px;
+}
+
+.agent-studio-approvals-pending {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 14px;
+}
+
+.agent-studio-approval-card {
+  border: 1px solid var(--line);
+  padding: 13px 15px;
+  background: var(--fill);
+}
+
+.agent-studio-approval-eyebrow {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 7px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.agent-studio-approval-card h4 {
+  margin: 0 0 9px;
+  font-size: 12.5px;
+  color: var(--ink);
+}
+
+.agent-studio-approval-proposal {
+  margin: 0 0 11px;
+  display: grid;
+  gap: 4px;
+}
+
+.agent-studio-approval-proposal div {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.agent-studio-approval-proposal dt {
+  flex: none;
+  min-width: 88px;
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.agent-studio-approval-proposal dd {
+  margin: 0;
+  font-size: 11px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.agent-studio-approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-studio-approval-actions button {
+  padding: 5px 14px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.agent-studio-approval-actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.agent-studio-approval-approve {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+
+.agent-studio-approval-reject {
+  color: var(--ink-3);
+}
+
+.agent-studio-approval-stop-asking {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 9.5px;
+  color: var(--ink-3);
+}
+
+.agent-studio-approval-edit textarea {
+  width: 100%;
+  margin: 0 0 8px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 8px;
+}
+
+.agent-studio-approval-expiry {
+  margin: 9px 0 0;
+  font-size: 9.5px;
+  color: var(--ink-3);
+}
+
+.agent-studio-approvals-resolved {
+  margin-top: 20px;
+}
+
+.agent-studio-approvals-resolved h4 {
+  margin: 0 0 7px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.agent-studio-approvals-resolved ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+}
+
+.agent-studio-approvals-resolved li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 11px;
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+.agent-studio-approvals-resolved li + li {
+  border-top: 1px solid var(--line);
+}
+
+.agent-studio-approvals-resolved code {
+  color: var(--ink);
 }

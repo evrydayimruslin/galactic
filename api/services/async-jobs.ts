@@ -5,7 +5,7 @@
 // pipeline, and finishes it 'completed'/'failed'. State lives in Supabase;
 // the queue message carries only { jobId }.
 
-import { getEnv } from "../lib/env.ts";
+import { getExecQueue, getEnv } from "../lib/env.ts";
 
 function supabaseHeaders() {
   return {
@@ -221,6 +221,16 @@ export async function createQueuedJob(params: {
    * a duplicate send heals the "insert landed, send crashed" window.
    */
   clientInvocationId?: string | null;
+  /** Pillar P1: how this invocation was initiated. */
+  trigger?: "interface" | "schedule" | "manual" | "event" | "retry" | null;
+  /**
+   * Pillar P3: park the row as 'held' (approval-gated) instead of 'queued'.
+   * A held row is invisible to the consumer's queued-only claim; approval
+   * flips it to queued through the same filter (exactly-once resumption).
+   */
+  heldForApproval?: boolean;
+  /** Pillar P3: caller-minted execution id (links envelope <-> job). */
+  executionId?: string | null;
 }): Promise<string> {
   const jobId = crypto.randomUUID();
 
@@ -233,15 +243,19 @@ export async function createQueuedJob(params: {
       user_id: params.userId,
       owner_id: params.ownerId,
       function_name: params.functionName,
-      status: "queued",
+      status: params.heldForApproval ? "held" : "queued",
+      ...(params.heldForApproval
+        ? { held_at: new Date().toISOString() }
+        : {}),
       args: params.args ?? {},
       caller_app_id: params.callerAppId ?? null,
       caller_grant_id: params.callerGrantId ?? null,
       hop: params.hop ?? null,
       client_invocation_id: params.clientInvocationId ?? null,
+      trigger: params.trigger ?? null,
       // Reused as the sandbox executionId on claim, linking job <-> receipt
       // <-> AI-spend ledger.
-      execution_id: crypto.randomUUID(),
+      execution_id: params.executionId ?? crypto.randomUUID(),
       meta: {
         ...(params.meta || {}),
         // A durable queued row starts with one accepted producer write. The
@@ -741,4 +755,94 @@ async function loadResultFromR2(key: string): Promise<unknown> {
   );
   if (!res.ok) return null;
   return res.json();
+}
+
+/**
+ * Pillar P3: replace a held job's input before resumption (owner revise).
+ * Guarded on status 'held' — once resumed or denied, the input is sealed.
+ */
+export async function reviseHeldJobArgs(
+  jobId: string,
+  args: Record<string, unknown>,
+): Promise<boolean> {
+  const res = await fetch(
+    `${
+      getEnv("SUPABASE_URL")
+    }/rest/v1/async_jobs?id=eq.${jobId}&status=eq.held`,
+    {
+      method: "PATCH",
+      headers: { ...supabaseHeaders(), Prefer: "return=representation" },
+      body: JSON.stringify({ args }),
+    },
+  );
+  if (!res.ok) {
+    await res.body?.cancel();
+    return false;
+  }
+  return ((await res.json()) as unknown[]).length > 0;
+}
+
+/**
+ * Pillar P3: held -> queued CAS + queue delivery. The status filter is the
+ * exactly-once guard (I9): only one resumer wins the flip, and the consumer
+ * dedupes deliveries through its own queued -> running claim. Returns false
+ * when the job was not held (already resumed, denied, or gone).
+ */
+export async function resumeHeldJob(jobId: string): Promise<boolean> {
+  const res = await fetch(
+    `${
+      getEnv("SUPABASE_URL")
+    }/rest/v1/async_jobs?id=eq.${jobId}&status=eq.held`,
+    {
+      method: "PATCH",
+      headers: { ...supabaseHeaders(), Prefer: "return=representation" },
+      body: JSON.stringify({
+        status: "queued",
+        resolved_at: new Date().toISOString(),
+      }),
+    },
+  );
+  if (!res.ok) {
+    await res.body?.cancel();
+    return false;
+  }
+  const flipped = ((await res.json()) as unknown[]).length > 0;
+  if (!flipped) return false;
+  const queue = getExecQueue();
+  if (queue) {
+    try {
+      await queue.send({ jobId });
+    } catch (err) {
+      // The row is queued; a lost send is healed by any later re-send for
+      // the same id (the consumer's claim dedupes).
+      console.error("[APPROVALS] EXEC_QUEUE send failed after resume:", err);
+    }
+  } else {
+    console.warn(
+      "[APPROVALS] no EXEC_QUEUE bound; resumed job waits for a consumer",
+    );
+  }
+  return true;
+}
+
+/** Pillar P3: held -> denied (owner rejected). Idempotent by status filter. */
+export async function denyHeldJob(jobId: string): Promise<boolean> {
+  const res = await fetch(
+    `${
+      getEnv("SUPABASE_URL")
+    }/rest/v1/async_jobs?id=eq.${jobId}&status=eq.held`,
+    {
+      method: "PATCH",
+      headers: { ...supabaseHeaders(), Prefer: "return=representation" },
+      body: JSON.stringify({
+        status: "denied",
+        resolved_at: new Date().toISOString(),
+      }),
+    },
+  );
+  if (!res.ok) {
+    await res.body?.cancel();
+    return false;
+  }
+  return ((await res.json()) as unknown[]).length > 0;
 }
