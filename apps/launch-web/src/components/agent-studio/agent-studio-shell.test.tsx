@@ -59,4 +59,30 @@ describe("AgentStudioShell", () => {
     expect(markup).not.toContain("agent-studio-settings-button");
     expect(markup).toContain("Settings");
   });
+
+  it("shares the fleet background and exits through an icon Home", () => {
+    const markup = renderToStaticMarkup(
+      <AgentStudioShell
+        agentName="email-ops"
+        onBack={() => undefined}
+        onPaneChange={() => undefined}
+        pane="overview"
+        releaseVersion={null}
+        statusLabel="Live"
+        statusTone="live"
+        theme="dark"
+      >
+        <p>Studio content</p>
+      </AgentStudioShell>,
+    );
+
+    // One visual world: the Studio renders the fleet's ThemeMotif, not a
+    // studio-only backdrop.
+    expect(markup).toContain("neb-theme-motif");
+    expect(markup).not.toContain("agent-studio-motif");
+    // The Home affordance is an icon button, labeled for readers.
+    expect(markup).toContain('class="agent-studio-home"');
+    expect(markup).toContain("Close the Studio and return to your fleet");
+    expect(markup).toContain('title="Home"');
+  });
 });
