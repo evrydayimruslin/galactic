@@ -148,7 +148,15 @@ Deno.test("registry: MCP projection honors LITE (core-only) and Free Mode", () =
   // Demoted registry tools, in registration order (for the scope="tools" list).
   assertEquals(
     registryDemotedMcpTools().map((t) => t.name),
-    ["gx.download", "gx.db", "gx.concepts", "gx.notifications", "gx.flag", "gx.emit"],
+    [
+      "gx.download",
+      "gx.db",
+      "gx.concepts",
+      "gx.policy",
+      "gx.notifications",
+      "gx.flag",
+      "gx.emit",
+    ],
   );
 });
 
