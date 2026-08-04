@@ -138,15 +138,17 @@ export async function readFunnelHeldCard(
 }
 
 /**
- * Pairing-level entry: validates the funnel row (unclaimed, inside the
- * return window, candidate uploaded) and delegates. The pairing code is
- * the only input a stranger holds; everything else is derived server-side.
+ * Server-side owner context for a live (unclaimed, in-window) pairing.
+ * Never exposed to clients — route handlers derive from it.
  */
-export async function runFunnelTrialByPairing(
+export async function readFunnelOwnerContext(
   pairingCode: string,
   options: BuilderHandoffSessionServiceOptions = {},
-  deps: FunnelTrialDependencies = {},
-): Promise<FunnelTrialCard> {
+): Promise<{
+  ownerId: string;
+  uploadedAppId: string | null;
+  uploadedVersion: string | null;
+}> {
   const cfg = restConfig(options);
   const funnel = firstRow(
     await restJson(
@@ -178,21 +180,38 @@ export async function runFunnelTrialByPairing(
       }&select=uploaded_app_id,uploaded_version&limit=1`,
     ),
   );
-  const uploadedAppId = typeof session?.uploaded_app_id === "string"
-    ? session.uploaded_app_id
-    : null;
-  if (!uploadedAppId) {
+  return {
+    ownerId: String(funnel.provisional_owner_id),
+    uploadedAppId: typeof session?.uploaded_app_id === "string"
+      ? session.uploaded_app_id
+      : null,
+    uploadedVersion: typeof session?.uploaded_version === "string"
+      ? session.uploaded_version
+      : null,
+  };
+}
+
+/**
+ * Pairing-level entry: validates the funnel row (unclaimed, inside the
+ * return window, candidate uploaded) and delegates. The pairing code is
+ * the only input a stranger holds; everything else is derived server-side.
+ */
+export async function runFunnelTrialByPairing(
+  pairingCode: string,
+  options: BuilderHandoffSessionServiceOptions = {},
+  deps: FunnelTrialDependencies = {},
+): Promise<FunnelTrialCard> {
+  const context = await readFunnelOwnerContext(pairingCode, options);
+  if (!context.uploadedAppId) {
     throw new FunnelSessionError(
       "invalid_request",
       "The candidate has not uploaded yet — finish the build first",
     );
   }
   return await runFunnelTrial({
-    appId: uploadedAppId,
-    ownerId: String(funnel.provisional_owner_id),
-    uploadedVersion: typeof session?.uploaded_version === "string"
-      ? session.uploaded_version
-      : null,
+    appId: context.uploadedAppId,
+    ownerId: context.ownerId,
+    uploadedVersion: context.uploadedVersion,
   }, options, deps);
 }
 

@@ -1022,6 +1022,13 @@
       ]
     },
     {
+      "file": "services/funnel-claim.ts",
+      "types": [
+        "FunnelCheckoutOutcome",
+        "FunnelClaimOptions"
+      ]
+    },
+    {
       "exports": [
         "FUNNEL_DESCRIPTION_MAX_LENGTH",
         "FUNNEL_SURFACES"

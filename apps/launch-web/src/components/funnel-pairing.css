@@ -163,3 +163,14 @@
 .neb-funnel-held-primary {
   color: var(--accent-text);
 }
+
+.neb-funnel-held-approve {
+  border: 1px solid var(--accent);
+  padding: 8px 14px;
+  background: var(--accent-fill);
+  color: var(--accent-text);
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}

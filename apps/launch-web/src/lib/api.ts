@@ -113,6 +113,8 @@ import type {
   LaunchSubscriptionCheckoutRequest,
   LaunchSubscriptionCheckoutResponse,
   LaunchSubscriptionRedirectResponse,
+  LaunchFunnelCheckoutResponse,
+  LaunchFunnelClaimResponse,
   LaunchFunnelPairingResponse,
   LaunchFunnelRunResponse,
   LaunchSubscriptionResponse,
@@ -1098,6 +1100,22 @@ export class LaunchApiClient {
   funnelPairing(code: string): Promise<LaunchFunnelPairingResponse> {
     return this.fetchJson(
       `/api/launch/funnel/pairings/${encodeURIComponent(code)}`,
+    );
+  }
+
+  /** WO-F1: claim the funnel build into the signed-in account. */
+  funnelClaim(code: string): Promise<LaunchFunnelClaimResponse> {
+    return this.fetchJson(
+      `/api/launch/funnel/pairings/${encodeURIComponent(code)}/claim`,
+      { method: "POST" },
+    );
+  }
+
+  /** WO-F3: mint the card's membership checkout; returns the Stripe URL. */
+  funnelCheckout(code: string): Promise<LaunchFunnelCheckoutResponse> {
+    return this.fetchJson(
+      `/api/launch/funnel/pairings/${encodeURIComponent(code)}/checkout`,
+      { method: "POST" },
     );
   }
 
