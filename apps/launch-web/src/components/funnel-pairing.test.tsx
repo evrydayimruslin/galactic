@@ -81,6 +81,46 @@ describe("funnel pairing watch page", () => {
     }
   });
 
+  it("offers Run it once after upload, then renders the held card", () => {
+    const uploaded = projection({
+      uploadedAt: "2026-08-03T21:20:00.000Z",
+      testedAt: "2026-08-03T21:15:00.000Z",
+    });
+    const before = renderToStaticMarkup(
+      <FunnelPairingView projection={uploaded} />,
+    );
+    expect(before).toContain("Run it once");
+
+    const withCard = renderToStaticMarkup(
+      <FunnelPairingView
+        projection={{
+          ...uploaded,
+          heldCard: {
+            envelopeId: "env-1",
+            functionName: "send_email",
+            consequence: "external_side_effect",
+            status: "pending",
+            createdAt: "2026-08-03T21:30:00.000Z",
+            expiresAt: "2026-08-10T21:30:00.000Z",
+            seedSentence: "sending anything to a human",
+          },
+          trialRunsUsed: 1,
+          trialRunLimit: 3,
+        }}
+      />,
+    );
+    expect(withCard).toContain("Held by your policy");
+    expect(withCard).toContain(
+      "It must ask me before sending anything to a human.",
+    );
+    expect(withCard).toContain("send_email");
+    expect(withCard).toContain("denying and editing are always free");
+    expect(withCard).not.toContain("Run it once");
+    for (const forbidden of ["gx_", "plaintext", "Bearer"]) {
+      expect(withCard).not.toContain(forbidden);
+    }
+  });
+
   it("switches to the claimed voice after a claim", () => {
     const markup = renderToStaticMarkup(
       <FunnelPairingView

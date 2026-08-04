@@ -146,6 +146,7 @@ export const LAUNCH_API_ROUTES = [
   "GET /api/launch/funnel/pairings/:code",
   "POST /api/launch/funnel/pairings/:code/claim",
   "POST /api/launch/funnel/pairings/:code/resume",
+  "POST /api/launch/funnel/pairings/:code/run",
   "GET /api/launch/candidates",
   "GET /api/launch/candidates/:candidateId",
   "POST /api/launch/candidates/:candidateId/deploy",
@@ -504,6 +505,26 @@ export interface LaunchFunnelPairingProjection {
   reservedAgentId: string | null;
   agentName: string | null;
   uploadedVersion: string | null;
+  /** WO-F5: the held card, once a trial run files one. Stages-only-safe. */
+  heldCard?: LaunchFunnelHeldCard | null;
+  trialRunsUsed?: number;
+  trialRunLimit?: number;
+}
+
+export interface LaunchFunnelHeldCard {
+  envelopeId: string;
+  functionName: string;
+  consequence: string;
+  status: string;
+  createdAt: string;
+  expiresAt: string | null;
+  seedSentence: string | null;
+}
+
+export interface LaunchFunnelRunResponse {
+  success: true;
+  card: LaunchFunnelHeldCard;
+  generatedAt: string;
 }
 
 export interface LaunchFunnelMintResponse {

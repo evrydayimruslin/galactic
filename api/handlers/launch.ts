@@ -66,6 +66,10 @@ import {
   reapExpiredFunnelSessions,
   resumeFunnelSession,
 } from "../services/funnel-sessions.ts";
+import {
+  readFunnelHeldCard,
+  runFunnelTrialByPairing,
+} from "../services/funnel-trial.ts";
 import { checkRateLimit } from "../services/ratelimit.ts";
 import { getAuthRateLimitClientIp } from "../services/auth-rate-limit.ts";
 import {
@@ -160,7 +164,9 @@ import {
   type LaunchHandoffCreateRequest,
   type LaunchFunnelClaimResponse,
   type LaunchFunnelMintResponse,
+  type LaunchFunnelPairingProjection,
   type LaunchFunnelPairingResponse,
+  type LaunchFunnelRunResponse,
   type LaunchHandoffCreateResponse,
   type LaunchHandoffIntent,
   type LaunchInferenceOperation,
@@ -1174,6 +1180,12 @@ export async function handleLaunch(
         method,
         funnelResumeMatch[1],
       );
+    }
+    const funnelRunMatch = path.match(
+      /^\/api\/launch\/funnel\/pairings\/([a-z0-9]{16,64})\/run$/,
+    );
+    if (funnelRunMatch) {
+      return await handleLaunchFunnelRun(request, method, funnelRunMatch[1]);
     }
     const funnelClaimMatch = path.match(
       /^\/api\/launch\/funnel\/pairings\/([a-z0-9]{16,64})\/claim$/,
@@ -2287,6 +2299,30 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             "404": { description: "Unknown pairing code" },
             "409": { description: "Already claimed" },
             "410": { description: "Return window elapsed" },
+            "429": { description: "Rate limit reached for this network" },
+          },
+        },
+      },
+      "/api/launch/funnel/pairings/{code}/run": {
+        post: {
+          operationId: "runLaunchFunnelTrial",
+          summary: "Run it once — file a held trial job + approval envelope",
+          description:
+            "Anonymous, bearer-of-pairing-code. Requires an uploaded candidate with at least one starter-policy 'ask' function. Creates a held-from-birth job (invisible to the consumer) and a real approval envelope: the held card. Nothing executes — resume happens after claim, membership, and the existing deploy boundary. Bounded per Agent and per network.",
+          parameters: [{
+            name: "code",
+            in: "path",
+            required: true,
+            schema: { type: "string", pattern: "^[a-z0-9]{16,64}$" },
+          }],
+          responses: {
+            "201": { description: "The held card" },
+            "400": {
+              description:
+                "No uploaded candidate, no guarded function, or trial ceiling reached",
+            },
+            "404": { description: "Unknown pairing code" },
+            "409": { description: "Already claimed — run from the fleet" },
             "429": { description: "Rate limit reached for this network" },
           },
         },
@@ -7238,10 +7274,28 @@ async function handleLaunchFunnelPairing(
   }
   try {
     const pairing = await readFunnelPairing(pairingCode);
+    // The held card rides the same unlisted read once a candidate exists:
+    // the ten-minute moment must be visible where the stranger is looking.
+    let enriched: LaunchFunnelPairingProjection = pairing;
+    if (pairing.reservedAgentId && pairing.uploadedAt) {
+      try {
+        const { card, trialRunsUsed } = await readFunnelHeldCard(
+          pairing.reservedAgentId,
+        );
+        enriched = {
+          ...pairing,
+          heldCard: card,
+          trialRunsUsed,
+          trialRunLimit: 3,
+        };
+      } catch {
+        // The stages ledger renders without the card rather than not at all.
+      }
+    }
     return privateLaunchJson(
       {
         success: true,
-        pairing,
+        pairing: enriched,
         generatedAt: new Date().toISOString(),
       } satisfies LaunchFunnelPairingResponse,
     );
@@ -7251,6 +7305,57 @@ async function handleLaunchFunnelPairing(
         return error("Unknown pairing code", 404);
       }
       return error(cause.message, 503);
+    }
+    throw cause;
+  }
+}
+
+/**
+ * WO-F5 "Run it once": files a real held job + approval envelope against
+ * the starter policy's ask posture. Nothing executes — hold free, resume
+ * paid. Anonymous by design (the pairing code is the handle), bounded per
+ * Agent and per network.
+ */
+async function handleLaunchFunnelRun(
+  request: Request,
+  method: string,
+  pairingCode: string,
+): Promise<Response> {
+  if (method !== "POST") {
+    return error("Method not allowed for funnel trial runs", 405);
+  }
+  const clientIp = getAuthRateLimitClientIp(request) ?? "anonymous";
+  const rate = await checkRateLimit(
+    `funnel-run-ip:${clientIp}`,
+    "funnel:trial_run",
+    30,
+    60,
+  );
+  if (!rate.allowed) {
+    return error("Too many trial runs from this network.", 429);
+  }
+  try {
+    const card = await runFunnelTrialByPairing(pairingCode);
+    return privateLaunchJson(
+      {
+        success: true,
+        card,
+        generatedAt: new Date().toISOString(),
+      } satisfies LaunchFunnelRunResponse,
+      201,
+    );
+  } catch (cause) {
+    if (cause instanceof FunnelSessionError) {
+      switch (cause.code) {
+        case "not_found":
+          return error("Unknown pairing code", 404);
+        case "already_claimed":
+          return error(cause.message, 409);
+        case "invalid_request":
+          return error(cause.message, 400);
+        default:
+          return error(cause.message, 503);
+      }
     }
     throw cause;
   }

@@ -1038,6 +1038,16 @@
     },
     {
       "exports": [
+        "runFunnelTrial"
+      ],
+      "file": "services/funnel-trial.ts",
+      "types": [
+        "FunnelTrialCard",
+        "FunnelTrialDependencies"
+      ]
+    },
+    {
+      "exports": [
         "computeBenchmarkStats",
         "startGpuBuildProcessorJob"
       ],

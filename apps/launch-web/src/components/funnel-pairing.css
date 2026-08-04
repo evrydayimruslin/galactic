@@ -112,3 +112,54 @@
 .neb-funnel-gone {
   padding-top: 20px;
 }
+
+/* WO-F5: the held card — the ten-minute moment. */
+.neb-funnel-held-card {
+  margin-top: 30px;
+  border: 1px solid var(--accent);
+  padding: 18px 20px 16px;
+  background: var(--accent-fill);
+}
+
+.neb-funnel-held-eyebrow {
+  margin: 0;
+  color: var(--accent-text);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.neb-funnel-held-sentence {
+  margin: 10px 0 0;
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 19px;
+  line-height: 1.35;
+}
+
+.neb-funnel-held-detail {
+  margin: 10px 0 0;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.neb-funnel-held-detail code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+.neb-funnel-held-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 14px;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.neb-funnel-held-primary {
+  color: var(--accent-text);
+}
