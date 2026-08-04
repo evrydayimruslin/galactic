@@ -34,7 +34,7 @@
   "homepage": "https://connectgalactic.com",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/evrydayimruslin/ultralight.git",
+    "url": "git+https://github.com/evrydayimruslin/galactic.git",
     "directory": "cli"
   },
   "dependencies": {
