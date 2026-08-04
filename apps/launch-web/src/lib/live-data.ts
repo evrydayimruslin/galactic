@@ -486,6 +486,8 @@ async function loadRouteData(
     // The pairing watch page self-fetches its anonymous projection.
     case "pairing":
       return {};
+    case "device":
+      return {};
     case "connect": {
       if (!hasLaunchAuthToken()) return {};
       const fleet = await launchApi.fleet();

@@ -115,6 +115,7 @@ export const LAUNCH_PUBLIC_ROUTES = [
   "/terms",
   "/privacy",
   "/b/:code",
+  "/device",
 ] as const;
 
 export type LaunchPublicRoute = typeof LAUNCH_PUBLIC_ROUTES[number];
@@ -148,6 +149,9 @@ export const LAUNCH_API_ROUTES = [
   "POST /api/launch/funnel/pairings/:code/resume",
   "POST /api/launch/funnel/pairings/:code/run",
   "POST /api/launch/funnel/pairings/:code/checkout",
+  "POST /api/launch/device/code",
+  "POST /api/launch/device/token",
+  "POST /api/launch/device/approve",
   "GET /api/launch/candidates",
   "GET /api/launch/candidates/:candidateId",
   "POST /api/launch/candidates/:candidateId/deploy",
@@ -532,6 +536,36 @@ export interface LaunchFunnelCheckoutResponse {
   success: true;
   url: string;
   attemptId: string;
+  generatedAt: string;
+}
+
+/** WO-F4: device authorization grant (CLI login). */
+export interface LaunchDeviceCodeResponse {
+  success: true;
+  userCode: string;
+  deviceCode: string;
+  verificationUrl: string;
+  expiresAt: string;
+  pollIntervalSeconds: number;
+  generatedAt: string;
+}
+
+export type LaunchDeviceTokenResponse =
+  & { success: true; generatedAt: string }
+  & (
+    | { status: "pending"; pollIntervalSeconds: number }
+    | {
+      status: "complete";
+      plaintextToken: string;
+      tokenPrefix: string;
+      scopes: string[];
+      expiresInDays: number;
+    }
+  );
+
+export interface LaunchDeviceApproveResponse {
+  success: true;
+  approved: true;
   generatedAt: string;
 }
 

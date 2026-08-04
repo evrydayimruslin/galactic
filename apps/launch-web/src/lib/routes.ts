@@ -12,6 +12,7 @@ export type LaunchRouteKey =
   | "store"
   | "agent"
   | "pairing"
+  | "device"
   | "settings"
   | "adminAgent"
   | "authCallback"
@@ -64,6 +65,14 @@ export const launchRoutes: LaunchRouteDefinition[] = [
     key: "pairing",
     path: "/b/:code",
     label: "Build",
+    nav: "hidden",
+    apiRoutes: [],
+  },
+  {
+    // WO-F4: the device-grant confirmation page. Self-fetching.
+    key: "device",
+    path: "/device",
+    label: "Device login",
     nav: "hidden",
     apiRoutes: [],
   },

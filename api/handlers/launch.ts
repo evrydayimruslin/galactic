@@ -71,6 +71,12 @@ import {
   readFunnelOwnerContext,
   runFunnelTrialByPairing,
 } from "../services/funnel-trial.ts";
+import {
+  approveDeviceAuthorization,
+  DeviceGrantError,
+  mintDeviceAuthorization,
+  pollDeviceAuthorization,
+} from "../services/device-grant.ts";
 import { checkRateLimit } from "../services/ratelimit.ts";
 import { getAuthRateLimitClientIp } from "../services/auth-rate-limit.ts";
 import {
@@ -163,6 +169,9 @@ import {
   type LaunchFunctionSummary,
   type LaunchGlobalAttentionResponse,
   type LaunchHandoffCreateRequest,
+  type LaunchDeviceApproveResponse,
+  type LaunchDeviceCodeResponse,
+  type LaunchDeviceTokenResponse,
   type LaunchFunnelCheckoutResponse,
   type LaunchFunnelClaimResponse,
   type LaunchFunnelMintResponse,
@@ -1173,6 +1182,16 @@ export async function handleLaunch(
     if (path === "/api/launch/funnel/handoffs") {
       return await handleLaunchFunnelMint(request, method);
     }
+    if (path === "/api/launch/device/code") {
+      return await handleLaunchDeviceCode(request, method);
+    }
+    if (path === "/api/launch/device/token") {
+      return await handleLaunchDeviceToken(request, method);
+    }
+    if (path === "/api/launch/device/approve") {
+      return await handleLaunchDeviceApprove(request, method);
+    }
+
     const funnelResumeMatch = path.match(
       /^\/api\/launch\/funnel\/pairings\/([a-z0-9]{16,64})\/resume$/,
     );
@@ -2248,6 +2267,66 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
               }),
             },
             "401": { description: "Authentication required" },
+          },
+        },
+      },
+      "/api/launch/device/code": {
+        post: {
+          operationId: "createLaunchDeviceCode",
+          summary: "Mint a device-grant pairing (CLI login)",
+          description:
+            "Anonymous, IP-rate-limited. Returns a short user code for the human and a device code for the CLI's poll. Ten-minute window; codes are single-use; the device code is stored only as a hash.",
+          responses: {
+            "201": { description: "Device pairing" },
+            "429": { description: "Rate limit reached for this network" },
+          },
+        },
+      },
+      "/api/launch/device/token": {
+        post: {
+          operationId: "pollLaunchDeviceToken",
+          summary: "Exchange an approved device code for a gx_ key",
+          description:
+            "Anonymous poll. Pending until the human approves at /device; then reveals a standard-scope API key exactly once and consumes the authorization. Approval by a non-member maps to 403 (API keys require an active membership).",
+          requestBody: {
+            required: true,
+            content: jsonContent({
+              type: "object",
+              required: ["deviceCode"],
+              properties: { deviceCode: { type: "string" } },
+            }),
+          },
+          responses: {
+            "200": { description: "Pending, or the reveal-once key" },
+            "403": { description: "Membership required for API keys" },
+            "404": { description: "Unknown device code" },
+            "409": { description: "Already used" },
+            "410": { description: "Expired" },
+            "429": { description: "Polling too fast" },
+          },
+        },
+      },
+      "/api/launch/device/approve": {
+        post: {
+          operationId: "approveLaunchDeviceCode",
+          summary: "Confirm a device code inside the web session",
+          description:
+            "Account-session endpoint behind an explicit click on /device — a code is never confirmed from a URL alone.",
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: jsonContent({
+              type: "object",
+              required: ["userCode"],
+              properties: { userCode: { type: "string" } },
+            }),
+          },
+          responses: {
+            "200": { description: "Approved" },
+            "401": { description: "Authentication required" },
+            "404": { description: "Unknown device code" },
+            "409": { description: "Already used" },
+            "410": { description: "Expired" },
           },
         },
       },
@@ -7455,6 +7534,131 @@ async function handleLaunchFunnelCheckout(
           return error(cause.message, 503);
       }
     }
+    throw cause;
+  }
+}
+
+
+/**
+ * WO-F4: device authorization grant. Three tiny routes: the CLI mints a
+ * pairing, the human confirms the user code in their existing web session,
+ * the CLI's poll exchanges the device code for a standard-scope gx_ key.
+ * Reveal-once; single-use; ten-minute window.
+ */
+function deviceGrantErrorResponse(cause: unknown): Response | null {
+  if (!(cause instanceof DeviceGrantError)) return null;
+  switch (cause.code) {
+    case "not_found":
+      return error("Unknown device code", 404);
+    case "expired":
+      return error(cause.message, 410);
+    case "already_resolved":
+      return error(cause.message, 409);
+    case "membership_required":
+      return error(cause.message, 403);
+    default:
+      return error(cause.message, 503);
+  }
+}
+
+async function handleLaunchDeviceCode(
+  request: Request,
+  method: string,
+): Promise<Response> {
+  if (method !== "POST") {
+    return error("Method not allowed for device codes", 405);
+  }
+  const clientIp = getAuthRateLimitClientIp(request) ?? "anonymous";
+  const rate = await checkRateLimit(
+    `device-code-ip:${clientIp}`,
+    "device:code",
+    10,
+    60,
+  );
+  if (!rate.allowed) {
+    return error("Too many device codes from this network.", 429);
+  }
+  try {
+    const minted = await mintDeviceAuthorization();
+    return privateLaunchJson(
+      {
+        success: true,
+        userCode: minted.userCode,
+        deviceCode: minted.deviceCode,
+        verificationUrl: `${publicBaseUrl(request)}${minted.verificationPath}`,
+        expiresAt: minted.expiresAt,
+        pollIntervalSeconds: minted.pollIntervalSeconds,
+        generatedAt: new Date().toISOString(),
+      } satisfies LaunchDeviceCodeResponse,
+      201,
+    );
+  } catch (cause) {
+    const mapped = deviceGrantErrorResponse(cause);
+    if (mapped) return mapped;
+    throw cause;
+  }
+}
+
+async function handleLaunchDeviceToken(
+  request: Request,
+  method: string,
+): Promise<Response> {
+  if (method !== "POST") {
+    return error("Method not allowed for device tokens", 405);
+  }
+  const clientIp = getAuthRateLimitClientIp(request) ?? "anonymous";
+  const rate = await checkRateLimit(
+    `device-token-ip:${clientIp}`,
+    "device:token",
+    240,
+    10,
+  );
+  if (!rate.allowed) {
+    return error("Polling too fast — slow down.", 429);
+  }
+  try {
+    const body = await readJsonBody<Record<string, unknown>>(request);
+    const deviceCode = typeof body.deviceCode === "string"
+      ? body.deviceCode
+      : "";
+    const result = await pollDeviceAuthorization({ deviceCode });
+    return privateLaunchJson(
+      {
+        success: true,
+        ...result,
+        generatedAt: new Date().toISOString(),
+      } satisfies LaunchDeviceTokenResponse,
+    );
+  } catch (cause) {
+    const mapped = deviceGrantErrorResponse(cause);
+    if (mapped) return mapped;
+    throw cause;
+  }
+}
+
+async function handleLaunchDeviceApprove(
+  request: Request,
+  method: string,
+): Promise<Response> {
+  if (method !== "POST") {
+    return error("Method not allowed for device approval", 405);
+  }
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForApiKeys(user);
+  try {
+    const body = await readJsonBody<Record<string, unknown>>(request);
+    const userCode = typeof body.userCode === "string" ? body.userCode : "";
+    await approveDeviceAuthorization({ userCode, userId: user.id });
+    return privateLaunchJson(
+      {
+        success: true,
+        approved: true,
+        generatedAt: new Date().toISOString(),
+      } satisfies LaunchDeviceApproveResponse,
+    );
+  } catch (cause) {
+    const mapped = deviceGrantErrorResponse(cause);
+    if (mapped) return mapped;
     throw cause;
   }
 }

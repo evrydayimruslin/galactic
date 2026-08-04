@@ -40,6 +40,7 @@ import {
   NebulaFleetApp,
   NebulaSessionRestoringShell,
 } from "./components/nebula-fleet";
+import { DeviceLoginPage } from "./components/device-login";
 import { FunnelPairingPage } from "./components/funnel-pairing";
 import { PreAuthFleetHome } from "./components/pre-auth-fleet";
 import { AgentStudioApp } from "./components/agent-studio/agent-studio";
@@ -85,6 +86,7 @@ const routeTitles: Record<LaunchRouteKey, string> = {
   store: "Browse",
   agent: "Agent",
   pairing: "Watch your agent build",
+  device: "Link your terminal",
   settings: "Profile",
   adminAgent: "Agent admin",
   authCallback: "Signing in",
@@ -224,7 +226,10 @@ export function App(): ReactElement {
       : `${routeTitles[key]} | Galactic`;
   }, [route.definition.key, agentDisplayName]);
 
+  // The device-login page legitimately carries ?code= (the user code the
+  // terminal printed) — it is not an OAuth authorization code.
   const providerCodeMisrouted = route.definition.key !== "authCallback" &&
+    route.definition.key !== "device" &&
     new URLSearchParams(location.search).has("code");
 
   useEffect(() => {
@@ -285,6 +290,14 @@ export function App(): ReactElement {
         ? (
           <FunnelPairingPage
             code={route.params.code ?? ""}
+            navigate={navigate}
+          />
+        )
+        : route.definition.key === "device"
+        ? (
+          <DeviceLoginPage
+            initialCode={new URLSearchParams(location.search).get("code") ??
+              undefined}
             navigate={navigate}
           />
         )
@@ -362,6 +375,14 @@ function RouteSwitch(
       return (
         <FunnelPairingPage
           code={route.params.code ?? ""}
+          navigate={navigate}
+        />
+      );
+    case "device":
+      return (
+        <DeviceLoginPage
+          initialCode={new URLSearchParams(location.search).get("code") ??
+            undefined}
           navigate={navigate}
         />
       );

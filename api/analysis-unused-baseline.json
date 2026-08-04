@@ -827,6 +827,19 @@
     },
     {
       "exports": [
+        "DEVICE_GRANT_WINDOW_MS",
+        "DEVICE_KEY_EXPIRES_IN_DAYS"
+      ],
+      "file": "services/device-grant.ts",
+      "types": [
+        "DeviceGrantErrorCode",
+        "DeviceGrantServiceOptions",
+        "DevicePollResult",
+        "MintedDeviceAuthorization"
+      ]
+    },
+    {
+      "exports": [
         "enhanceWithAI"
       ],
       "file": "services/docgen.ts",
