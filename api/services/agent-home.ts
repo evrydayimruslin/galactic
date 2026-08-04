@@ -187,8 +187,7 @@ function lifecycleState(
   if (deploymentState === "disabled") return "disabled";
   if (deploymentState === "materializing") return "needs_setup";
   if (deploymentState === "setup_required") return "needs_setup";
-  if (deploymentState === "ready" && !routine) return "ready";
-  if (!routine) return "needs_setup";
+  if (!routine) return "ready";
   if (routine.status === "active") return "active";
   if (routine.status === "disabled") return "disabled";
   if (blockers.length > 0) return "needs_setup";
@@ -453,19 +452,16 @@ function authorityItems(
 function setupRequirements(
   input: AgentHomeBuildInput,
 ): LaunchAgentHomeRequirement[] {
-  const recurringRoutineRequired = input.deploymentState !== "setup_required" &&
-    input.deploymentState !== "ready";
   const requirements: LaunchAgentHomeRequirement[] = [{
     id: "routine:primary",
     actionId: null,
     kind: "routine",
     label: "Primary routine",
-    description: recurringRoutineRequired
-      ? "One paused routine proposal defines this Agent's ongoing job."
-      : "Optional. Add a routine if this callable Agent should run on a schedule.",
-    required: recurringRoutineRequired,
+    description:
+      "Optional. Add a routine if this Agent should run on a schedule.",
+    required: false,
     configured: input.routine !== null,
-    blocking: recurringRoutineRequired && input.routine === null,
+    blocking: false,
     secret: false,
     settingKey: null,
     settingScope: null,

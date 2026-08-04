@@ -5,12 +5,31 @@ import {
 } from "../../../../shared/contracts/agent-grants.ts";
 import type {
   LaunchAgentHomeResponse,
+  LaunchFleetAgentSummary,
 } from "../../../../shared/contracts/launch.ts";
 import type { LaunchApiClient } from "./api";
 
 export interface AgentStudioStatus {
   label: string;
   tone: "live" | "waiting" | "stopped";
+}
+
+export type AgentStudioEscapeAction =
+  | "ignore"
+  | "close_handoff"
+  | "leave_studio";
+
+export function agentStudioEscapeAction({
+  defaultPrevented,
+  handoffOpen,
+  modalOpen,
+}: {
+  defaultPrevented: boolean;
+  handoffOpen: boolean;
+  modalOpen: boolean;
+}): AgentStudioEscapeAction {
+  if (defaultPrevented || modalOpen) return "ignore";
+  return handoffOpen ? "close_handoff" : "leave_studio";
 }
 
 export interface AgentStudioSetupGrantRequest extends AgentGrantCreateRequest {
@@ -46,6 +65,9 @@ export function studioStatus(
   home: LaunchAgentHomeResponse | null | undefined,
 ): AgentStudioStatus {
   if (!home) return { label: "Loading", tone: "waiting" };
+  if (home.operatingSummary?.mode === "available_on_demand") {
+    return { label: "Available on demand", tone: "live" };
+  }
   if (
     home.state.lifecycle === "disabled" ||
     home.operatingSummary?.mode === "disabled"
@@ -74,11 +96,28 @@ export function studioStatus(
   ) {
     return { label: "Setup", tone: "waiting" };
   }
-  if (
-    home.state.lifecycle === "ready" &&
-    home.operatingSummary?.mode === "no_enabled_routine"
-  ) {
+  return { label: "Waiting", tone: "waiting" };
+}
+
+export function studioStatusFromFleet(
+  item: LaunchFleetAgentSummary | null | undefined,
+): AgentStudioStatus {
+  if (!item) return { label: "Loading", tone: "waiting" };
+  const mode = item.operatingSummary?.mode;
+  if (mode === "available_on_demand") {
     return { label: "Available on demand", tone: "live" };
+  }
+  if (mode === "disabled") return { label: "Disabled", tone: "stopped" };
+  if (mode === "error") return { label: "Error", tone: "stopped" };
+  if (mode === "paused") return { label: "Paused", tone: "stopped" };
+  if (mode === "no_live_release" || mode === "setup_required") {
+    return { label: "Setup", tone: "waiting" };
+  }
+  if (
+    item.workingReadiness?.working ||
+    item.operatingSummary?.readiness.working
+  ) {
+    return { label: "Live", tone: "live" };
   }
   return { label: "Waiting", tone: "waiting" };
 }

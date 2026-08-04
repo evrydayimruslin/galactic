@@ -2154,7 +2154,6 @@ export type LaunchOperatorConditionCode =
   | "ACCOUNT_USAGE_EXHAUSTED"
   | "AGENT_CAPABILITY_APPROVAL_REQUIRED"
   | "AGENT_GRANT_REQUIRED"
-  | "AGENT_PRIMARY_ROUTINE_MISSING"
   | "AGENT_RELEASE_REVIEW_REQUIRED"
   | "AGENT_REPORTING_NOT_CONFIGURED"
   | "AGENT_SECRET_MISSING"
@@ -2304,11 +2303,6 @@ export type LaunchOperatorSemanticTarget =
     kind: "account_usage";
   }
   | {
-    kind: "agent_setup_requirement";
-    agentId: string;
-    requirementId: string;
-  }
-  | {
     kind: "agent_setting";
     agentId: string;
     settingKey: string;
@@ -2347,7 +2341,6 @@ export type LaunchOperatorRemediationKey =
   | "approve_capability"
   | "approve_grant"
   | "configure_provider"
-  | "configure_routine"
   | "configure_secret"
   | "configure_setting"
   | "enable_routine"
@@ -2389,10 +2382,6 @@ export interface LaunchOperatorRemediationTargetMap {
   configure_provider: Extract<
     LaunchOperatorSemanticTarget,
     { kind: "account_provider" }
-  >;
-  configure_routine: Extract<
-    LaunchOperatorSemanticTarget,
-    { kind: "agent_setup_requirement" }
   >;
   configure_secret: Extract<
     LaunchOperatorSemanticTarget,
@@ -2619,7 +2608,7 @@ export interface LaunchAgentDirective {
 
 export type LaunchAgentOperatingState =
   | "no_live_release"
-  | "no_enabled_routine"
+  | "available_on_demand"
   | "setup_required"
   | "error"
   | "running"
@@ -2633,15 +2622,15 @@ export type LaunchAgentOperatingState =
 
 export type LaunchAgentWorkingExclusionReason =
   | "no_live_release"
-  | "no_enabled_routine"
   | "setup_required"
   | "error"
   | "paused"
   | "disabled";
 
 /**
- * Strict fleet-count eligibility. `working` is true only when the Agent is
- * configured and at least one healthy managed routine is actually active.
+ * Strict fleet-count eligibility. `working` is true when the Agent is fully
+ * configured and can either accept work on demand or has a healthy managed
+ * routine. A routine is scheduling configuration, not an Agent prerequisite.
  */
 export interface LaunchAgentWorkingReadiness {
   working: boolean;
@@ -3441,6 +3430,8 @@ export interface LaunchFleetAgentSummary {
     | "ready"
     | "disabled";
   activeReleaseDigest?: string | null;
+  /** Live semantic version, included so Agent chrome can hydrate immediately. */
+  releaseVersion?: string | null;
   setupRequiredAt?: string | null;
   state: LaunchFleetAgentState;
   health: LaunchFleetAgentHealth;

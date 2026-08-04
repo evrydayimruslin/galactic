@@ -131,7 +131,7 @@
 
 .agent-studio-identity {
   min-width: 0;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
 }
 
@@ -141,6 +141,7 @@
   font-family: var(--serif);
   font-size: 21px;
   font-weight: 600;
+  line-height: 1;
   letter-spacing: -0.01em;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -204,6 +205,14 @@
 
 .agent-studio-back:hover {
   color: var(--ink);
+}
+
+.agent-studio[data-theme="dark"] .agent-studio-back {
+  color: var(--accent);
+}
+
+.agent-studio[data-theme="dark"] .agent-studio-back:hover {
+  color: var(--accent-text);
 }
 
 .agent-studio-menu-button {

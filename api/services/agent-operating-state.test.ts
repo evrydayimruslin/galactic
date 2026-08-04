@@ -105,6 +105,51 @@ Deno.test("agent operating state: an active routine may work beside a paused sib
   assertEquals(readiness.activeRoutineCount, 1);
 });
 
+Deno.test("agent operating state: a configured Agent without routines is available on demand", () => {
+  const readiness = deriveAgentWorkingReadiness({
+    hasLiveRelease: true,
+    setupReady: true,
+    routines: [],
+  });
+  assertEquals(readiness, {
+    working: true,
+    ready: true,
+    exclusionReason: null,
+    activeRoutineCount: 0,
+    totalRoutineCount: 0,
+  });
+
+  const summary = buildAgentOperatingSummary({
+    now: NOW,
+    hasLiveRelease: true,
+    setupReady: true,
+    routines: [],
+  });
+  assertEquals(summary.mode, "available_on_demand");
+  assertEquals(summary.label, "Available on demand");
+  assertEquals(summary.basis, "readiness");
+  assertEquals(summary.evidence, []);
+});
+
+Deno.test("agent operating state: required setup still blocks a schedule-free Agent", () => {
+  const readiness = deriveAgentWorkingReadiness({
+    hasLiveRelease: true,
+    setupReady: false,
+    routines: [],
+  });
+  assertEquals(readiness.working, false);
+  assertEquals(readiness.exclusionReason, "setup_required");
+  assertEquals(
+    buildAgentOperatingSummary({
+      now: NOW,
+      hasLiveRelease: true,
+      setupReady: false,
+      routines: [],
+    }).mode,
+    "setup_required",
+  );
+});
+
 Deno.test("agent operating state: setup and failure outrank running in multi-routine summaries", () => {
   const running = routine("running", { health: "running" });
   const failing = routine("failing", {

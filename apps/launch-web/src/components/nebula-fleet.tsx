@@ -1301,109 +1301,89 @@ export function NebulaFleetApp({
                   .replace("max_5x", "max")
                   .replace("max_10x", "ultra")
                   .replace(/^pro$/, "");
-                return signedIn && !settingsOpen && tier
+                return signedIn && tier
                   ? <span className="neb-wordmark-tier">{tier}</span>
                   : null;
               })()}
             </button>
-            {settingsOpen
-              ? (
-                <div className="neb-settings-topbar-crumb">
-                  <span>/</span>
-                  <button onClick={() => navigate("/account")} type="button">
-                    settings
-                  </button>
-                </div>
-              )
-              : null}
           </div>
-          {!settingsOpen
-            ? (
-              <div className="neb-topbar-actions">
-                {signedIn
-                  ? (
-                    <>
-                      <button
-                        aria-keyshortcuts={launchShortcutAriaKeyShortcuts(
-                          "search",
-                          shortcutConfig,
-                        )}
-                        className="neb-cmdk-chip"
-                        onClick={() => navigate("/?panel=search")}
-                        type="button"
-                      >
-                        Search
-                        {searchShortcutLabel
-                          ? <kbd>{searchShortcutLabel}</kbd>
-                          : null}
-                      </button>
-                      <button
-                        aria-keyshortcuts={launchShortcutAriaKeyShortcuts(
-                          "alerts",
-                          shortcutConfig,
-                        )}
-                        className="neb-icon-btn"
-                        onClick={() => navigate("/?panel=alerts")}
-                        aria-label="Alerts"
-                        type="button"
-                      >
-                        <Glyph name="bell" />
-                        {alertCount > 0
-                          ? <span className="neb-notif-dot" />
-                          : null}
-                      </button>
-                      <button
-                        aria-keyshortcuts={launchShortcutAriaKeyShortcuts(
-                          "settings",
-                          shortcutConfig,
-                        )}
-                        className="neb-icon-btn"
-                        onClick={() => navigate("/account")}
-                        aria-label="Settings"
-                        type="button"
-                      >
-                        <Glyph name="gear" />
-                      </button>
-                    </>
-                  )
-                  : (
-                    <button
-                      className="neb-signed-out-signin"
-                      onClick={openSignIn}
-                      type="button"
-                    >
-                      Sign in
-                    </button>
-                  )}
-              </div>
-            )
-            : null}
+          <div className="neb-topbar-actions">
+            {signedIn
+              ? (
+                <>
+                  <button
+                    aria-keyshortcuts={launchShortcutAriaKeyShortcuts(
+                      "search",
+                      shortcutConfig,
+                    )}
+                    className="neb-cmdk-chip"
+                    onClick={() => navigate("/?panel=search")}
+                    type="button"
+                  >
+                    Search
+                    {searchShortcutLabel
+                      ? <kbd>{searchShortcutLabel}</kbd>
+                      : null}
+                  </button>
+                  <button
+                    aria-keyshortcuts={launchShortcutAriaKeyShortcuts(
+                      "alerts",
+                      shortcutConfig,
+                    )}
+                    className="neb-icon-btn"
+                    onClick={() => navigate("/?panel=alerts")}
+                    aria-label="Alerts"
+                    type="button"
+                  >
+                    <Glyph name="bell" />
+                    {alertCount > 0 ? <span className="neb-notif-dot" /> : null}
+                  </button>
+                  <button
+                    aria-keyshortcuts={launchShortcutAriaKeyShortcuts(
+                      "settings",
+                      shortcutConfig,
+                    )}
+                    className="neb-icon-btn"
+                    onClick={() => navigate("/account")}
+                    aria-label="Settings"
+                    type="button"
+                  >
+                    <Glyph name="gear" />
+                  </button>
+                </>
+              )
+              : (
+                <button
+                  className="neb-signed-out-signin"
+                  onClick={openSignIn}
+                  type="button"
+                >
+                  Sign in
+                </button>
+              )}
+          </div>
         </div>
       </header>
 
       <main className="neb-app">
-        {!settingsOpen
-          ? (
-            <section
-              className={`neb-hero${
-                globalAlertsOpen || searchOpen || agentOpen || connectOpen
-                  ? " neb-context-hero"
-                  : ""
-              }`}
-            >
-              <h1>{contextHeading}</h1>
-              {!workspaceOpen
-                ? (
-                  <HomeHeroActions
-                    alertCount={alertCount}
-                    onAlerts={() => navigate("/?panel=alerts")}
-                    onNavigate={navigate}
-                  />
-                )
-                : null}
-            </section>
-          )
-          : null}
+        <section
+          className={`neb-hero${
+            globalAlertsOpen || searchOpen || agentOpen || connectOpen
+              ? " neb-context-hero"
+              : ""
+          }`}
+        >
+          <h1>{contextHeading}</h1>
+          {!workspaceOpen
+            ? (
+              <HomeHeroActions
+                alertCount={alertCount}
+                onAlerts={() => navigate("/?panel=alerts")}
+                onNavigate={navigate}
+              />
+            )
+            : null}
+        </section>
         {globalAlertsOpen
           ? (
             <GlobalAlerts

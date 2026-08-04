@@ -87,8 +87,7 @@ export interface AgentOperatorStoreDependencies {
   clock?: () => Date;
 }
 
-interface AgentFleetPreferencesSnapshot
-  extends LaunchFleetOrderResponse {
+interface AgentFleetPreferencesSnapshot extends LaunchFleetOrderResponse {
   shortcutsEnabled: boolean;
   shortcutMap: LaunchFleetShortcutMap;
 }
@@ -1080,8 +1079,8 @@ function exclusionReason(
 ): LaunchAgentWorkingExclusionReason | null {
   if (value === null) return null;
   if (
-    value === "no_live_release" || value === "no_enabled_routine" ||
-    value === "setup_required" || value === "error" || value === "paused" ||
+    value === "no_live_release" || value === "setup_required" ||
+    value === "error" || value === "paused" ||
     value === "disabled"
   ) return value;
   throw error("SERVICE_UNAVAILABLE", "Agent readiness is invalid.");
@@ -1089,7 +1088,7 @@ function exclusionReason(
 
 function operatingMode(value: unknown): LaunchAgentOperatingState {
   if (
-    value === "no_live_release" || value === "no_enabled_routine" ||
+    value === "no_live_release" || value === "available_on_demand" ||
     value === "setup_required" || value === "error" || value === "running" ||
     value === "queued" || value === "capacity_waiting" ||
     value === "scheduled" || value === "event_waiting" ||

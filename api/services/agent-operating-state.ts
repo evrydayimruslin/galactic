@@ -87,8 +87,8 @@ export function deriveAgentWorkingReadiness(
   let exclusionReason: LaunchAgentWorkingReadiness["exclusionReason"] = null;
 
   if (!input.hasLiveRelease) exclusionReason = "no_live_release";
-  else if (routines.length === 0) exclusionReason = "no_enabled_routine";
   else if (!input.setupReady || blocked) exclusionReason = "setup_required";
+  else if (routines.length === 0) exclusionReason = null;
   else if (failing) exclusionReason = "error";
   else if (healthyActive.length > 0) exclusionReason = null;
   else if (routines.some((routine) => routine.status === "paused")) {
@@ -164,15 +164,15 @@ export function buildAgentOperatingSummary(
     mode = "no_live_release";
     label = "Release required";
     detail = "Promote a verified release before this Agent works.";
-  } else if (routines.length === 0) {
-    mode = "no_enabled_routine";
-    label = "Setup required";
-    detail = "Configure a managed routine before this Agent works.";
   } else if (!input.setupReady) {
     mode = "setup_required";
     label = "Setup required";
     detail =
       "Complete the blocking setup requirements before this Agent works.";
+  } else if (routines.length === 0) {
+    mode = "available_on_demand";
+    label = "Available on demand";
+    detail = "Ready for direct calls and asynchronous MCP work.";
   } else if (failing) {
     mode = "error";
     label = "Needs attention";
@@ -276,6 +276,8 @@ export function buildAgentOperatingSummary(
     label,
     detail,
     basis: readiness.exclusionReason
+      ? "readiness"
+      : routines.length === 0
       ? "readiness"
       : currentRun
       ? "routine_run"

@@ -36,7 +36,6 @@ Deno.test("operator remediation registry covers the closed remediation vocabular
     "approve_capability",
     "approve_grant",
     "configure_provider",
-    "configure_routine",
     "configure_secret",
     "configure_setting",
     "enable_routine",

@@ -10685,6 +10685,7 @@ async function handleLaunchFleet(request: Request): Promise<Response> {
           ? row.deployment_state
           : undefined,
         activeReleaseDigest: row.active_release_digest || null,
+        releaseVersion: row.current_version || null,
         setupRequiredAt: row.setup_required_at || null,
         state: projection.state,
         health: projection.health,
@@ -10709,8 +10710,8 @@ async function handleLaunchFleet(request: Request): Promise<Response> {
       paused: reasons.filter((reason) => reason === "paused").length,
       blocked:
         reasons.filter((reason) =>
-          reason === "no_live_release" || reason === "no_enabled_routine" ||
-          reason === "setup_required" || reason === "disabled"
+          reason === "no_live_release" || reason === "setup_required" ||
+          reason === "disabled"
         ).length,
       failing: reasons.filter((reason) => reason === "error").length,
     },

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  LaunchRouteDataCache,
   launchRouteDataAfterError,
+  LaunchRouteDataCache,
   launchRouteDataIdentity,
   launchRouteDataSearchKey,
   sameLaunchAuthScope,
@@ -60,10 +60,18 @@ describe("launchRouteDataIdentity", () => {
       sessionIdentity: "user:alice",
     };
     cache.set(aliceIdentity, { agentHomeError: "alice-private-payload" });
+    cache.set("alice-fleet", {
+      fleet: { agents: [], generatedAt: "2026-08-04T12:00:00.000Z" },
+    } as never);
+
+    expect(cache.fleetSeed()?.fleet?.generatedAt).toBe(
+      "2026-08-04T12:00:00.000Z",
+    );
 
     cache.clearForSessionChange();
 
     expect(cache.get(aliceIdentity)).toBeUndefined();
+    expect(cache.fleetSeed()).toBeUndefined();
     expect(sameLaunchAuthScope(captured, {
       cacheEpoch: cache.epoch,
       sessionIdentity: "user:bob",
@@ -72,6 +80,18 @@ describe("launchRouteDataIdentity", () => {
       cacheEpoch: cache.epoch,
       sessionIdentity: "user:alice",
     })).toBe(false);
+  });
+
+  it("offers the latest Fleet payload as an Agent-header seed", () => {
+    const cache = new LaunchRouteDataCache();
+    const fleet = {
+      agents: [],
+      generatedAt: "2026-08-04T12:00:00.000Z",
+    } as never;
+    cache.set("owner@0|home|{}|/", { fleet });
+
+    expect(cache.fleetSeed()).toEqual({ fleet });
+    expect(cache.get("owner@0|agent|{}|/agents/one")).toBeUndefined();
   });
 
   it("never preserves prior-owner data after a failed revalidation", () => {

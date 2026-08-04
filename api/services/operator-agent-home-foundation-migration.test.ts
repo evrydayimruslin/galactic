@@ -20,6 +20,9 @@ const attention = await migration(
 const projections = await migration(
   "20260723102000_agent_operator_projections.sql",
 );
+const onDemandReadiness = await migration(
+  "20260804120000_agent_on_demand_readiness.sql",
+);
 const search = await migration(
   "20260723103000_agent_search_documents.sql",
 );
@@ -224,6 +227,46 @@ Deno.test("Fleet v2 is additive, strict, zero-based, and activity is bounded", (
     (projections.match(/p_recent_limit integer DEFAULT 3/g) ?? []).length,
     1,
   );
+});
+
+Deno.test("Fleet treats schedule-free Agents as working without bypassing setup", () => {
+  assertStringIncludes(
+    onDemandReadiness,
+    "WHEN positioned.managed_count = 0 THEN 'available_on_demand'",
+  );
+  assertStringIncludes(
+    onDemandReadiness,
+    "AND projected.exclusion_reason IS NULL THEN 'active'",
+  );
+  assertStringIncludes(
+    onDemandReadiness,
+    "WHEN inputs.required_setting_count >",
+  );
+  assertStringIncludes(
+    onDemandReadiness,
+    "secrets.value_encrypted <> ''",
+  );
+  assertStringIncludes(
+    onDemandReadiness,
+    "jsonb_typeof(agents.env_vars->settings.key) = 'string'",
+  );
+  assertStringIncludes(
+    onDemandReadiness,
+    "WHEN inputs.deployment_state IN ('materializing', 'setup_required')",
+  );
+  assertStringIncludes(
+    onDemandReadiness,
+    "WHEN inputs.deployment_state NOT IN ('legacy', 'ready')",
+  );
+  assertStringIncludes(
+    onDemandReadiness,
+    "WHEN inputs.managed_count > 0\n           AND NOT inputs.reporting_configured",
+  );
+  assertStringIncludes(
+    onDemandReadiness,
+    "diagnosis->>'code' = 'AGENT_PRIMARY_ROUTINE_MISSING'",
+  );
+  assertEquals(onDemandReadiness.includes("'no_enabled_routine'"), false);
 });
 
 Deno.test("Agent navigation documents are private, safe, and destination-first", () => {

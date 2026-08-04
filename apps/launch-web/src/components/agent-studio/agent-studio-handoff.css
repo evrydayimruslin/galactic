@@ -34,7 +34,7 @@
   color: var(--ground);
 }
 
-.agent-studio-handoff-back {
+.agent-studio .agent-studio-handoff-back {
   display: inline-flex;
   align-items: center;
   gap: 7px;

@@ -6,12 +6,14 @@ import type {
   LaunchAgentOperatingState,
 } from "../../../../../shared/contracts/launch.ts";
 import {
+  agentStudioEscapeAction,
   agentStudioSetupCapabilityId,
   agentStudioSetupGrantRequest,
   matchingAgentStudioSetupGrant,
   remediateAgentStudioSetupGrant,
   shouldShowAgentSetup,
   studioStatus,
+  studioStatusFromFleet,
 } from "../../lib/agent-studio-state";
 
 const CALLER_ID = "11111111-1111-4111-8111-111111111111";
@@ -113,7 +115,11 @@ function grant(
   overrides: Partial<AgentGrantSummary> = {},
 ): AgentGrantSummary {
   return {
-    callerApp: { id: CALLER_ID, name: "Inbox operator", slug: "inbox-operator" },
+    callerApp: {
+      id: CALLER_ID,
+      name: "Inbox operator",
+      slug: "inbox-operator",
+    },
     callerFunction: null,
     createdBy: "auto_request",
     id: `grant-${status}`,
@@ -135,7 +141,7 @@ describe("Agent Studio derived state", () => {
   it("shows setup only for genuinely new or unconfigured Agents", () => {
     expect(shouldShowAgentSetup(homeState({ live: false }))).toBe(true);
     expect(shouldShowAgentSetup(
-      homeState({ mode: "no_enabled_routine" }),
+      homeState({ mode: "available_on_demand" }),
     )).toBe(false);
     expect(shouldShowAgentSetup(
       homeState({
@@ -170,8 +176,50 @@ describe("Agent Studio derived state", () => {
       homeState({ lifecycle: "paused", mode: "paused" }),
     )).toEqual({ label: "Paused", tone: "stopped" });
     expect(studioStatus(
-      homeState({ lifecycle: "ready", mode: "no_enabled_routine" }),
+      homeState({ lifecycle: "ready", mode: "available_on_demand" }),
     )).toEqual({ label: "Available on demand", tone: "live" });
+  });
+
+  it("hydrates status from Fleet before Agent Home arrives", () => {
+    expect(studioStatusFromFleet({
+      workingReadiness: {
+        working: true,
+        ready: true,
+        exclusionReason: null,
+        activeRoutineCount: 0,
+        totalRoutineCount: 0,
+      },
+      operatingSummary: {
+        mode: "available_on_demand",
+        readiness: { working: true },
+      },
+    } as never)).toEqual({
+      label: "Available on demand",
+      tone: "live",
+    });
+  });
+
+  it("gives dialogs and local handoff navigation precedence on Escape", () => {
+    expect(agentStudioEscapeAction({
+      defaultPrevented: true,
+      handoffOpen: false,
+      modalOpen: false,
+    })).toBe("ignore");
+    expect(agentStudioEscapeAction({
+      defaultPrevented: false,
+      handoffOpen: true,
+      modalOpen: true,
+    })).toBe("ignore");
+    expect(agentStudioEscapeAction({
+      defaultPrevented: false,
+      handoffOpen: true,
+      modalOpen: false,
+    })).toBe("close_handoff");
+    expect(agentStudioEscapeAction({
+      defaultPrevented: false,
+      handoffOpen: false,
+      modalOpen: false,
+    })).toBe("leave_studio");
   });
 });
 
@@ -206,10 +254,12 @@ describe("Agent Studio setup authority remediation", () => {
       targetFunction: "send_digest",
     });
 
-    expect(agentStudioSetupGrantRequest(
-      grantSetupHome({ capabilityAppId: "mail-agent" }),
-      `grant:${CAPABILITY_ID}`,
-    )?.targetAppId).toBe(TARGET_ID);
+    expect(
+      agentStudioSetupGrantRequest(
+        grantSetupHome({ capabilityAppId: "mail-agent" }),
+        `grant:${CAPABILITY_ID}`,
+      )?.targetAppId,
+    ).toBe(TARGET_ID);
 
     expect(agentStudioSetupGrantRequest(
       grantSetupHome({

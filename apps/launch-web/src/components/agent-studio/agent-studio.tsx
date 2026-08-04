@@ -1,10 +1,4 @@
-import {
-  type ReactElement,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { type ReactElement, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   LaunchAgentAccessConsumer,
@@ -14,11 +8,12 @@ import type {
 } from "../../../../../shared/contracts/launch.ts";
 import type { LaunchPageProps } from "../../App";
 import {
-  parseAgentStudioRouteState,
   type AgentStudioPane,
+  parseAgentStudioRouteState,
   updateAgentStudioRoute,
 } from "../../lib/agent-studio-route";
 import {
+  agentStudioEscapeAction,
   agentStudioSetupCapabilityId,
   clearStudioActionKey,
   getOrCreateStudioActionKey,
@@ -26,6 +21,7 @@ import {
   retainIdempotencyKeyAfterFailure,
   shouldShowAgentSetup,
   studioStatus,
+  studioStatusFromFleet,
 } from "../../lib/agent-studio-state";
 import { createStudioHandoffCredential } from "../../lib/agent-studio-handoff-credential";
 import { launchApi, launchApiOrigin } from "../../lib/api";
@@ -42,21 +38,16 @@ import {
 import { dismissLaunchWorkspace } from "../../lib/navigation";
 import { mergeAgentActivityPages } from "../../lib/operator-activity-state";
 import { useTheme } from "../../lib/theme";
-import {
-  AgentSettingsPane,
-  FunctionsPane,
-} from "../nebula-fleet";
+import { AgentSettingsPane, FunctionsPane } from "../nebula-fleet";
 import { OperatorAgentAlerts } from "../nebula/operator-agent-alerts";
 import { AgentStudioConnections } from "./agent-studio-connections";
-import {
-  AgentStudioHandoff,
-} from "./agent-studio-handoff";
+import { AgentStudioHandoff } from "./agent-studio-handoff";
 import type { AgentStudioHandoffIntent } from "./agent-studio-handoff-model";
 import { AgentStudioInterfaces } from "./agent-studio-interfaces";
 import { AgentStudioOverview } from "./agent-studio-overview";
 import {
-  type AgentStudioRoutineStarter,
   AgentStudioRoutines,
+  type AgentStudioRoutineStarter,
 } from "./agent-studio-routines";
 import {
   AgentStudioActivity,
@@ -87,6 +78,13 @@ export function AgentStudioApp({
     ? route.params.slug
     : "";
   const home = live.data.agentHome;
+  const fleetAgent =
+    live.data.fleet?.agents.find(({ agent: candidate }) =>
+      candidate.slug === route.params.slug || candidate.id === route.params.slug
+    ) ?? null;
+  const headerAgent = agent ?? fleetAgent?.agent ?? null;
+  const fleetAttentionCount = fleetAgent?.attentionCount ??
+    fleetAgent?.unreadAlertCount ?? 0;
   const interfaceIdsKey = (agent?.interfaces ?? [])
     .map((entry) => entry.id)
     .join("\u0000");
@@ -105,7 +103,7 @@ export function AgentStudioApp({
   const [setupActionError, setSetupActionError] = useState("");
   const homeActionIdempotencyKeys = useRef(new Map<string, string>());
   const [attentionCount, setAttentionCount] = useState(
-    home?.attention?.openCount ?? 0,
+    home?.attention?.openCount ?? fleetAttentionCount,
   );
   const [preferences, setPreferences] = useState<LaunchAgentPreferences | null>(
     home?.preferences ?? null,
@@ -147,13 +145,13 @@ export function AgentStudioApp({
     };
   }, [resolvedTheme]);
   useEffect(() => {
-    if (home?.attention) setAttentionCount(home.attention.openCount);
-  }, [home?.attention?.openCount]);
+    setAttentionCount(home?.attention?.openCount ?? fleetAttentionCount);
+  }, [fleetAttentionCount, home?.attention?.openCount]);
   useEffect(() => {
-    setAttentionCount(home?.attention?.openCount ?? 0);
+    setAttentionCount(home?.attention?.openCount ?? fleetAttentionCount);
     setSetupActionBusy(null);
     setSetupActionError("");
-  }, [agent?.id]);
+  }, [headerAgent?.id]);
   useEffect(() => {
     preferenceReadGeneration.current += 1;
     preferenceMutationGeneration.current += 1;
@@ -168,13 +166,15 @@ export function AgentStudioApp({
     let mounted = true;
     launchApi.agentPreferences(agentLocator(agent))
       .then(async ({ preferences: fetched }) => {
-        if (!shouldApplyInterfaceFavoritesRead({
-          currentMutationGeneration: preferenceMutationGeneration.current,
-          currentReadGeneration: preferenceReadGeneration.current,
-          mounted,
-          mutationGeneration,
-          readGeneration,
-        })) return;
+        if (
+          !shouldApplyInterfaceFavoritesRead({
+            currentMutationGeneration: preferenceMutationGeneration.current,
+            currentReadGeneration: preferenceReadGeneration.current,
+            mounted,
+            mutationGeneration,
+            readGeneration,
+          })
+        ) return;
         let next = fetched;
         let storage: Storage | null = null;
         try {
@@ -203,24 +203,28 @@ export function AgentStudioApp({
           }
           clearLegacyInterfaceFavorites(storage, agent.id);
         }
-        if (!shouldApplyInterfaceFavoritesRead({
-          currentMutationGeneration: preferenceMutationGeneration.current,
-          currentReadGeneration: preferenceReadGeneration.current,
-          mounted,
-          mutationGeneration,
-          readGeneration,
-        })) return;
+        if (
+          !shouldApplyInterfaceFavoritesRead({
+            currentMutationGeneration: preferenceMutationGeneration.current,
+            currentReadGeneration: preferenceReadGeneration.current,
+            mounted,
+            mutationGeneration,
+            readGeneration,
+          })
+        ) return;
         setPreferences(next);
         setPreferencesError("");
       })
       .catch((reason) => {
-        if (shouldApplyInterfaceFavoritesRead({
-          currentMutationGeneration: preferenceMutationGeneration.current,
-          currentReadGeneration: preferenceReadGeneration.current,
-          mounted,
-          mutationGeneration,
-          readGeneration,
-        })) {
+        if (
+          shouldApplyInterfaceFavoritesRead({
+            currentMutationGeneration: preferenceMutationGeneration.current,
+            currentReadGeneration: preferenceReadGeneration.current,
+            mounted,
+            mutationGeneration,
+            readGeneration,
+          })
+        ) {
           setPreferencesError(errorMessage(reason));
         }
       });
@@ -288,10 +292,13 @@ export function AgentStudioApp({
     nextItem?: string | null,
     replace = false,
   ) => {
-    navigate(updateAgentStudioRoute(location.pathname, location.search, {
-      pane: nextPane,
-      ...(nextItem !== undefined ? { item: nextItem } : {}),
-    }), { replace, scroll: "preserve" });
+    navigate(
+      updateAgentStudioRoute(location.pathname, location.search, {
+        pane: nextPane,
+        ...(nextItem !== undefined ? { item: nextItem } : {}),
+      }),
+      { replace, scroll: "preserve" },
+    );
   };
 
   const openHandoff = (
@@ -311,6 +318,37 @@ export function AgentStudioApp({
     openPane(returnPane, `handoff:${intent}`);
   };
 
+  const returnToAlerts = new URLSearchParams(location.search).get("from") ===
+    "alerts";
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      const action = agentStudioEscapeAction({
+        defaultPrevented: event.defaultPrevented,
+        handoffOpen: studioHandoffIntent(item) !== null,
+        modalOpen: document.querySelector(
+          '[aria-modal="true"], [role="dialog"]',
+        ) !== null,
+      });
+      if (action === "ignore") return;
+      event.preventDefault();
+      if (action === "close_handoff") {
+        openPane(pane, null, true);
+        return;
+      }
+      dismissLaunchWorkspace(navigate, returnToAlerts);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [
+    item,
+    location.pathname,
+    location.search,
+    navigate,
+    pane,
+    returnToAlerts,
+  ]);
+
   const toggleFavorite = async (interfaceId: string) => {
     const currentPreferences = preferences ?? home?.preferences ?? null;
     if (
@@ -322,12 +360,12 @@ export function AgentStudioApp({
     const mutationGeneration = ++preferenceMutationGeneration.current;
     const favoriteInterfaceIds =
       currentPreferences.favoriteInterfaceIds.includes(
-        interfaceId,
-      )
-      ? currentPreferences.favoriteInterfaceIds.filter((id) =>
-        id !== interfaceId
-      )
-      : [...currentPreferences.favoriteInterfaceIds, interfaceId];
+          interfaceId,
+        )
+        ? currentPreferences.favoriteInterfaceIds.filter((id) =>
+          id !== interfaceId
+        )
+        : [...currentPreferences.favoriteInterfaceIds, interfaceId];
     try {
       const response = await launchApi.updateAgentPreferences(
         agentLocator(agent),
@@ -479,8 +517,7 @@ export function AgentStudioApp({
       );
       return;
     }
-    const attemptKey =
-      `${agent.id}:home:approve_capabilities:${capabilityId}`;
+    const attemptKey = `${agent.id}:home:approve_capabilities:${capabilityId}`;
     const idempotencyKey = getOrCreateStudioActionKey(
       attemptKey,
       homeActionIdempotencyKeys.current,
@@ -550,85 +587,87 @@ export function AgentStudioApp({
     }
   };
 
-  const status = studioStatus(home);
-  const returnToAlerts = new URLSearchParams(location.search).get("from") ===
-    "alerts";
+  const status = home ? studioStatus(home) : studioStatusFromFleet(fleetAgent);
   return (
     <AgentStudioShell
-      agentName={agent?.name ?? recallAgentName(routeSlug) ?? "Loading Agent"}
+      agentName={headerAgent?.name ?? recallAgentName(routeSlug) ??
+        "Loading Agent"}
       badges={{
         ...(attentionCount ? { alerts: attentionCount } : {}),
       }}
       onBack={() => dismissLaunchWorkspace(navigate, returnToAlerts)}
       onPaneChange={(next) => openPane(next, null)}
       pane={pane}
-      releaseVersion={home?.release.live?.version ?? null}
+      releaseVersion={home?.release.live?.version ??
+        fleetAgent?.releaseVersion ?? null}
       statusLabel={status.label}
       statusTone={status.tone}
       theme={resolvedTheme}
     >
-      {!agent
-        ? <StudioLoading error={live.error} />
-        : (
-          <>
-            <AgentStudioPaneContent
-              activity={activity}
-              activityCursor={activityCursor}
-              activityLoading={activityLoading}
-              activationBusy={activationBusy}
-              agent={agent}
-              agentPauseBusy={agentPauseBusy}
-              agentPauseNotice={agentPauseNotice}
-              home={home}
-              item={item}
-              live={live}
-              onAttentionCountChange={setAttentionCount}
-              onActivate={() => void activate()}
-              onPauseAgent={() => void pauseAgent()}
-              onResumeAgent={() => void resumeAgent()}
-              onApproveSetupCapability={(requirementId) =>
-                void approveSetupCapability(requirementId)}
-              onLoadMoreActivity={() => void loadMoreActivity()}
-              onNavigate={navigate}
-              onOpenHandoff={openHandoff}
-              onOpenPane={openPane}
-              onRemediateSetupGrant={(requirementId) =>
-                void remediateSetupGrant(requirementId)}
-              onRunNow={() => void runNow()}
-              onToggleFavorite={(id) => void toggleFavorite(id)}
-              pane={pane}
-              preferences={preferences}
-              setupActionBusy={setupActionBusy}
-              setupActionError={setupActionError}
-              handoffDescriptions={handoffDescriptions}
-              onHandoffDescriptionsChange={setHandoffDescriptions}
-            />
-            {runError
-              ? <p className="agent-studio-inline-error" role="alert">{runError}</p>
-              : null}
-            {activationError
-              ? (
-                <p className="agent-studio-inline-error" role="alert">
-                  {activationError}
-                </p>
-              )
-              : null}
-            {preferencesError
-              ? (
-                <p className="agent-studio-inline-error" role="alert">
-                  {preferencesError}
-                </p>
-              )
-              : null}
-            {activityError && pane === "activity"
-              ? (
-                <p className="agent-studio-inline-error" role="alert">
-                  {activityError}
-                </p>
-              )
-              : null}
-          </>
-        )}
+      {!agent ? <StudioLoading error={live.error} /> : (
+        <>
+          <AgentStudioPaneContent
+            activity={activity}
+            activityCursor={activityCursor}
+            activityLoading={activityLoading}
+            activationBusy={activationBusy}
+            agent={agent}
+            agentPauseBusy={agentPauseBusy}
+            agentPauseNotice={agentPauseNotice}
+            home={home}
+            item={item}
+            live={live}
+            onAttentionCountChange={setAttentionCount}
+            onActivate={() => void activate()}
+            onPauseAgent={() => void pauseAgent()}
+            onResumeAgent={() => void resumeAgent()}
+            onApproveSetupCapability={(requirementId) =>
+              void approveSetupCapability(requirementId)}
+            onLoadMoreActivity={() => void loadMoreActivity()}
+            onNavigate={navigate}
+            onOpenHandoff={openHandoff}
+            onOpenPane={openPane}
+            onRemediateSetupGrant={(requirementId) =>
+              void remediateSetupGrant(requirementId)}
+            onRunNow={() => void runNow()}
+            onToggleFavorite={(id) => void toggleFavorite(id)}
+            pane={pane}
+            preferences={preferences}
+            setupActionBusy={setupActionBusy}
+            setupActionError={setupActionError}
+            handoffDescriptions={handoffDescriptions}
+            onHandoffDescriptionsChange={setHandoffDescriptions}
+          />
+          {runError
+            ? (
+              <p className="agent-studio-inline-error" role="alert">
+                {runError}
+              </p>
+            )
+            : null}
+          {activationError
+            ? (
+              <p className="agent-studio-inline-error" role="alert">
+                {activationError}
+              </p>
+            )
+            : null}
+          {preferencesError
+            ? (
+              <p className="agent-studio-inline-error" role="alert">
+                {preferencesError}
+              </p>
+            )
+            : null}
+          {activityError && pane === "activity"
+            ? (
+              <p className="agent-studio-inline-error" role="alert">
+                {activityError}
+              </p>
+            )
+            : null}
+        </>
+      )}
     </AgentStudioShell>
   );
 }
@@ -719,7 +758,10 @@ function AgentStudioPaneContent({
           functionCount: live.data.agentFunctions?.functions.length ?? null,
           id: agent.id,
           name: agent.name,
-          releaseVersion: home?.release.live?.version ?? null,
+          releaseVersion: home?.release.live?.version ??
+            live.data.fleet?.agents.find(({ agent: candidate }) =>
+              candidate.id === agent.id
+            )?.releaseVersion ?? null,
           routineCount: live.data.agentRoutines?.routines.length ?? null,
           slug: agent.slug,
         }}
@@ -890,8 +932,7 @@ function AgentStudioPaneContent({
         homeRevision={home.revision}
         itemId={item}
         onChanged={() => live.reload()}
-        onOpenConsumer={(consumer) =>
-          openAccessConsumer(onOpenPane, consumer)}
+        onOpenConsumer={(consumer) => openAccessConsumer(onOpenPane, consumer)}
         onOpenItem={(itemId) =>
           onOpenPane("connections", itemId, itemId === null)}
       />
@@ -928,7 +969,13 @@ function StudioLoading({ error }: { error?: string }): ReactElement {
             <p>{error}</p>
           </>
         )
-        : <><span /><span /><span /></>}
+        : (
+          <>
+            <span />
+            <span />
+            <span />
+          </>
+        )}
     </section>
   );
 }

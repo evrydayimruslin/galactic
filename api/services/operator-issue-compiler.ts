@@ -3,9 +3,9 @@ import type {
   LaunchAgentHomeRequirement,
   LaunchOperatorAffectedAgent,
   LaunchOperatorConditionCode,
-  LaunchOperatorDiagnosticNavigationAction,
   LaunchOperatorDiagnosis,
   LaunchOperatorDiagnosisProvenance,
+  LaunchOperatorDiagnosticNavigationAction,
   LaunchOperatorIssue,
   LaunchOperatorItemCandidate,
   LaunchOperatorOrdering,
@@ -389,6 +389,9 @@ function compileSetupRequirement(
   const issueOrdering = ordering(input, fallbackOrdinal);
 
   if (requirement.configured) return null;
+  // Routines are optional scheduling configuration. Even a stale or malformed
+  // routine requirement must never become an operator issue.
+  if (requirement.kind === "routine") return null;
   if (!requirement.blocking && requirement.actions.length === 0) return null;
 
   if (requirementId === "inference:byok") {
@@ -398,42 +401,6 @@ function compileSetupRequirement(
   const conditionKey = setupConditionKey(agentId, requirementId);
   const requirementLabel = label(requirement.label, "requirement.label");
   const affectedAgents = [affectedAgent(input.agent, requirement.blocking)];
-  const setupTarget = {
-    kind: "agent_setup_requirement" as const,
-    agentId,
-    requirementId,
-  };
-
-  if (requirement.kind === "routine") {
-    return issue({
-      conditionKey,
-      scope: { kind: "agent", agentId },
-      severity: "warning",
-      diagnosis: setupDiagnosis(
-        "AGENT_PRIMARY_ROUTINE_MISSING",
-        "Create a primary routine",
-        "This Agent needs a routine before it can run on a schedule.",
-      ),
-      affectedAgents,
-      remediations: [
-        remediation(conditionKey, {
-          key: "configure_routine",
-          label: "Create routine",
-          description:
-            "Define what this Agent should do and when it should run.",
-          presentation: "inline",
-          requiredAuthority: "account_session",
-          sideEffect: "configuration_write",
-          target: setupTarget,
-        }),
-      ],
-      requiresDecision: false,
-      ordering: issueOrdering,
-      recovery: revalidateRecovery(),
-      detectedAt,
-    });
-  }
-
   if (requirement.kind === "setting") {
     const settingKey = requirement.settingKey
       ? trustedIdentifier(requirement.settingKey, "requirement.settingKey")

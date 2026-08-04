@@ -828,11 +828,6 @@ html[data-theme="light"] .nebula-root .neb-add-agent-card.copied-prompt {
 
 /* Settings studio */
 .neb-topbar-identity { display: flex; min-width: 0; align-items: center; gap: 13px; }
-.neb-settings-topbar-crumb { position: relative; top: -4px; display: flex; align-items: center; gap: 6px; color: var(--ink-3); font-family: var(--mono); font-size: 11px; letter-spacing: .04em; }
-.neb-settings-topbar-crumb button { border: 0; padding: 0; background: transparent; color: inherit; cursor: pointer; font-family: inherit; font-size: inherit; letter-spacing: inherit; }
-.neb-settings-topbar-crumb button:hover { color: var(--ink-2); }
-.neb-app:has(.neb-settings-panel) { max-width: 100%; padding-top: 80px; }
-.neb-topbar:has(.neb-settings-topbar-crumb) { padding: 20px 26px 18px; }
 
 /* Settings renders directly on the fleet background — no card chrome, so
    the page motif bleeds through the rows. */
@@ -843,7 +838,7 @@ html[data-theme="light"] .nebula-root .neb-add-agent-card.copied-prompt {
   height: auto;
   min-height: 0;
   overflow: visible;
-  margin: 56px auto 90px;
+  margin: 0 auto 90px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -859,7 +854,7 @@ html[data-theme="light"] .nebula-root .neb-add-agent-card.copied-prompt {
   line-height: 1;
   letter-spacing: -.01em;
 }
-.neb-settings-groups { display: grid; gap: 26px; margin-top: 30px; }
+.neb-settings-groups { display: grid; gap: 26px; margin-top: 0; }
 .neb-settings-group h2 {
   margin: 0;
   color: var(--ink-3);
@@ -1247,11 +1242,9 @@ html[data-theme="light"] .nebula-root .neb-add-agent-card.copied-prompt {
   .neb-mobile-back { display: flex; align-items: center; gap: 5px; margin: 2px 0 18px; padding: 0; border: 0; background: none; color: var(--ink-2); cursor: pointer; font-family: var(--mono) !important; font-size: 12.5px; }
   .neb-provider-head { align-items: flex-start; flex-direction: column; }.neb-provider-editor { grid-template-columns: 1fr; }.neb-plan-card { align-items: flex-start; flex-direction: column; gap: 14px; }
   .neb-compute-tool-grid, .neb-compute-limit-grid, .neb-compute-secret-destination, .neb-compute-authority-rule { grid-template-columns: 1fr; }.neb-compute-secret-destination { padding-left: 34px; }.neb-compute-run-grid { grid-template-columns: 1fr 1fr; }
-  .neb-topbar:has(.neb-settings-topbar-crumb) { padding-right: 16px; padding-left: 16px; }
-  .neb-app:has(.neb-settings-panel) { padding-right: 16px; padding-left: 16px; }
-  .neb-inline-panel.neb-settings-panel { width: 100%; margin: 24px auto 56px; padding: 0; }
+  .neb-inline-panel.neb-settings-panel { width: 100%; margin: 0 auto 56px; padding: 0; }
   .neb-settings-screen h1 { font-size: 31px; }
-  .neb-settings-groups { margin-top: 26px; }
+  .neb-settings-groups { margin-top: 0; }
   .neb-settings-row { grid-template-columns: minmax(0, 1fr) auto; gap: 5px 12px; }
   .neb-settings-row-value { max-width: 160px; }
   .neb-settings-row .neb-settings-action { grid-column: 1 / -1; justify-self: end; }

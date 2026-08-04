@@ -270,6 +270,23 @@ Deno.test("agent home: a qualified callable deployment can activate without a ro
   );
 });
 
+Deno.test("agent home: a legacy Agent without routines is ready on demand", () => {
+  const home = buildAgentHomeResponse(input({
+    deploymentState: "legacy",
+    routine: null,
+  }));
+
+  const routine = home.setup.requirements.find((item) =>
+    item.id === "routine:primary"
+  );
+  assertEquals(home.state.lifecycle, "ready");
+  assertEquals(home.setup.ready, true);
+  assertEquals(home.state.blockers, []);
+  assertEquals(routine?.required, false);
+  assertEquals(routine?.blocking, false);
+  assertEquals(routine?.configured, false);
+});
+
 Deno.test("agent home: an active Agent remains active when new setup blockers appear", () => {
   const base = input();
   const home = buildAgentHomeResponse(input({

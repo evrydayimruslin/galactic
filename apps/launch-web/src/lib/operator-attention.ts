@@ -12,8 +12,7 @@ export interface OperatorAttentionEnvelope {
   operatorItems?: LaunchOperatorAttentionProjection;
 }
 
-export type OperatorAttentionAgent =
-  LaunchOperatorAttentionAgentCount["agent"];
+export type OperatorAttentionAgent = LaunchOperatorAttentionAgentCount["agent"];
 
 export function canonicalOperatorAttention(
   value: OperatorAttentionEnvelope | null | undefined,
@@ -103,14 +102,6 @@ export function operatorRemediationHref(
   switch (target.kind) {
     case "account_provider":
       return "/account?pane=byok";
-    case "agent_setup_requirement": {
-      const agent = agents.get(target.agentId);
-      if (!agent) return null;
-      return agentRoute(
-        agent,
-        remediation.key === "configure_routine" ? "routines" : "overview",
-      );
-    }
     case "agent_setting": {
       const agent = agents.get(target.agentId);
       return agent
@@ -137,7 +128,9 @@ export function operatorRemediationHref(
     }
     case "routine_run": {
       const agent = agents.get(target.agentId);
-      return agent ? agentRoute(agent, "routines", `run:${target.runId}`) : null;
+      return agent
+        ? agentRoute(agent, "routines", `run:${target.runId}`)
+        : null;
     }
     case "routine_logs": {
       const agent = agents.get(target.agentId);

@@ -34,9 +34,8 @@ const DEFAULT_POLL_DELAY_MS = 500;
 const MAX_POLL_ATTEMPTS = 20;
 const MAX_POLL_DELAY_MS = 5_000;
 const OPERATOR_ISSUE_CONTRACT_VERSION = "2026-07-24.operator-issues.1";
-const PRIMARY_ROUTINE_REQUIREMENT_ID = "routine:primary";
-const PRIMARY_ROUTINE_DIAGNOSIS_CODE = "AGENT_PRIMARY_ROUTINE_MISSING";
-const PRIMARY_ROUTINE_DIAGNOSIS_SUMMARY = "Create a primary routine";
+const RETIRED_ROUTINE_REQUIREMENT_ID = "routine:primary";
+const RETIRED_ROUTINE_DIAGNOSIS_CODE = "AGENT_PRIMARY_ROUTINE_MISSING";
 
 function requiredString(value, label) {
   const normalized = String(value || "").trim();
@@ -47,14 +46,6 @@ function requiredString(value, label) {
 function isRecord(value) {
   return value !== null && typeof value === "object" &&
     !Array.isArray(value);
-}
-
-function hasExactKeys(value, expected) {
-  if (!isRecord(value)) return false;
-  const actual = Object.keys(value).sort();
-  const keys = [...expected].sort();
-  return actual.length === keys.length &&
-    actual.every((key, index) => key === keys[index]);
 }
 
 function safeCount(value, label) {
@@ -250,105 +241,20 @@ async function probeOwnerSurface({
   );
 }
 
-function expectedPrimaryRoutineConditionKey(agentId) {
+function retiredPrimaryRoutineConditionKey(agentId) {
   return `agent:${encodeURIComponent(agentId)}:requirement:${
-    encodeURIComponent(PRIMARY_ROUTINE_REQUIREMENT_ID)
+    encodeURIComponent(RETIRED_ROUTINE_REQUIREMENT_ID)
   }`;
 }
 
-function primaryRoutineBlocker(canonical, agentId, label) {
-  const conditionKey = expectedPrimaryRoutineConditionKey(agentId);
-  const matches = canonical.items.filter((entry) =>
-    isRecord(entry) && isRecord(entry.item) &&
-    entry.item.conditionKey === conditionKey
-  );
-  if (matches.length === 0) return null;
-  if (matches.length !== 1) {
-    throw new Error(`${label} returned duplicate primary-routine blockers.`);
-  }
-
-  const countMatches = canonical.agentCounts.filter((entry) =>
-    isRecord(entry) && isRecord(entry.agent) &&
-    entry.agent.id === agentId
-  );
-  if (
-    countMatches.length !== 1 ||
-    safeCount(countMatches[0].openCount, `${label} Agent open`) < 1 ||
-    safeCount(countMatches[0].blockingCount, `${label} Agent blocking`) < 1
-  ) {
-    throw new Error(
-      `${label} does not contain the exact affected-Agent count projection.`,
-    );
-  }
-
-  const item = matches[0].item;
-  if (
-    typeof item.id !== "string" ||
-    !UUID_RE.test(item.id) ||
-    !hasExactKeys(item.scope, ["kind", "agentId"]) ||
-    item.scope.kind !== "agent" ||
-    item.scope.agentId !== agentId ||
-    !hasExactKeys(item.diagnosis, [
-      "code",
-      "causeCode",
-      "summary",
-      "detail",
-      "provenance",
-      "evidence",
-    ]) ||
-    item.diagnosis.code !== PRIMARY_ROUTINE_DIAGNOSIS_CODE ||
-    item.diagnosis.causeCode !== null ||
-    item.diagnosis.summary !== PRIMARY_ROUTINE_DIAGNOSIS_SUMMARY ||
-    typeof item.diagnosis.detail !== "string" ||
-    item.diagnosis.detail.length === 0 ||
-    item.diagnosis.provenance !== "platform" ||
-    !Array.isArray(item.diagnosis.evidence) ||
-    item.diagnosis.evidence.length !== 0 ||
-    !Array.isArray(item.affectedAgents) ||
-    item.affectedAgents.length !== 1 ||
-    !hasExactKeys(item.affectedAgents[0], ["agentId", "blocking"]) ||
-    item.affectedAgents[0].agentId !== agentId ||
-    item.affectedAgents[0].blocking !== true ||
-    !Array.isArray(item.remediations) ||
-    item.remediations.length !== 1
-  ) {
-    throw new Error(`${label} primary-routine blocker does not match.`);
-  }
-
-  const remediation = item.remediations[0];
-  if (
-    !hasExactKeys(remediation, [
-      "id",
-      "key",
-      "label",
-      "description",
-      "presentation",
-      "requiredAuthority",
-      "sideEffect",
-      "target",
-    ]) ||
-    remediation.id !==
-      `${conditionKey}:remediation:configure_routine` ||
-    remediation.key !== "configure_routine" ||
-    remediation.label !== "Create routine" ||
-    remediation.presentation !== "inline" ||
-    remediation.requiredAuthority !== "account_session" ||
-    remediation.sideEffect !== "configuration_write" ||
-    !hasExactKeys(remediation.target, [
-      "kind",
-      "agentId",
-      "requirementId",
-    ]) ||
-    remediation.target.kind !== "agent_setup_requirement" ||
-    remediation.target.agentId !== agentId ||
-    remediation.target.requirementId !== PRIMARY_ROUTINE_REQUIREMENT_ID
-  ) {
-    throw new Error(
-      `${label} primary-routine remediation does not match.`,
-    );
-  }
-
-  return { itemId: item.id };
+function hasRetiredPrimaryRoutineBlocker(canonical, agentId) {
+  const conditionKey = retiredPrimaryRoutineConditionKey(agentId);
+  return canonical.items.some((entry) => {
+    if (!isRecord(entry) || !isRecord(entry.item)) return false;
+    return entry.item.conditionKey === conditionKey ||
+      (isRecord(entry.item.diagnosis) &&
+        entry.item.diagnosis.code === RETIRED_ROUTINE_DIAGNOSIS_CODE);
+  });
 }
 
 async function pollOwnerAttentionSample({
@@ -381,23 +287,16 @@ async function pollOwnerAttentionSample({
       label: `Owner Agent Attention sample ${sampleNumber}`,
       timeoutMs,
     });
-    const accountBlocker = primaryRoutineBlocker(
+    const accountHasRetiredBlocker = hasRetiredPrimaryRoutineBlocker(
       account.canonical,
       smokeAgentId,
-      "Owner account Attention",
     );
-    const agentBlocker = primaryRoutineBlocker(
+    const agentHasRetiredBlocker = hasRetiredPrimaryRoutineBlocker(
       agent.canonical,
       smokeAgentId,
-      "Owner Agent Attention",
     );
 
-    if (accountBlocker && agentBlocker) {
-      if (accountBlocker.itemId !== agentBlocker.itemId) {
-        throw new Error(
-          "Attention surfaces selected different primary-routine items.",
-        );
-      }
+    if (!accountHasRetiredBlocker && !agentHasRetiredBlocker) {
       return {
         accountEvidence: account.evidence,
         agentEvidence: agent.evidence,
@@ -407,7 +306,7 @@ async function pollOwnerAttentionSample({
     if (attempt < pollAttempts) await sleep(pollDelayMs);
   }
   throw new Error(
-    "The primary-routine blocker did not appear on both Attention surfaces within bounded polling.",
+    "The retired primary-routine blocker remained on an Attention surface after bounded reconciliation.",
   );
 }
 
@@ -474,10 +373,12 @@ export async function runOwnerAttentionProbe({
   }
 
   const accountUrl = `${apiBase}/api/launch/attention?limit=200`;
-  const agentUrl =
-    `${apiBase}/api/launch/agents/${encodeURIComponent(agentId)}/attention?limit=200`;
-  const homeUrl =
-    `${apiBase}/api/launch/agents/${encodeURIComponent(agentId)}/home`;
+  const agentUrl = `${apiBase}/api/launch/agents/${
+    encodeURIComponent(agentId)
+  }/attention?limit=200`;
+  const homeUrl = `${apiBase}/api/launch/agents/${
+    encodeURIComponent(agentId)
+  }/home`;
 
   // This negative authorization check must happen first. It proves a connected
   // Agent token cannot exercise the account-session-only surface.
@@ -508,9 +409,8 @@ export async function runOwnerAttentionProbe({
   );
   await connectedResponse.body?.cancel().catch(() => {});
 
-  // Reading the exact owner-private Home snapshot is the trusted setup
-  // producer. It schedules persistence of the fixture's missing-primary-routine
-  // condition with waitUntil, so Attention is polled only after this succeeds.
+  // Reading the exact owner-private Home snapshot is the trusted setup producer.
+  // It reconciles any stale primary-routine issue out of the active snapshot.
   const homeResponse = await fetchBounded(
     fetchImpl,
     homeUrl,
@@ -562,7 +462,9 @@ export async function runOwnerAttentionProbe({
   }
 
   const generatedAt = now();
-  if (!(generatedAt instanceof Date) || !Number.isFinite(generatedAt.getTime())) {
+  if (
+    !(generatedAt instanceof Date) || !Number.isFinite(generatedAt.getTime())
+  ) {
     throw new Error("The evidence timestamp is invalid.");
   }
 
@@ -581,12 +483,9 @@ export async function runOwnerAttentionProbe({
       private_no_store: true,
       triggered: true,
     },
-    primary_routine_blocker: {
-      condition_verified: true,
-      diagnosis_verified: true,
-      same_canonical_item_verified: true,
-      exact_affected_agent_verified: true,
-      server_owned_remediation_verified: true,
+    primary_routine_retirement: {
+      absent_from_account_attention: true,
+      absent_from_agent_attention: true,
       poll_attempt_counts: pollAttemptCounts,
     },
     owner_account: {

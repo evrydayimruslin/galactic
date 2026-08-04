@@ -13,10 +13,8 @@ const OWNER_TOKEN = "owner-secret-never-serialize";
 const PRIVATE_SENTINEL = "private-body-never-serialize";
 const NOW = new Date("2026-07-25T05:00:00.000Z");
 const ITEM_ID = "c139f785-4977-4eed-adc6-7d68d0e787bb";
-const OTHER_ITEM_ID = "29124d3d-a4df-4867-b956-c7f4f64db906";
 const UNRELATED_ITEM_ID = "da092fe1-b667-4703-b639-75207e09f937";
-const CONDITION_KEY =
-  `agent:${AGENT_ID}:requirement:routine%3Aprimary`;
+const CONDITION_KEY = `agent:${AGENT_ID}:requirement:routine%3Aprimary`;
 
 function privateJson(body, status = 200, cacheControl = "private, no-store") {
   return new Response(JSON.stringify(body), {
@@ -104,22 +102,20 @@ function attentionBody(
     readSource,
     operatorItems: {
       contractVersion: "2026-07-24.operator-issues.1",
-      // The target is deliberately not first or alone. The probe must find the
-      // exact condition without assuming an otherwise-empty Attention page.
-      items: [unrelatedEntry(), primaryRoutineEntry()],
+      items: [unrelatedEntry()],
       agentCounts: [{
         agent: {
           id: AGENT_ID,
           slug: "private-agent-slug",
           name: PRIVATE_SENTINEL,
         },
-        openCount: 2,
+        openCount: 1,
         requiresDecisionCount: 0,
-        blockingCount: 2,
+        blockingCount: 1,
       }],
-      openCount: 2,
+      openCount: 1,
       requiresDecisionCount: 0,
-      blockingCount: 2,
+      blockingCount: 1,
       nextCursor: null,
       available: true,
       unavailableReason: null,
@@ -174,7 +170,8 @@ function assertSafeEvidenceValues(value) {
   }
   assert.equal(
     typeof value === "boolean" ||
-      (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) ||
+      (typeof value === "number" && Number.isSafeInteger(value) &&
+        value >= 0) ||
       (typeof value === "string" &&
         (
           value === "legacy" ||
@@ -189,7 +186,7 @@ function assertSafeEvidenceValues(value) {
   );
 }
 
-test("reconciles Home after proving the boundary, then verifies the exact blocker on both surfaces", async () => {
+test("reconciles Home and verifies the retired routine blocker is absent", async () => {
   const { calls, fetchImpl } = successfulFetch();
   const evidence = await runOwnerAttentionProbe({
     ...probeOptions(),
@@ -237,12 +234,9 @@ test("reconciles Home after proving the boundary, then verifies the exact blocke
     private_no_store: true,
     triggered: true,
   });
-  assert.deepEqual(evidence.primary_routine_blocker, {
-    condition_verified: true,
-    diagnosis_verified: true,
-    same_canonical_item_verified: true,
-    exact_affected_agent_verified: true,
-    server_owned_remediation_verified: true,
+  assert.deepEqual(evidence.primary_routine_retirement, {
+    absent_from_account_attention: true,
+    absent_from_agent_attention: true,
     poll_attempt_counts: [1, 1],
   });
   assert.deepEqual(evidence.owner_account.samples[0], {
@@ -254,10 +248,10 @@ test("reconciles Home after proving the boundary, then verifies the exact blocke
     canonical_available: true,
     legacy_open_count: 1,
     legacy_requires_decision_count: 0,
-    canonical_open_count: 2,
+    canonical_open_count: 1,
     canonical_requires_decision_count: 0,
-    canonical_blocking_count: 2,
-    canonical_item_count: 2,
+    canonical_blocking_count: 1,
+    canonical_item_count: 1,
     canonical_agent_count: 1,
     generated_at: "2026-07-25T04:59:59.000Z",
   });
@@ -327,18 +321,27 @@ test("requires private, no-store responses at the boundary, Home, and both Atten
   }
 });
 
-test("polls boundedly while waitUntil reconciliation makes the blocker visible", async () => {
+test("polls boundedly while reconciliation retires a stale blocker", async () => {
   const calls = [];
   const sleepCalls = [];
-  const absent = attentionBody(
+  const stale = attentionBody(
     "legacy",
-    { openCount: 0, requiresDecisionCount: 0 },
+    { openCount: 1, requiresDecisionCount: 0 },
     {
-      items: [],
-      agentCounts: [],
-      openCount: 0,
+      items: [primaryRoutineEntry()],
+      agentCounts: [{
+        agent: {
+          id: AGENT_ID,
+          slug: "private-agent-slug",
+          name: PRIVATE_SENTINEL,
+        },
+        openCount: 1,
+        requiresDecisionCount: 0,
+        blockingCount: 1,
+      }],
+      openCount: 1,
       requiresDecisionCount: 0,
-      blockingCount: 0,
+      blockingCount: 1,
     },
   );
   const fetchImpl = async (input, init = {}) => {
@@ -353,7 +356,7 @@ test("polls boundedly while waitUntil reconciliation makes the blocker visible",
     if (url.endsWith(`/api/launch/agents/${AGENT_ID}/home`)) {
       return privateJson({ private: PRIVATE_SENTINEL });
     }
-    return privateJson(calls.length <= 4 ? absent : attentionBody());
+    return privateJson(calls.length <= 4 ? stale : attentionBody());
   };
 
   const evidence = await runOwnerAttentionProbe({
@@ -369,22 +372,34 @@ test("polls boundedly while waitUntil reconciliation makes the blocker visible",
   assert.equal(calls.length, 6);
   assert.deepEqual(sleepCalls, [25]);
   assert.deepEqual(
-    evidence.primary_routine_blocker.poll_attempt_counts,
+    evidence.primary_routine_retirement.poll_attempt_counts,
     [2],
   );
-  assert.equal(evidence.primary_routine_blocker.condition_verified, true);
+  assert.equal(
+    evidence.primary_routine_retirement.absent_from_account_attention,
+    true,
+  );
 });
 
-test("fails after the bounded poll window when reconciliation never appears", async () => {
-  const absent = attentionBody(
+test("fails after the bounded poll window when a stale blocker remains", async () => {
+  const stale = attentionBody(
     "legacy",
-    { openCount: 0, requiresDecisionCount: 0 },
+    { openCount: 1, requiresDecisionCount: 0 },
     {
-      items: [],
-      agentCounts: [],
-      openCount: 0,
+      items: [primaryRoutineEntry()],
+      agentCounts: [{
+        agent: {
+          id: AGENT_ID,
+          slug: "private-agent-slug",
+          name: PRIVATE_SENTINEL,
+        },
+        openCount: 1,
+        requiresDecisionCount: 0,
+        blockingCount: 1,
+      }],
+      openCount: 1,
       requiresDecisionCount: 0,
-      blockingCount: 0,
+      blockingCount: 1,
     },
   );
   let calls = 0;
@@ -407,143 +422,13 @@ test("fails after the bounded poll window when reconciliation never appears", as
         if (String(input).endsWith(`/api/launch/agents/${AGENT_ID}/home`)) {
           return privateJson({ private: PRIVATE_SENTINEL });
         }
-        return privateJson(absent);
+        return privateJson(stale);
       },
     }),
-    /did not appear on both Attention surfaces within bounded polling/u,
+    /remained on an Attention surface after bounded reconciliation/u,
   );
   assert.equal(calls, 8);
   assert.equal(sleeps, 2);
-});
-
-test("rejects exact-blocker and cross-surface identity mismatches", async () => {
-  const mismatchCases = [
-    {
-      name: "diagnosis",
-      body: attentionBody("legacy", {}, {
-        items: [primaryRoutineEntry({
-          diagnosis: {
-            code: "AGENT_SETTING_MISSING",
-            causeCode: null,
-            summary: "Create a primary routine",
-            detail: PRIVATE_SENTINEL,
-            provenance: "platform",
-            evidence: [],
-          },
-        })],
-      }),
-      pattern: /primary-routine blocker does not match/u,
-    },
-    {
-      name: "diagnosis summary",
-      body: attentionBody("legacy", {}, {
-        items: [primaryRoutineEntry({
-          diagnosis: {
-            code: "AGENT_PRIMARY_ROUTINE_MISSING",
-            causeCode: null,
-            summary: "Generic setup required",
-            detail: PRIVATE_SENTINEL,
-            provenance: "platform",
-            evidence: [],
-          },
-        })],
-      }),
-      pattern: /primary-routine blocker does not match/u,
-    },
-    {
-      name: "affected Agent",
-      body: attentionBody("legacy", {}, {
-        items: [primaryRoutineEntry({
-          affectedAgents: [{
-            agentId: "70bb757d-c9f1-4ab0-b52d-52e430f0cb52",
-            blocking: true,
-          }],
-        })],
-      }),
-      pattern: /primary-routine blocker does not match/u,
-    },
-    {
-      name: "affected Agent count projection",
-      body: attentionBody("legacy", {}, {
-        agentCounts: [],
-      }),
-      pattern: /exact affected-Agent count projection/u,
-    },
-    {
-      name: "remediation target",
-      body: attentionBody("legacy", {}, {
-        items: [primaryRoutineEntry({
-          remediations: [{
-            id: `${CONDITION_KEY}:remediation:configure_routine`,
-            key: "configure_routine",
-            label: "Create routine",
-            description: PRIVATE_SENTINEL,
-            presentation: "inline",
-            requiredAuthority: "account_session",
-            sideEffect: "configuration_write",
-            target: {
-              kind: "agent_setup_requirement",
-              agentId: AGENT_ID,
-              requirementId: "reporting:galactic_inbox",
-            },
-          }],
-        })],
-      }),
-      pattern: /primary-routine remediation does not match/u,
-    },
-  ];
-
-  for (const scenario of mismatchCases) {
-    let calls = 0;
-    await assert.rejects(
-      runOwnerAttentionProbe({
-        ...probeOptions({ repeats: 1 }),
-        fetchImpl: async (input) => {
-          calls += 1;
-          if (calls === 1) {
-            return privateJson({ error: PRIVATE_SENTINEL }, 403);
-          }
-          if (
-            String(input).endsWith(
-              `/api/launch/agents/${AGENT_ID}/home`,
-            )
-          ) {
-            return privateJson({ private: PRIVATE_SENTINEL });
-          }
-          return privateJson(scenario.body);
-        },
-      }),
-      scenario.pattern,
-      scenario.name,
-    );
-  }
-
-  let calls = 0;
-  await assert.rejects(
-    runOwnerAttentionProbe({
-      ...probeOptions({ repeats: 1 }),
-      fetchImpl: async (input) => {
-        calls += 1;
-        const url = String(input);
-        if (calls === 1) {
-          return privateJson({ error: PRIVATE_SENTINEL }, 403);
-        }
-        if (url.endsWith(`/api/launch/agents/${AGENT_ID}/home`)) {
-          return privateJson({ private: PRIVATE_SENTINEL });
-        }
-        return privateJson(
-          url.endsWith(
-            `/api/launch/agents/${AGENT_ID}/attention?limit=200`,
-          )
-            ? attentionBody("legacy", {}, {
-              items: [primaryRoutineEntry({ id: OTHER_ITEM_ID })],
-            })
-            : attentionBody(),
-        );
-      },
-    }),
-    /selected different primary-routine items/u,
-  );
 });
 
 test("fails closed on source fallback, unavailable data, and malformed canonical projections", async () => {

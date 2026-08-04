@@ -241,7 +241,6 @@ function SettingsRoot({
 
   return (
     <div className="neb-settings-screen">
-      <h1>Settings</h1>
       <div className="neb-settings-groups">
         <SettingsGroup label="Plan & usage">
           <SettingsRow

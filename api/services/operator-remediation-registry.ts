@@ -49,12 +49,6 @@ export const OPERATOR_REMEDIATION_REGISTRY = {
     sideEffect: "configuration_write",
     targetKind: "account_provider",
   },
-  configure_routine: {
-    presentation: "inline",
-    requiredAuthority: "account_session",
-    sideEffect: "configuration_write",
-    targetKind: "agent_setup_requirement",
-  },
   configure_secret: {
     presentation: "inline",
     requiredAuthority: "account_session",
@@ -205,15 +199,6 @@ function validateTarget(
       return;
     case "account_usage":
       exactKeys(targetValue, ["kind"], "account usage target");
-      return;
-    case "agent_setup_requirement":
-      exactKeys(
-        targetValue,
-        ["kind", "agentId", "requirementId"],
-        "Agent setup target",
-      );
-      identifier(targetValue.agentId, "target.agentId");
-      identifier(targetValue.requirementId, "target.requirementId");
       return;
     case "agent_setting":
       exactKeys(

@@ -7732,6 +7732,7 @@ Deno.test("launch Fleet opts into operator v2 and preserves legacy fields", asyn
       const body = await response.json() as {
         agents?: Array<{
           agent?: { id?: string };
+          releaseVersion?: string | null;
           state?: string;
           attentionCount?: number;
           unreadAlertCount?: number;
@@ -7756,6 +7757,7 @@ Deno.test("launch Fleet opts into operator v2 and preserves legacy fields", asyn
 
       assertEquals(response.status, 200);
       assertEquals(body.agents?.[0]?.agent?.id, HOME_APP_ID);
+      assertEquals(body.agents?.[0]?.releaseVersion, "v1");
       assertEquals(body.agents?.[0]?.state, "active");
       assertEquals(body.agents?.[0]?.attentionCount, 1);
       assertEquals(body.agents?.[0]?.unreadAlertCount, 1);

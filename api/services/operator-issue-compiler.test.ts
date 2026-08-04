@@ -131,6 +131,25 @@ Deno.test("compiler omits already configured and non-actionable requirements", (
   );
 });
 
+Deno.test("compiler never turns optional scheduling into an operator issue", () => {
+  assertEquals(
+    compileOperatorItem(setupInput(requirement({
+      id: "routine:primary",
+      actionId: null,
+      kind: "routine",
+      label: "Primary routine",
+      required: true,
+      configured: false,
+      blocking: true,
+      secret: false,
+      settingKey: null,
+      settingScope: null,
+      actions: ["set"],
+    }))),
+    null,
+  );
+});
+
 Deno.test("compiler coalesces one account BYOK blocker across affected Agents", () => {
   const byok = requirement({
     id: "inference:byok",

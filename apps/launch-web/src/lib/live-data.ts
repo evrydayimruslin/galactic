@@ -99,6 +99,7 @@ type LoadResult = LaunchRouteLiveData;
  */
 export class LaunchRouteDataCache {
   private readonly entries = new Map<string, LaunchRouteLiveData>();
+  private latestFleet: LaunchFleetResponse | undefined;
   private sessionEpoch = 0;
 
   get epoch(): number {
@@ -108,6 +109,7 @@ export class LaunchRouteDataCache {
   clearForSessionChange(): void {
     this.sessionEpoch += 1;
     this.entries.clear();
+    this.latestFleet = undefined;
   }
 
   get(identity: string): LaunchRouteLiveData | undefined {
@@ -116,6 +118,11 @@ export class LaunchRouteDataCache {
 
   set(identity: string, data: LaunchRouteLiveData): void {
     this.entries.set(identity, data);
+    if (data.fleet) this.latestFleet = data.fleet;
+  }
+
+  fleetSeed(): LaunchRouteLiveData | undefined {
+    return this.latestFleet ? { fleet: this.latestFleet } : undefined;
   }
 }
 
@@ -201,16 +208,17 @@ export function useLaunchRouteLiveData(
     // below. A first visit still shows "loading"; a same-route reload() keeps the
     // current data on screen.
     const cached = routeCache.get(identity);
+    const seeded = routeKey === "agent" ? routeCache.fleetSeed() : undefined;
     // Agent Home is an aggregate view and can be slower or temporarily
     // unavailable while its independent emergency-pause lane is still healthy.
     // Accumulate its result separately so the core Agent page can render—and
     // expose Pause—without waiting for Home aggregation to settle.
-    let accumulated = cached ?? {};
+    let accumulated = cached ?? seeded ?? {};
     setState((current) =>
       routeChanged
         ? (cached
           ? { data: cached, status: "ready" }
-          : { data: {}, status: "loading" })
+          : { data: seeded ?? {}, status: "loading" })
         : {
           data: current.data,
           status: current.status === "idle" ? "loading" : current.status,
@@ -220,6 +228,13 @@ export function useLaunchRouteLiveData(
     loadAgentHomeRouteData(route)?.then((homeData) => {
       if (cancelled || authScopeChanged()) return;
       accumulated = { ...accumulated, ...homeData };
+      routeCache.set(identity, accumulated);
+      setState((current) => ({ ...current, data: accumulated }));
+    });
+
+    loadAgentFleetRouteData(route)?.then((fleetData) => {
+      if (cancelled || authScopeChanged() || !fleetData.fleet) return;
+      accumulated = { ...accumulated, ...fleetData };
       routeCache.set(identity, accumulated);
       setState((current) => ({ ...current, data: accumulated }));
     });
@@ -274,9 +289,10 @@ export function useLaunchRouteLiveData(
   let effective = state;
   if (identity !== identityRef.current) {
     const cached = routeCache.get(identity);
+    const seeded = routeKey === "agent" ? routeCache.fleetSeed() : undefined;
     effective = cached
       ? { data: cached, status: "ready" }
-      : { data: {}, status: "loading" };
+      : { data: seeded ?? {}, status: "loading" };
   }
 
   return { ...effective, reload };
@@ -412,7 +428,6 @@ async function loadRouteData(
         install,
         byok,
         inferenceOptions,
-        fleet,
       ] = await Promise
         .all([
           launchApi.agent(id),
@@ -430,7 +445,6 @@ async function loadRouteData(
           // providers configured with the user's own API keys.
           optional(() => launchApi.byok()),
           optional(() => launchApi.inferenceOptions()),
-          optional(() => launchApi.fleet()),
         ]);
       return {
         agent,
@@ -443,7 +457,6 @@ async function loadRouteData(
         byok,
         inferenceOptions,
         install,
-        fleet,
       };
     }
     case "library": {
@@ -523,6 +536,17 @@ function loadAgentHomeRouteData(
     agentHomeError: result.error,
     subscription,
   }));
+}
+
+function loadAgentFleetRouteData(
+  route: ResolvedLaunchRoute,
+): Promise<LoadResult> | undefined {
+  if (route.definition.key !== "agent" || !hasLaunchAuthToken()) {
+    return undefined;
+  }
+  return optional(() => launchApi.fleet()).then((fleet) =>
+    fleet ? { fleet } : {}
+  );
 }
 
 async function optional<T>(load: () => Promise<T>): Promise<T | undefined> {

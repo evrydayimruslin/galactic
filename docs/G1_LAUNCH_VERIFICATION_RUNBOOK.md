@@ -48,8 +48,9 @@ owner-session evidence gate:
 
 The gate resolves the fixed staging Agent's existing owner, creates a
 short-lived zero-create Supabase session, proves connected-token rejection,
-reconciles Agent Home, and verifies the exact primary-routine blocker and
-server-owned `configure_routine` remediation on both Attention surfaces.
+reconciles Agent Home, and verifies that the retired primary-routine blocker is
+absent from both Attention surfaces. Schedule-free Agents remain available on
+demand; developer-declared required settings still block readiness.
 Shadow mode also fences a version-specific Cloudflare tail and accepts only
 sanitized parity aggregates. Raw tail output, credentials, recovery material,
 response bodies, and private identifiers are never artifacts. The deployment
