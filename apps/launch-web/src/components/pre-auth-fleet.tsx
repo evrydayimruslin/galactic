@@ -1,11 +1,28 @@
-import type { ReactElement } from "react";
+import { type ReactElement, useRef, useState } from "react";
 
 import { connectTutorialHref } from "../lib/connect-tutorial";
 import type { LaunchNavigate } from "../lib/navigation";
+import { FUNNEL_PAIRING_STORAGE_KEY } from "./funnel-pairing";
 import { NebulaPublicShell } from "./nebula-fleet";
 import { useSignInModal } from "./sign-in-modal";
 
 import "./pre-auth-fleet.css";
+
+/**
+ * WO-F1 hero: the terminal is the golden path. One copyable command, the
+ * price stated up front, the browser plan kept as the secondary door.
+ */
+export const PRE_AUTH_FUNNEL_COMMAND =
+  'npx galacticconnection new "chase overdue invoices"';
+
+function readRememberedPairingCode(): string | null {
+  try {
+    const code = window.localStorage.getItem(FUNNEL_PAIRING_STORAGE_KEY);
+    return code && /^[a-z0-9]{16,64}$/.test(code) ? code : null;
+  } catch {
+    return null;
+  }
+}
 
 const FLEET_EXAMPLES = [
   {
@@ -36,6 +53,20 @@ export function PreAuthFleetHome({
 }): ReactElement {
   const openSignIn = useSignInModal();
   const startPlanning = () => navigate(PRE_AUTH_ADD_AGENT_HREF);
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<number | null>(null);
+  const [rememberedBuild] = useState(readRememberedPairingCode);
+
+  const copyCommand = async () => {
+    try {
+      await navigator.clipboard.writeText(PRE_AUTH_FUNNEL_COMMAND);
+      setCopied(true);
+      if (copyTimer.current) window.clearTimeout(copyTimer.current);
+      copyTimer.current = window.setTimeout(() => setCopied(false), 1_400);
+    } catch {
+      // Clipboard denial leaves the command selectable by hand.
+    }
+  };
 
   return (
     <NebulaPublicShell>
@@ -72,7 +103,56 @@ export function PreAuthFleetHome({
             </p>
           </div>
 
+          <div
+            aria-labelledby="preauth-terminal-lede"
+            className="neb-preauth-terminal"
+          >
+            <p className="neb-preauth-terminal-lede" id="preauth-terminal-lede">
+              Agents work here. Paste this where your coding agent lives —
+              free to plan and build, $20/month when you deploy. No account
+              needed; your fleet appears here as it builds.
+            </p>
+            <div className="neb-preauth-terminal-row">
+              <code>{PRE_AUTH_FUNNEL_COMMAND}</code>
+              <button
+                aria-label="Copy the command"
+                onClick={() => void copyCommand()}
+                type="button"
+              >
+                {copied ? "✓ Copied" : "Copy"}
+              </button>
+            </div>
+          </div>
+
           <div aria-label="Your future Agent fleet" className="neb-roster">
+            {rememberedBuild
+              ? (
+                <a
+                  className="neb-agent-card neb-preauth-build-card"
+                  href={`/b/${rememberedBuild}`}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    navigate(`/b/${rememberedBuild}`);
+                  }}
+                >
+                  <span className="neb-card-no">your build</span>
+                  <div className="neb-agent-head">
+                    <div aria-hidden="true" className="neb-agent-avatar">
+                      ▸
+                    </div>
+                    <div className="neb-agent-meta">
+                      <div className="neb-agent-name">Build in progress</div>
+                      <div className="neb-status-row neb-preauth-running">
+                        <span className="neb-status-dot" />
+                        <span className="neb-status-copy">
+                          Watch it live
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </a>
+              )
+              : null}
             <a
               aria-describedby="preauth-add-agent-detail"
               className="neb-add-agent-card neb-preauth-add-agent"

@@ -114,6 +114,7 @@ export const LAUNCH_PUBLIC_ROUTES = [
   "/admin/agents/:id",
   "/terms",
   "/privacy",
+  "/b/:code",
 ] as const;
 
 export type LaunchPublicRoute = typeof LAUNCH_PUBLIC_ROUTES[number];

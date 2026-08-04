@@ -40,6 +40,7 @@ import {
   NebulaFleetApp,
   NebulaSessionRestoringShell,
 } from "./components/nebula-fleet";
+import { FunnelPairingPage } from "./components/funnel-pairing";
 import { PreAuthFleetHome } from "./components/pre-auth-fleet";
 import { AgentStudioApp } from "./components/agent-studio/agent-studio";
 import {
@@ -83,6 +84,7 @@ const routeTitles: Record<LaunchRouteKey, string> = {
   library: "Agents",
   store: "Browse",
   agent: "Agent",
+  pairing: "Watch your agent build",
   settings: "Profile",
   adminAgent: "Agent admin",
   authCallback: "Signing in",
@@ -279,6 +281,13 @@ export function App(): ReactElement {
             signedIn={Boolean(authToken)}
           />
         )
+        : route.definition.key === "pairing"
+        ? (
+          <FunnelPairingPage
+            code={route.params.code ?? ""}
+            navigate={navigate}
+          />
+        )
         : route.definition.key === "authConfirm"
         ? <MagicLinkConfirmationPage location={location} />
         : route.definition.key === "authCallback" && !providerCodeMisrouted
@@ -344,6 +353,15 @@ function RouteSwitch(
           live={live}
           location={location}
           route={route}
+          navigate={navigate}
+        />
+      );
+    // The pairing watch page renders standalone before this switch; this arm
+    // only satisfies exhaustiveness for direct hits.
+    case "pairing":
+      return (
+        <FunnelPairingPage
+          code={route.params.code ?? ""}
           navigate={navigate}
         />
       );

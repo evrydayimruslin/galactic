@@ -1,0 +1,114 @@
+.neb-funnel-app {
+  max-width: 720px;
+}
+
+.neb-funnel-loading p,
+.neb-funnel-eyebrow {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.neb-funnel-watch h1,
+.neb-funnel-gone h1 {
+  margin: 10px 0 0;
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 34px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.neb-funnel-version {
+  margin-left: 12px;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
+.neb-funnel-lede,
+.neb-funnel-gone p {
+  max-width: 54ch;
+  margin: 14px 0 0;
+  color: var(--ink-2);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.neb-funnel-stale {
+  margin: 12px 0 0;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.neb-funnel-stages {
+  margin: 30px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.neb-funnel-stages li {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-3);
+}
+
+.neb-funnel-stages li.reached {
+  color: var(--ink);
+}
+
+.neb-funnel-stages li.active {
+  color: var(--ink-2);
+}
+
+.neb-funnel-stages li.active .neb-funnel-stage-time {
+  color: var(--accent);
+}
+
+.neb-funnel-stage-label {
+  font-size: 13.5px;
+}
+
+.neb-funnel-stage-time {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+}
+
+.neb-funnel-note {
+  margin: 22px 0 0;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.neb-funnel-note code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+.neb-funnel-cta {
+  margin-top: 26px;
+  height: 38px;
+  border: 1px solid var(--line-2);
+  padding: 0 18px;
+  background: var(--fill);
+  color: var(--ink);
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+}
+
+.neb-funnel-gone {
+  padding-top: 20px;
+}
