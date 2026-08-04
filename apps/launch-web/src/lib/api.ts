@@ -113,6 +113,7 @@ import type {
   LaunchSubscriptionCheckoutRequest,
   LaunchSubscriptionCheckoutResponse,
   LaunchSubscriptionRedirectResponse,
+  LaunchDeviceApproveResponse,
   LaunchFunnelCheckoutResponse,
   LaunchFunnelClaimResponse,
   LaunchFunnelPairingResponse,
@@ -1101,6 +1102,15 @@ export class LaunchApiClient {
     return this.fetchJson(
       `/api/launch/funnel/pairings/${encodeURIComponent(code)}`,
     );
+  }
+
+  /** WO-F4: approve a device code inside the signed-in session. */
+  deviceApprove(userCode: string): Promise<LaunchDeviceApproveResponse> {
+    return this.fetchJson("/api/launch/device/approve", {
+      method: "POST",
+      body: JSON.stringify({ userCode }),
+      headers: { "Content-Type": "application/json" },
+    });
   }
 
   /** WO-F1: claim the funnel build into the signed-in account. */

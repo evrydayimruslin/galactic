@@ -110,7 +110,13 @@ export function FunnelPairingPage({
                     () => setStale(true),
                   );
               }}
-              signedIn={Boolean(getLaunchAuthToken())}
+              signedIn={(() => {
+                try {
+                  return Boolean(getLaunchAuthToken());
+                } catch {
+                  return false;
+                }
+              })()}
               onRun={() => {
                 void launchApi.funnelRun(code)
                   .then(() => launchApi.funnelPairing(code))

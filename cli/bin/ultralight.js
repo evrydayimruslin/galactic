@@ -632,6 +632,42 @@ async function runResume(args) {
   console.log(`  ${c.dim('Watch it live:')} ${c.cyan(minted.pairing.url)}`);
 }
 
+// WO-F4: device-grant login. Prints a short code, the human confirms it
+// at /device inside their web session, and the poll lands a standard gx_
+// key here — never shown in the browser, never on argv.
+async function runLogin() {
+  const { mintDeviceCode, pollDeviceToken } = await import('../lib/device-login.mjs');
+  console.log(c.dim('Requesting a device code…'));
+  const minted = await mintDeviceCode({ apiUrl: API_URL, fetchFn: fetch });
+  console.log('');
+  console.log(`  ${c.bold('Your code:')} ${c.cyan(minted.userCode)}`);
+  console.log(`  ${c.bold('Confirm at:')} ${c.cyan(`${minted.verificationUrl}?code=${minted.userCode}`)}`);
+  console.log(c.dim('  (The page prefills the code; approval is your explicit click.)'));
+  console.log('');
+  console.log(c.dim('Waiting for approval…'));
+  const result = await pollDeviceToken({
+    apiUrl: API_URL,
+    deviceCode: minted.deviceCode,
+    intervalSeconds: minted.pollIntervalSeconds || 3,
+    fetchFn: fetch,
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  });
+  if (!result) {
+    console.log(c.red('x The device code expired before approval. Run login again.'));
+    process.exit(1);
+  }
+  const configDir = getConfigDir();
+  const configPath = join(configDir, 'config.json');
+  const config = readJSON(configPath) || {};
+  config.api_url = API_URL;
+  config.auth = { token: result.plaintextToken, is_api_token: true };
+  delete config.funnel;
+  writeJSON(configPath, config);
+  console.log(c.green('✓ Signed in — key saved to ~/.galactic/config.json'));
+  writeMcpClientConfigs();
+  console.log(c.dim('  Restart Claude Code / Claude Desktop for native MCP tools.'));
+}
+
 async function runSetup(args) {
   // Parse --token / -t
   let token = null;
@@ -810,6 +846,11 @@ async function main() {
     await runResume(args);
     return;
   }
+  // WO-F4: device-grant login — pure Node.
+  if (command === 'login') {
+    await runLogin();
+    return;
+  }
 
   // MCP bridge runs in pure Node.js — no Deno needed. This is the stdio MCP
   // server that desktop agents launch; it proxies to the remote platform MCP.
@@ -832,6 +873,7 @@ ${c.bold('Galactic')} ${c.dim('v' + getVersion())}
 ${c.dim('QUICK START')} ${c.dim('(pure Node — no extra runtime, no account needed)')}
   galacticconnection new "what it should do"  Plan an Agent + hand the build to your coding agent
   galacticconnection resume                   Re-mint an expired 60-minute build credential
+  galacticconnection login                    Sign in via your browser (device code -> API key)
   galacticconnection setup --token <token>   Authenticate + wire up your MCP clients
   galacticconnection mcp                      Run the local stdio MCP bridge (clients launch this)
 
