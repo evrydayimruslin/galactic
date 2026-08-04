@@ -171,3 +171,56 @@
     min-height: 176px;
   }
 }
+
+/* WO-F1 hero: the terminal is the golden path. */
+.neb-preauth-terminal {
+  margin: 26px 0 30px;
+}
+
+.neb-preauth-terminal-lede {
+  max-width: 62ch;
+  margin: 0 0 12px;
+  color: var(--ink-2);
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.neb-preauth-terminal-row {
+  display: flex;
+  max-width: 620px;
+  align-items: stretch;
+  border: 1px solid var(--line-2);
+  background: var(--input);
+}
+
+.neb-preauth-terminal-row code {
+  flex: 1 1 auto;
+  overflow-x: auto;
+  padding: 12px 14px;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.neb-preauth-terminal-row button {
+  flex: 0 0 auto;
+  border: 0;
+  border-left: 1px solid var(--line-2);
+  padding: 0 16px;
+  background: var(--fill);
+  color: var(--ink-2);
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.neb-preauth-terminal-row button:hover {
+  color: var(--ink);
+}
+
+.neb-preauth-build-card {
+  text-decoration: none;
+}

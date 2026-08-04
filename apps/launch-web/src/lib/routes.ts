@@ -11,6 +11,7 @@ export type LaunchRouteKey =
   | "library"
   | "store"
   | "agent"
+  | "pairing"
   | "settings"
   | "adminAgent"
   | "authCallback"
@@ -54,6 +55,15 @@ export const launchRoutes: LaunchRouteDefinition[] = [
     key: "connect",
     path: "/connect",
     label: "Connect AI",
+    nav: "hidden",
+    apiRoutes: [],
+  },
+  {
+    // WO-F1: the unlisted funnel watch page. Public and self-fetching —
+    // the pairing read is anonymous, so no route-level API loads.
+    key: "pairing",
+    path: "/b/:code",
+    label: "Build",
     nav: "hidden",
     apiRoutes: [],
   },

@@ -483,6 +483,9 @@ async function loadRouteData(
         ]);
       return { adminAgent, agentCallerPermissions, agentFunctions };
     }
+    // The pairing watch page self-fetches its anonymous projection.
+    case "pairing":
+      return {};
     case "connect": {
       if (!hasLaunchAuthToken()) return {};
       const fleet = await launchApi.fleet();

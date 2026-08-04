@@ -113,6 +113,7 @@ import type {
   LaunchSubscriptionCheckoutRequest,
   LaunchSubscriptionCheckoutResponse,
   LaunchSubscriptionRedirectResponse,
+  LaunchFunnelPairingResponse,
   LaunchSubscriptionResponse,
   LaunchTrustCard,
   LaunchWalletDetailKind,
@@ -1090,6 +1091,13 @@ export class LaunchApiClient {
 
   subscription(): Promise<LaunchSubscriptionResponse> {
     return this.fetchJson("/api/launch/subscription");
+  }
+
+  /** WO-F1: anonymous stages-only read for the /b/:code watch page. */
+  funnelPairing(code: string): Promise<LaunchFunnelPairingResponse> {
+    return this.fetchJson(
+      `/api/launch/funnel/pairings/${encodeURIComponent(code)}`,
+    );
   }
 
   createSubscriptionCheckout(
