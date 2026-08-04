@@ -10,6 +10,7 @@
   "scripts": {
     "build": "echo 'CLI is Deno-native. Use: deno task cli:install'",
     "test:job-mode": "node --test tests/compute-job-mode.node.test.mjs",
+    "test:funnel": "node --test tests/funnel-new.node.test.mjs",
     "prepublishOnly": "cp ../skills.md skills.md 2>/dev/null || true",
     "postinstall": "node scripts/postinstall.js"
   },

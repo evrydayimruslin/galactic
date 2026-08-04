@@ -15,6 +15,7 @@ import {
   mintFunnelSession,
   readFunnelPairing,
   reapExpiredFunnelSessions,
+  resumeFunnelSession,
 } from "./funnel-sessions.ts";
 
 const SUPABASE_URL = "https://supabase.example.test";
@@ -116,6 +117,10 @@ function fetchStub(state: StubState): typeof fetch {
     }
     if (url.includes("/rest/v1/funnel_sessions") && method === "POST") {
       return jsonResponse([body]);
+    }
+    if (url.includes("/rest/v1/funnel_sessions") && method === "PATCH") {
+      const base = state.funnelRows[0] ?? {};
+      return jsonResponse([{ ...base, ...(body as Record<string, unknown>) }]);
     }
     if (url.includes("/rest/v1/funnel_sessions?")) {
       return jsonResponse(state.funnelRows);
@@ -369,6 +374,59 @@ Deno.test("claim maps the RPC contract onto typed errors", async () => {
     );
     assertEquals((rejection as FunnelSessionError).code, code);
   }
+});
+
+Deno.test("resume re-mints for the same owner and swaps the funnel's session", async () => {
+  const state = emptyState();
+  state.funnelRows = [funnelRow()];
+  const minted = await resumeFunnelSession(
+    { pairingCode: "abcdefghjkmnpqrs2345" },
+    options(state),
+  );
+  assertEquals(
+    minted.provisionalOwnerId,
+    "00000000-0000-4000-8000-000000000001",
+  );
+  assertEquals(minted.session.ownerId, minted.provisionalOwnerId);
+  assertMatch(minted.credential.plaintextToken, /^gx_[0-9a-f]{32}$/);
+  assertEquals(minted.funnel.handoffSessionId, minted.session.id);
+
+  const patch = state.requests.find((entry) => entry.method === "PATCH");
+  assert(patch, "the funnel row swaps to the fresh session");
+});
+
+Deno.test("resume refuses claimed and window-elapsed funnels", async () => {
+  const claimed = emptyState();
+  claimed.funnelRows = [funnelRow({
+    claimed_at: "2026-08-03T12:00:00.000Z",
+    claimed_by: "00000000-0000-4000-8000-000000000009",
+  })];
+  const claimedRejection = await assertRejects(
+    () =>
+      resumeFunnelSession(
+        { pairingCode: "abcdefghjkmnpqrs2345" },
+        options(claimed),
+      ),
+    FunnelSessionError,
+  );
+  assertEquals(
+    (claimedRejection as FunnelSessionError).code,
+    "already_claimed",
+  );
+
+  const elapsed = emptyState();
+  elapsed.funnelRows = [funnelRow({
+    expires_at: "2026-08-03T20:59:59.000Z",
+  })];
+  const elapsedRejection = await assertRejects(
+    () =>
+      resumeFunnelSession(
+        { pairingCode: "abcdefghjkmnpqrs2345" },
+        options(elapsed),
+      ),
+    FunnelSessionError,
+  );
+  assertEquals((elapsedRejection as FunnelSessionError).code, "expired");
 });
 
 Deno.test("the reaper reports its count and fails closed", async () => {

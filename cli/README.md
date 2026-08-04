@@ -4,7 +4,21 @@ Connect any computer-access agent (Claude Code, Claude Desktop, Cursor, …) to 
 
 Galactic is one platform MCP server that gives your agent a library of Agents (apps) it can discover, call, and deploy — with unified auth and per-call payments. This package installs a **local stdio MCP bridge** that proxies to that platform, plus local **filesystem tools** so the agent can work with source on your machine.
 
-## Quick start
+## Quick start (no account needed)
+
+```bash
+npx galacticconnection new "chase overdue invoices"
+```
+
+`new` plans an Agent, asks one boundary question ("it must ask me before ___"),
+mints an anonymous 60-minute build credential, wires your MCP clients, prints
+the build brief for your coding agent (offering to hand it to Claude Code
+directly), and mirrors build progress at an unlisted pairing link that keeps
+working for 7 days. Pure Node — no Deno, no token, no sign-in. If the
+credential lapses mid-build, `galacticconnection resume` re-mints it under the
+same pairing link. A real account key, once configured, is never overwritten.
+
+## Set up with an account key
 
 1. Create an API key in the Galactic web app (the **Add to agent** button mints one for you).
 2. Run setup:

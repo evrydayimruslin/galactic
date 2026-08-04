@@ -463,6 +463,73 @@ export async function claimFunnelSession(
   );
 }
 
+/**
+ * WO-F2 `resume`: the pairing code is the human's stable handle, so its
+ * bearer may re-mint an expired 60-minute build credential for the SAME
+ * provisional owner. The funnel row swaps to the fresh handoff session;
+ * the old session stays behind as ledger history. Claimed or elapsed
+ * funnels refuse — resume never widens what a mint could do.
+ */
+export async function resumeFunnelSession(
+  input: { pairingCode: string },
+  options: BuilderHandoffSessionServiceOptions = {},
+): Promise<MintedFunnelSession> {
+  if (!PAIRING_CODE_RE.test(input.pairingCode)) {
+    throw new FunnelSessionError("not_found", "Unknown pairing code");
+  }
+  const config = serviceConfig(options);
+  const now = resolveNow(options);
+  const payload = await restJson(
+    config,
+    "GET",
+    `funnel_sessions?pairing_code=eq.${input.pairingCode}&select=*&limit=1`,
+  );
+  const rows = Array.isArray(payload) ? payload : [];
+  if (rows.length === 0) {
+    throw new FunnelSessionError("not_found", "Unknown pairing code");
+  }
+  const funnel = parseFunnelRow(rows);
+  if (funnel.claimedAt !== null) {
+    throw new FunnelSessionError(
+      "already_claimed",
+      "This build was claimed; sign in to keep building it",
+    );
+  }
+  if (Date.parse(funnel.expiresAt) <= now.getTime()) {
+    throw new FunnelSessionError(
+      "expired",
+      "The 7-day return window for this build has elapsed",
+    );
+  }
+
+  const { session, credential } = await createBuilderHandoffSession({
+    ownerId: funnel.provisionalOwnerId,
+    intent: "agent",
+    description: "Resumed funnel build session.",
+  }, options);
+
+  const patched = await restJson(
+    config,
+    "PATCH",
+    `funnel_sessions?pairing_code=eq.${input.pairingCode}`,
+    {
+      handoff_session_id: session.id,
+      updated_at: now.toISOString(),
+    },
+  );
+  const patchedRows = Array.isArray(patched) ? patched : [patched];
+  const nextFunnel = patchedRows.length > 0 && patchedRows[0]
+    ? parseFunnelRow(patchedRows)
+    : { ...funnel, handoffSessionId: session.id };
+
+  return {
+    funnel: nextFunnel,
+    session,
+    credential,
+    provisionalOwnerId: funnel.provisionalOwnerId,
+  };
+}
+
 /** Reaper entry: bounded, idempotent, spares claimed rows by construction. */
 export async function reapExpiredFunnelSessions(
   options: BuilderHandoffSessionServiceOptions = {},

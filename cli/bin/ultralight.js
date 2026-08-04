@@ -431,6 +431,207 @@ function registerPlugin(token, apiUrl) {
 }
 
 // ─── setup command ───────────────────────────────────────────────────
+// Write the stdio bridge entry into every detected MCP client config. The
+// token is never embedded — the bridge reads ~/.galactic/config.json.
+function writeMcpClientConfigs() {
+  const home = homedir();
+  const appData = process.env.APPDATA || '';
+  const mcpEntry = {
+    command: 'npx',
+    args: ['-y', `galacticconnection@${getVersion()}`, 'mcp'],
+  };
+
+  const configTargets = [
+    { path: join(home, '.claude.json'), name: 'Claude Code', key: 'mcpServers' },
+    { path: join(home, '.claude', 'mcp.json'), name: 'Claude Code (mcp.json)', key: 'mcpServers' },
+    { path: join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'), name: 'Claude Desktop (macOS)', key: 'mcpServers' },
+    { path: join(home, '.config', 'Claude', 'claude_desktop_config.json'), name: 'Claude Desktop (Linux)', key: 'mcpServers' },
+    ...(appData ? [{ path: join(appData, 'Claude', 'claude_desktop_config.json'), name: 'Claude Desktop (Windows)', key: 'mcpServers' }] : []),
+    { path: join(process.cwd(), '.cursor', 'mcp.json'), name: 'Cursor (project)', key: 'mcpServers' },
+  ];
+
+  let configsWritten = 0;
+
+  for (const target of configTargets) {
+    if (!existsSync(target.path)) continue;
+    try {
+      const existing = readJSON(target.path) || {};
+      const servers = existing[target.key] || {};
+      delete servers['ultralight'];  // drop the pre-rebrand entry if present
+      servers['galactic'] = mcpEntry;
+      existing[target.key] = servers;
+      writeFileSync(target.path, JSON.stringify(existing, null, 2));
+      console.log(c.green(`✓ MCP config written to ${c.dim(target.path)} (${target.name})`));
+      configsWritten++;
+    } catch {
+      // File exists but can't be read/written, skip
+    }
+  }
+  return { mcpEntry, configsWritten };
+}
+
+// ─── WO-F2: the funnel front door (pure Node, no account needed) ───────────
+async function promptLine(question) {
+  const readline = await import('node:readline/promises');
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return (await rl.question(question)).trim();
+  } finally {
+    rl.close();
+  }
+}
+
+async function runNew(args) {
+  const {
+    buildBrief,
+    FUNNEL_POLICY_SEED_DEFAULT,
+    mergeFunnelConfig,
+    mintViaApi,
+    parseNewArgs,
+    watchPairing,
+  } = await import('../lib/funnel-new.mjs');
+  const parsed = parseNewArgs(args);
+  if (parsed.help) {
+    console.log(`
+${c.bold('galacticconnection new')} — plan an Agent and hand it to your coding agent.
+
+No account needed. Mints a 60-minute build credential, wires your MCP
+clients, prints the build brief, and mirrors progress at an unlisted
+pairing link that keeps working for 7 days.
+
+${c.dim('USAGE')}
+  npx galacticconnection new "chase overdue invoices"
+
+${c.dim('OPTIONS')}
+  --ask-before <words>   The boundary sentence: "it must ask me before ___"
+                         (default: "${FUNNEL_POLICY_SEED_DEFAULT}"; use "-" to skip)
+  --no-watch             Don't mirror build progress in this terminal
+  --yes, -y              Skip the hand-to-Claude-Code confirmation
+`);
+    return;
+  }
+
+  let description = parsed.description;
+  if (!description) {
+    description = await promptLine(`${c.bold('What should this agent do?')} `);
+  }
+  if (!description) {
+    console.log(c.red('x A one-line plan is required.'));
+    process.exit(1);
+  }
+
+  let seed = parsed.seed;
+  if (seed === undefined) {
+    const answer = await promptLine(
+      `${c.bold('It must ask me before')} ${c.dim(`[${FUNNEL_POLICY_SEED_DEFAULT}]`)} `,
+    );
+    seed = answer === '' ? FUNNEL_POLICY_SEED_DEFAULT : answer;
+  }
+  if (seed === '-' || seed === '') seed = null;
+
+  console.log(c.dim('Minting a build session…'));
+  const minted = await mintViaApi({
+    apiUrl: API_URL,
+    description,
+    surface: 'cli',
+    fetchFn: fetch,
+  });
+
+  const configDir = getConfigDir();
+  const configPath = join(configDir, 'config.json');
+  const { config, bridgeAuthorized } = mergeFunnelConfig(
+    readJSON(configPath),
+    minted,
+    API_URL,
+  );
+  writeJSON(configPath, config);
+  if (bridgeAuthorized) {
+    writeMcpClientConfigs();
+  } else {
+    console.log(c.dim(
+      'A real account key is already configured — the bridge keeps it. ' +
+        'This build pairs to the link below either way.',
+    ));
+  }
+
+  const brief = buildBrief({
+    description,
+    policySeed: seed,
+    pairingUrl: minted.pairing.url,
+    platformMcpUrl: minted.platformMcpUrl,
+  });
+
+  console.log('');
+  console.log(c.green(c.bold('✓ Build session ready.')));
+  console.log(`  ${c.dim('Watch it live:')} ${c.cyan(minted.pairing.url)}`);
+  console.log(
+    `  ${c.dim('Credential:')}    saved to ~/.galactic/config.json ` +
+      c.dim('(expires in 60 minutes; galacticconnection resume re-mints)'),
+  );
+  console.log('');
+  console.log(c.dim('--- BUILD BRIEF (hand this to your coding agent) ---'));
+  console.log(brief);
+  console.log(c.dim('--- END BUILD BRIEF ---'));
+  console.log('');
+
+  const { spawnSync, spawn } = await import('node:child_process');
+  const hasClaude = (() => {
+    try {
+      return spawnSync('claude', ['--version'], { stdio: 'ignore' }).status === 0;
+    } catch {
+      return false;
+    }
+  })();
+
+  if (hasClaude) {
+    const answer = parsed.yes ? '' : await promptLine(
+      `${c.bold('Press enter to hand the brief to Claude Code')} ${c.dim('(n to skip)')} `,
+    );
+    if (answer === '' || answer.toLowerCase() === 'y') {
+      console.log(c.dim('Launching Claude Code with the build brief…'));
+      const child = spawn('claude', [brief], { stdio: 'inherit' });
+      await new Promise((resolve) => child.on('close', resolve));
+      return;
+    }
+  }
+
+  if (parsed.watch) {
+    console.log(c.dim('Watching the build (Ctrl-C to stop; the link keeps working)…'));
+    await watchPairing({
+      apiUrl: API_URL,
+      pairingCode: minted.pairing.code,
+      fetchFn: fetch,
+      log: (line) => console.log(line),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    });
+  }
+}
+
+async function runResume(args) {
+  const { mergeFunnelConfig, resumeViaApi } = await import('../lib/funnel-new.mjs');
+  const configDir = getConfigDir();
+  const configPath = join(configDir, 'config.json');
+  const config = readJSON(configPath) || {};
+  const pairingCode = args[0] || (config.funnel && config.funnel.pairing_code);
+  if (!pairingCode) {
+    console.log(c.red('x No build to resume. Run: galacticconnection new'));
+    process.exit(1);
+  }
+  console.log(c.dim('Re-minting the build credential…'));
+  const minted = await resumeViaApi({ apiUrl: API_URL, pairingCode, fetchFn: fetch });
+  const { config: nextConfig, bridgeAuthorized } = mergeFunnelConfig(
+    config,
+    minted,
+    API_URL,
+  );
+  writeJSON(configPath, nextConfig);
+  console.log(c.green('✓ Fresh 60-minute credential saved.'));
+  if (!bridgeAuthorized) {
+    console.log(c.dim('A real account key stays in place for the bridge.'));
+  }
+  console.log(`  ${c.dim('Watch it live:')} ${c.cyan(minted.pairing.url)}`);
+}
+
 async function runSetup(args) {
   // Parse --token / -t
   let token = null;
@@ -524,45 +725,8 @@ ${c.dim('Then run:')}
   }
 
   // Step 3: Detect and write MCP client configs
-  const home = homedir();
-  const appData = process.env.APPDATA || '';
   const mcpEndpoint = `${API_URL}/mcp/platform`;
-
-  // Write a STDIO entry: clients launch the local bridge (`galacticconnection mcp`),
-  // which proxies to the remote platform MCP. stdio works in every desktop MCP
-  // client (unlike the bare HTTP-POST endpoint), and the token is NOT embedded
-  // here — the bridge reads it from ~/.galactic/config.json (written above).
-  const mcpEntry = {
-    command: 'npx',
-    args: ['-y', `galacticconnection@${getVersion()}`, 'mcp'],
-  };
-
-  const configTargets = [
-    { path: join(home, '.claude.json'), name: 'Claude Code', key: 'mcpServers' },
-    { path: join(home, '.claude', 'mcp.json'), name: 'Claude Code (mcp.json)', key: 'mcpServers' },
-    { path: join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'), name: 'Claude Desktop (macOS)', key: 'mcpServers' },
-    { path: join(home, '.config', 'Claude', 'claude_desktop_config.json'), name: 'Claude Desktop (Linux)', key: 'mcpServers' },
-    ...(appData ? [{ path: join(appData, 'Claude', 'claude_desktop_config.json'), name: 'Claude Desktop (Windows)', key: 'mcpServers' }] : []),
-    { path: join(process.cwd(), '.cursor', 'mcp.json'), name: 'Cursor (project)', key: 'mcpServers' },
-  ];
-
-  let configsWritten = 0;
-
-  for (const target of configTargets) {
-    if (!existsSync(target.path)) continue;
-    try {
-      const existing = readJSON(target.path) || {};
-      const servers = existing[target.key] || {};
-      delete servers['ultralight'];  // drop the pre-rebrand entry if present
-      servers['galactic'] = mcpEntry;
-      existing[target.key] = servers;
-      writeFileSync(target.path, JSON.stringify(existing, null, 2));
-      console.log(c.green(`✓ MCP config written to ${c.dim(target.path)} (${target.name})`));
-      configsWritten++;
-    } catch {
-      // File exists but can't be read/written, skip
-    }
-  }
+  const { mcpEntry, configsWritten } = writeMcpClientConfigs();
 
   if (configsWritten === 0) {
     console.log('');
@@ -625,7 +789,7 @@ async function main() {
   // Lease-scoped bodies must never enter a flow that reads, writes, or clears
   // a developer's persistent CLI credentials. This check happens before the
   // pure-Node setup path and before delegation to Deno.
-  if (jobEnvironment && ['setup', 'login', 'logout', 'config'].includes(command)) {
+  if (jobEnvironment && ['setup', 'login', 'logout', 'config', 'new', 'resume'].includes(command)) {
     throw new Error(
       `Command "${command}" is unavailable inside a Galactic Compute job`,
     );
@@ -634,6 +798,16 @@ async function main() {
   // Setup runs in pure Node.js — no Deno needed
   if (command === 'setup') {
     await runSetup(args);
+    return;
+  }
+
+  // WO-F2: the funnel front door — pure Node, no account needed.
+  if (command === 'new') {
+    await runNew(args);
+    return;
+  }
+  if (command === 'resume') {
+    await runResume(args);
     return;
   }
 
@@ -655,7 +829,9 @@ async function main() {
     console.log(`
 ${c.bold('Galactic')} ${c.dim('v' + getVersion())}
 
-${c.dim('QUICK START')} ${c.dim('(pure Node — no extra runtime)')}
+${c.dim('QUICK START')} ${c.dim('(pure Node — no extra runtime, no account needed)')}
+  galacticconnection new "what it should do"  Plan an Agent + hand the build to your coding agent
+  galacticconnection resume                   Re-mint an expired 60-minute build credential
   galacticconnection setup --token <token>   Authenticate + wire up your MCP clients
   galacticconnection mcp                      Run the local stdio MCP bridge (clients launch this)
 
