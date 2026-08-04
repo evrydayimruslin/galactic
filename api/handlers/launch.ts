@@ -68,6 +68,7 @@ import {
 } from "../services/funnel-sessions.ts";
 import {
   readFunnelHeldCard,
+  readFunnelOwnerContext,
   runFunnelTrialByPairing,
 } from "../services/funnel-trial.ts";
 import { checkRateLimit } from "../services/ratelimit.ts";
@@ -162,6 +163,7 @@ import {
   type LaunchFunctionSummary,
   type LaunchGlobalAttentionResponse,
   type LaunchHandoffCreateRequest,
+  type LaunchFunnelCheckoutResponse,
   type LaunchFunnelClaimResponse,
   type LaunchFunnelMintResponse,
   type LaunchFunnelPairingProjection,
@@ -1186,6 +1188,16 @@ export async function handleLaunch(
     );
     if (funnelRunMatch) {
       return await handleLaunchFunnelRun(request, method, funnelRunMatch[1]);
+    }
+    const funnelCheckoutMatch = path.match(
+      /^\/api\/launch\/funnel\/pairings\/([a-z0-9]{16,64})\/checkout$/,
+    );
+    if (funnelCheckoutMatch) {
+      return await handleLaunchFunnelCheckout(
+        request,
+        method,
+        funnelCheckoutMatch[1],
+      );
     }
     const funnelClaimMatch = path.match(
       /^\/api\/launch\/funnel\/pairings\/([a-z0-9]{16,64})\/claim$/,
@@ -2323,6 +2335,27 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             },
             "404": { description: "Unknown pairing code" },
             "409": { description: "Already claimed — run from the fleet" },
+            "429": { description: "Rate limit reached for this network" },
+          },
+        },
+      },
+      "/api/launch/funnel/pairings/{code}/checkout": {
+        post: {
+          operationId: "createLaunchFunnelCheckout",
+          summary: "Mint the card's membership checkout (customerless)",
+          description:
+            "Anonymous, bearer-of-pairing-code, requires an uploaded candidate. Creates a Stripe subscription checkout with no bound customer — Link captures and OTP-verifies the email; the completion webhook promotes a fresh-email provisional owner in place (claiming the build) or links the Stripe customer to the existing account (the build then claims at sign-in). Rides the hardened attempt ledger; card details never touch this API.",
+          parameters: [{
+            name: "code",
+            in: "path",
+            required: true,
+            schema: { type: "string", pattern: "^[a-z0-9]{16,64}$" },
+          }],
+          responses: {
+            "201": { description: "Checkout URL" },
+            "400": { description: "No uploaded candidate" },
+            "404": { description: "Unknown pairing code" },
+            "409": { description: "Already claimed" },
             "429": { description: "Rate limit reached for this network" },
           },
         },
@@ -7353,6 +7386,71 @@ async function handleLaunchFunnelRun(
           return error(cause.message, 409);
         case "invalid_request":
           return error(cause.message, 400);
+        default:
+          return error(cause.message, 503);
+      }
+    }
+    throw cause;
+  }
+}
+
+/**
+ * WO-F3: the card's Approve — mint a customerless funnel checkout whose
+ * completion webhook promotes a fresh-email provisional owner in place
+ * (or links an existing account's Stripe customer). One deliberate click
+ * from the held card to Stripe Link; card details never touch this API.
+ */
+async function handleLaunchFunnelCheckout(
+  request: Request,
+  method: string,
+  pairingCode: string,
+): Promise<Response> {
+  if (method !== "POST") {
+    return error("Method not allowed for funnel checkout", 405);
+  }
+  const clientIp = getAuthRateLimitClientIp(request) ?? "anonymous";
+  const rate = await checkRateLimit(
+    `funnel-checkout-ip:${clientIp}`,
+    "funnel:checkout",
+    12,
+    60,
+  );
+  if (!rate.allowed) {
+    return error("Too many checkout attempts from this network.", 429);
+  }
+  try {
+    const context = await readFunnelOwnerContext(pairingCode);
+    if (!context.uploadedAppId) {
+      return error(
+        "The candidate has not uploaded yet — finish the build first",
+        400,
+      );
+    }
+    const origin = publicBaseUrl(request);
+    const result = await createSubscriptionCheckout({
+      userId: context.ownerId,
+      plan: "pro",
+      requestOrigin: origin,
+      returnUrl: `${origin}/b/${pairingCode}`,
+      idempotencyKey: crypto.randomUUID(),
+      funnelPairingCode: pairingCode,
+    });
+    return privateLaunchJson(
+      {
+        success: true,
+        url: result.url,
+        attemptId: result.attemptId,
+        generatedAt: new Date().toISOString(),
+      } satisfies LaunchFunnelCheckoutResponse,
+      201,
+    );
+  } catch (cause) {
+    if (cause instanceof FunnelSessionError) {
+      switch (cause.code) {
+        case "not_found":
+          return error("Unknown pairing code", 404);
+        case "already_claimed":
+          return error(cause.message, 409);
         default:
           return error(cause.message, 503);
       }

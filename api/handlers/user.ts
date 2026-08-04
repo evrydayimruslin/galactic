@@ -85,6 +85,7 @@ import {
   type StripeWebhookEvent,
 } from "../services/stripe-deposits.ts";
 import { projectStripeSubscriptionEvent } from "../services/subscriptions.ts";
+import { maybeCompleteFunnelCheckout } from "../services/funnel-claim.ts";
 import { isProSubscriptionError } from "../services/pro-subscription.ts";
 import {
   createWalletExpressPaymentIntent,
@@ -524,6 +525,17 @@ export async function handleUser(request: Request): Promise<Response> {
           stripeLogger.info("Projected Stripe subscription entitlement", {
             event_id: event.id,
             event_type: event.type,
+          });
+        }
+        // WO-F3 pay-first claim: promote a fresh-email provisional owner in
+        // place (and claim its build), or link the Stripe customer to an
+        // existing account so subscription events resolve to it.
+        const funnelOutcome = await maybeCompleteFunnelCheckout(event);
+        if (funnelOutcome.kind !== "not_funnel") {
+          handled = true;
+          stripeLogger.info("Funnel checkout completion processed", {
+            event_id: event.id,
+            outcome: funnelOutcome.kind,
           });
         }
         const pendingDeposit = buildStripeDepositPending(event);

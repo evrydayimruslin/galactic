@@ -2,6 +2,7 @@ import { type ReactElement, useEffect, useRef, useState } from "react";
 
 import type { LaunchFunnelPairingProjection } from "../../../../shared/contracts/launch.ts";
 import { launchApi } from "../lib/api";
+import { getLaunchAuthToken } from "../lib/auth";
 import type { LaunchNavigate } from "../lib/navigation";
 import { NebulaPublicShell } from "./nebula-fleet";
 import { useSignInModal } from "./sign-in-modal";
@@ -95,6 +96,21 @@ export function FunnelPairingPage({
           ? (
             <FunnelPairingView
               navigate={navigate}
+              onApprove={() => {
+                void launchApi.funnelCheckout(code).then(
+                  (response) => window.location.assign(response.url),
+                  () => setStale(true),
+                );
+              }}
+              onClaim={() => {
+                void launchApi.funnelClaim(code)
+                  .then(() => launchApi.funnelPairing(code))
+                  .then(
+                    (response) => setProjection(response.pairing),
+                    () => setStale(true),
+                  );
+              }}
+              signedIn={Boolean(getLaunchAuthToken())}
               onRun={() => {
                 void launchApi.funnelRun(code)
                   .then(() => launchApi.funnelPairing(code))
@@ -143,13 +159,19 @@ export function funnelStageRows(
 /** Pure view, exported for markup tests. */
 export function FunnelPairingView({
   navigate,
+  onApprove,
+  onClaim,
   onRun,
   projection,
+  signedIn = false,
   stale = false,
 }: {
   navigate?: LaunchNavigate;
+  onApprove?: () => void;
+  onClaim?: () => void;
   onRun?: () => void;
   projection: LaunchFunnelPairingProjection;
+  signedIn?: boolean;
   stale?: boolean;
 }): ReactElement {
   const rows = funnelStageRows(projection);
@@ -227,9 +249,25 @@ export function FunnelPairingView({
               denying and editing are always free.
             </p>
             <div className="neb-funnel-held-actions">
-              <span className="neb-funnel-held-primary">
-                Approve — claim this build to resume it
-              </span>
+              {signedIn
+                ? (
+                  <button
+                    className="neb-funnel-held-approve"
+                    onClick={() => onClaim?.()}
+                    type="button"
+                  >
+                    Claim into your fleet
+                  </button>
+                )
+                : (
+                  <button
+                    className="neb-funnel-held-approve"
+                    onClick={() => onApprove?.()}
+                    type="button"
+                  >
+                    Approve and let it finish — $20/month
+                  </button>
+                )}
               <span>Deny · Edit — sign in, always free</span>
             </div>
           </div>

@@ -147,6 +147,7 @@ export const LAUNCH_API_ROUTES = [
   "POST /api/launch/funnel/pairings/:code/claim",
   "POST /api/launch/funnel/pairings/:code/resume",
   "POST /api/launch/funnel/pairings/:code/run",
+  "POST /api/launch/funnel/pairings/:code/checkout",
   "GET /api/launch/candidates",
   "GET /api/launch/candidates/:candidateId",
   "POST /api/launch/candidates/:candidateId/deploy",
@@ -524,6 +525,13 @@ export interface LaunchFunnelHeldCard {
 export interface LaunchFunnelRunResponse {
   success: true;
   card: LaunchFunnelHeldCard;
+  generatedAt: string;
+}
+
+export interface LaunchFunnelCheckoutResponse {
+  success: true;
+  url: string;
+  attemptId: string;
   generatedAt: string;
 }
 

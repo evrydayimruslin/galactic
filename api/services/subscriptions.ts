@@ -564,6 +564,14 @@ export async function createSubscriptionCheckout(input: {
   requestOrigin: string;
   returnUrl: string;
   idempotencyKey: string;
+  /**
+   * WO-F3: a funnel checkout is customerless (Stripe Link captures the
+   * email; the completed-webhook places stripe_customer_id on the right
+   * users row) and omits subscription-level user_id metadata so
+   * customer.subscription.* events resolve through the customer mapping
+   * instead of pinning membership to the provisional row.
+   */
+  funnelPairingCode?: string | null;
 }): Promise<LaunchSubscriptionRedirectResponse> {
   const plan = await readPlan(input.plan);
   const priceId = plan.stripe_price_id || getEnv("STRIPE_PRO_PRICE_ID");
@@ -620,16 +628,17 @@ export async function createSubscriptionCheckout(input: {
     );
   }
 
-  const { stripeCustomerId } = await getOrCreateStripeCustomerForUser(
-    input.userId,
-    key,
-  );
+  const funnelPairingCode = input.funnelPairingCode ?? null;
+  const stripeCustomerId = funnelPairingCode
+    ? null
+    : (await getOrCreateStripeCustomerForUser(input.userId, key))
+      .stripeCustomerId;
   const separator = returnUrl.includes("?") ? "&" : "?";
   const stripeIdempotencyKey =
     `galactic-subscription-${input.userId}-${claimed.attempt_id}`;
   const stripeCheckoutRequest = new URLSearchParams({
     mode: "subscription",
-    customer: stripeCustomerId,
+    ...(stripeCustomerId ? { customer: stripeCustomerId } : {}),
     "line_items[0][price]": priceId,
     "line_items[0][quantity]": "1",
     success_url:
@@ -640,7 +649,12 @@ export async function createSubscriptionCheckout(input: {
     "metadata[user_id]": input.userId,
     "metadata[plan_code]": input.plan,
     "metadata[checkout_attempt_id]": claimed.attempt_id,
-    "subscription_data[metadata][user_id]": input.userId,
+    ...(funnelPairingCode
+      ? {
+        "metadata[funnel_pairing_code]": funnelPairingCode,
+        "subscription_data[metadata][funnel_pairing_code]": funnelPairingCode,
+      }
+      : { "subscription_data[metadata][user_id]": input.userId }),
     "subscription_data[metadata][plan_code]": input.plan,
     "subscription_data[metadata][checkout_attempt_id]": claimed.attempt_id,
     allow_promotion_codes: "false",
