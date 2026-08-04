@@ -67,6 +67,7 @@ function routine(
     failureCount: 0,
     autoPauseReason: null,
     errorReason: null,
+    activeRunCount: 0,
     recentRuns: [],
     actions: {
       canApproveCapabilities: false,

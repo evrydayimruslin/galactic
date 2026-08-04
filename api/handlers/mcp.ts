@@ -191,6 +191,7 @@ import type {
   MCPToolsListResponse,
 } from "../../shared/contracts/mcp.ts";
 import type { AppManifest } from "../../shared/contracts/manifest.ts";
+import { AUTONOMOUS_POLICY_OFF_ERROR_TYPE } from "../../shared/contracts/routine.ts";
 import {
   manifestToMCPTools,
   parseManifestCallRateLimit,
@@ -1867,6 +1868,7 @@ async function denyAutonomousCall(params: {
   witnessChannel: string;
   ledgerMeta: Record<string, unknown>;
   policyVersion?: number | null;
+  errorType: string;
   errorMessage: string;
 }): Promise<Response> {
   const deniedExecutionId = crypto.randomUUID();
@@ -1909,7 +1911,9 @@ async function denyAutonomousCall(params: {
   }).catch((err) => {
     console.error("[GATE] denied-ledger write failed:", err);
   });
-  return jsonRpcErrorResponse(params.id, INVALID_PARAMS, params.errorMessage);
+  return jsonRpcErrorResponse(params.id, INVALID_PARAMS, params.errorMessage, {
+    type: params.errorType,
+  });
 }
 
 /**
@@ -2195,6 +2199,7 @@ async function handleToolsCall(
           witnessChannel: `policy:${rawName}`,
           witnessOutcome: "denied: autonomous policy is Off",
           ledgerMeta: { policy: "off", policy_revision: gateVerdict.revision },
+          errorType: AUTONOMOUS_POLICY_OFF_ERROR_TYPE,
           errorMessage:
             `POLICY_OFF: the owner set ${rawName} to Off for autonomous runs. ` +
             "The call was recorded as a deliberate non-action.",
@@ -2248,6 +2253,7 @@ async function handleToolsCall(
             policy_version: predicateVerdict.policyVersion,
           },
           policyVersion: predicateVerdict.policyVersion,
+          errorType: "POLICY_RULE",
           errorMessage:
             `POLICY_RULE: a compiled policy forbids this call — ` +
             `${predicateVerdict.readback} It was recorded as a deliberate ` +

@@ -78,6 +78,7 @@ function apiBindings(target, digest) {
     plain('COMPUTE_ENVIRONMENT_DIGEST', digest),
     plain('COMPUTE_ROLLOUT_MODE', 'canary'),
     plain('COMPUTE_CANARY_ALLOWLIST', ''),
+    plain('COMPUTE_CERTIFICATION_PRINCIPAL', ''),
     {
       type: 'service',
       name: 'COMPUTE_PLANE',
@@ -399,6 +400,36 @@ test('accepts exact schema-6 preserve_off evidence for both targets', () => {
   }
 });
 
+test('accepts historical OFF snapshots without the certification principal', () => {
+  const fixture = createFixture();
+  try {
+    fixture.policyBefore.selected_bindings =
+      fixture.policyBefore.selected_bindings.filter((binding) =>
+        binding.name !== 'COMPUTE_CERTIFICATION_PRINCIPAL'
+      );
+    rebind(
+      fixture,
+      'policy_before',
+      'pre-rollout-api-version.json',
+      fixture.policyBefore,
+    );
+    fixture.policyAfter.selected_bindings =
+      fixture.policyAfter.selected_bindings.filter((binding) =>
+        binding.name !== 'COMPUTE_CERTIFICATION_PRINCIPAL'
+      );
+    rebind(
+      fixture,
+      'policy_after',
+      'active-preserve-off-api-version.json',
+      fixture.policyAfter,
+    );
+    persist(fixture);
+    assert.equal(verify(fixture).verified, true);
+  } finally {
+    dispose(fixture);
+  }
+});
+
 test('never returns or derives rollback state from the historical OFF API', () => {
   const fixture = createFixture();
   try {
@@ -681,6 +712,34 @@ test('rejects non-OFF policy snapshots and preflight drift', () => {
       name: 'global policy after',
       mutate(fixture) {
         fixture.policyAfter.rollout_mode = 'global';
+        rebind(
+          fixture,
+          'policy_after',
+          'active-preserve-off-api-version.json',
+          fixture.policyAfter,
+        );
+      },
+    },
+    {
+      name: 'nonempty historical certification principal',
+      mutate(fixture) {
+        fixture.policyBefore.selected_bindings.find((binding) =>
+          binding.name === 'COMPUTE_CERTIFICATION_PRINCIPAL'
+        ).text = 'owner/agent';
+        rebind(
+          fixture,
+          'policy_before',
+          'pre-rollout-api-version.json',
+          fixture.policyBefore,
+        );
+      },
+    },
+    {
+      name: 'nonempty post-rollout certification principal',
+      mutate(fixture) {
+        fixture.policyAfter.selected_bindings.find((binding) =>
+          binding.name === 'COMPUTE_CERTIFICATION_PRINCIPAL'
+        ).text = 'owner/agent';
         rebind(
           fixture,
           'policy_after',

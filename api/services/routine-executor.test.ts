@@ -1577,6 +1577,82 @@ Deno.test("processQueuedRoutineRun: concurrency admission coalesces and retries 
   }
 });
 
+Deno.test("processQueuedRoutineRun: preserves POLICY_OFF as a terminal routine error code", async () => {
+  const restoreEnv = installEnv();
+  const originalFetch = globalThis.fetch;
+  const runPatches: Array<Record<string, unknown>> = [];
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input.toString());
+    const table = url.pathname.split("/").pop() || "";
+    const method = init?.method || "GET";
+    const body = init?.body
+      ? JSON.parse(String(init.body)) as Record<string, unknown>
+      : {};
+    const claim = memberClaimResponse(table, body);
+    if (claim) return claim;
+    if (table === "routine_runs" && method === "GET") {
+      return jsonResponse([queuedRunRow()]);
+    }
+    if (table === "routine_runs" && method === "PATCH") {
+      runPatches.push(body);
+      return jsonResponse([runRow(body)]);
+    }
+    if (table === "user_routines" && method === "GET") {
+      return jsonResponse([routineRow()]);
+    }
+    if (table === "user_routines" && method === "PATCH") {
+      return jsonResponse([routineRow(body)]);
+    }
+    if (table === "routine_capabilities") return jsonResponse(capabilityRows());
+    if (table === "routine_dashboard_bindings") return jsonResponse([]);
+    if (table === "users") return jsonResponse([userRow()]);
+    return jsonResponse([]);
+  }) as typeof fetch;
+
+  try {
+    await processQueuedRoutineRun(
+      { routineRunId: "run-1" },
+      {
+        now: NOW,
+        clock: () => NOW,
+        baseUrl: "https://api.example.test",
+        invokeMcp: async () =>
+          jsonResponse({
+            error: {
+              code: -32602,
+              message:
+                "POLICY_OFF: the owner set this function to Off for autonomous runs.",
+              data: { type: "POLICY_OFF" },
+            },
+          }),
+      },
+    );
+
+    assert(
+      !runPatches.some((patch) => patch.status === "queued"),
+      "an explicit owner denial must not be retried",
+    );
+    const failed = runPatches.find((patch) => patch.status === "failed");
+    assert(failed, "the policy denial must terminalize the routine run");
+    assertEquals(
+      (failed.error as Record<string, unknown>)?.code,
+      "POLICY_OFF",
+    );
+    assertEquals(
+      (failed.error as Record<string, unknown>)?.causeCode,
+      "POLICY_OFF",
+    );
+    assertEquals(
+      (failed.error as Record<string, unknown>)?.retryable,
+      false,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv();
+  }
+});
+
 Deno.test("processQueuedRoutineRun: tenant capacity-shaped errors cannot impersonate platform admission", async () => {
   const restoreEnv = installEnv();
   const originalFetch = globalThis.fetch;

@@ -192,8 +192,8 @@ function verifySelectedBindings(bindings, expected, label) {
   }
 }
 
-function apiBindings(target, digest) {
-  return [
+function apiBindings(target, digest, { certificationPrincipal = true } = {}) {
+  const bindings = [
     expectedBinding('plain_text', 'COMPUTE_ENABLED', { text: '0' }),
     expectedBinding('plain_text', 'COMPUTE_ENVIRONMENT_DIGEST', {
       text: digest,
@@ -202,6 +202,11 @@ function apiBindings(target, digest) {
       text: 'canary',
     }),
     expectedBinding('plain_text', 'COMPUTE_CANARY_ALLOWLIST', { text: '' }),
+    ...(certificationPrincipal
+      ? [expectedBinding('plain_text', 'COMPUTE_CERTIFICATION_PRINCIPAL', {
+        text: '',
+      })]
+      : []),
     expectedBinding('service', 'COMPUTE_PLANE', {
       service: target.computeWorker,
       entrypoint: 'ComputePlane',
@@ -213,6 +218,24 @@ function apiBindings(target, digest) {
       bucket_name: target.artifactBucket,
     }),
   ];
+  return bindings;
+}
+
+function historicalCertificationPrincipalPresent(bindings, label) {
+  if (!Array.isArray(bindings)) {
+    fail(`${label} does not contain selected bindings`);
+  }
+  const matches = bindings.filter((binding) =>
+    binding?.name === 'COMPUTE_CERTIFICATION_PRINCIPAL'
+  );
+  if (matches.length === 0) return false;
+  if (
+    matches.length !== 1 || matches[0]?.type !== 'plain_text' ||
+    matches[0]?.text !== ''
+  ) {
+    fail(`${label} certification principal must be missing or exactly empty`);
+  }
+  return true;
 }
 
 function computeBindings(target, digest) {
@@ -404,7 +427,12 @@ function verifyPolicySnapshots({ evidenceDirectory, release, target }) {
   }
   verifySelectedBindings(
     before.selected_bindings,
-    apiBindings(target, beforeDigest),
+    apiBindings(target, beforeDigest, {
+      certificationPrincipal: historicalCertificationPrincipalPresent(
+        before.selected_bindings,
+        'policy-before evidence',
+      ),
+    }),
     'policy-before evidence',
   );
 
@@ -422,7 +450,12 @@ function verifyPolicySnapshots({ evidenceDirectory, release, target }) {
   verifyEmptyAllowlist(after.canary_allowlist, 'policy-after canary allowlist');
   verifySelectedBindings(
     after.selected_bindings,
-    apiBindings(target, release.environment_digest),
+    apiBindings(target, release.environment_digest, {
+      certificationPrincipal: historicalCertificationPrincipalPresent(
+        after.selected_bindings,
+        'policy-after evidence',
+      ),
+    }),
     'policy-after evidence',
   );
 }

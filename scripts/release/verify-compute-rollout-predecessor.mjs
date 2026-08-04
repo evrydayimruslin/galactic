@@ -19,6 +19,9 @@ const ZERO_DIGEST = `sha256:${'0'.repeat(64)}`;
 const WORKFLOW_PATH = '.github/workflows/compute-canary-rollout.yml';
 const ROLLOUT_KIND = 'galactic_compute_canary_rollout';
 const VERIFICATION_KIND = 'galactic_compute_rollout_predecessor_verification';
+const CERTIFICATION_KIND = 'galactic_compute_certification_verification';
+const FIXED_ARTIFACT_SHA256 =
+  '6ad9b8ea5280658dc4b229a2b6180d530c4d3824b541d218266ea6049e8b763b';
 
 const TARGETS = Object.freeze({
   staging: Object.freeze({ computeWorker: 'galactic-compute-staging' }),
@@ -31,7 +34,8 @@ const STAGES = Object.freeze({
     policy: 'canary',
     phase: 'fenced',
     canaryIdentity: true,
-    admittedSmoke: true,
+    deployedCertification: true,
+    certificationProfile: 'staging-full',
     predecessor: null,
     soakRequired: false,
   }),
@@ -40,7 +44,8 @@ const STAGES = Object.freeze({
     policy: 'canary',
     phase: 'fenced',
     canaryIdentity: true,
-    admittedSmoke: true,
+    deployedCertification: true,
+    certificationProfile: 'production-canary',
     predecessor: 'staging_canary',
     soakRequired: true,
   }),
@@ -48,8 +53,9 @@ const STAGES = Object.freeze({
     target: 'production',
     policy: 'global',
     phase: 'fenced',
-    canaryIdentity: false,
-    admittedSmoke: true,
+    canaryIdentity: true,
+    deployedCertification: true,
+    certificationProfile: 'production-global',
     predecessor: 'production_canary',
     soakRequired: false,
   }),
@@ -58,7 +64,8 @@ const STAGES = Object.freeze({
     policy: 'off',
     phase: 'fenced',
     canaryIdentity: false,
-    admittedSmoke: false,
+    deployedCertification: false,
+    certificationProfile: null,
     predecessor: 'optional_same_target_enabled',
     soakRequired: false,
   }),
@@ -73,10 +80,10 @@ const DISPATCH_KEYS = [
 const REFERENCE_KEYS = ['evidence_file', 'sha256'];
 const ROLLOUT_KEYS = [
   'active_state',
-  'admitted_smoke',
   'api_upload_source_sha',
   'canary_identity',
   'compute_release',
+  'deployed_certification',
   'dispatch',
   'generated_at',
   'kind',
@@ -107,6 +114,31 @@ const PREDECESSOR_KEYS = [
   'soak_eligible_at',
   'stage',
   'target',
+];
+const CERTIFICATION_KEYS = [
+  'agent_id',
+  'artifact_digests',
+  'candidate_sha',
+  'compute_receipt_ids',
+  'environment_digest',
+  'kind',
+  'owner_id',
+  'policy_compute_run_id',
+  'profile',
+  'promoted_api_version_id',
+  'promoted_compute_version_id',
+  'scenario_run_ids',
+  'schema_version',
+  'snapshot_generated_at',
+  'suite_generated_at',
+  'target',
+  'verified',
+  'workflow_run_id',
+];
+const CERTIFICATION_ARTIFACT_DIGEST_KEYS = [
+  'browser',
+  'consumer',
+  'deterministic_fixture',
 ];
 
 function fail(message) {
@@ -476,117 +508,104 @@ function validateCanaryIdentity(identity, target, finalState) {
     row.kind !== 'galactic_compute_canary_identity' ||
     row.target !== target ||
     row.allowlist_entry !== allowlistEntry ||
-    finalState.canary_allowlist.length !== 1 ||
-    finalState.canary_allowlist[0] !== allowlistEntry
+    finalState.certification_principal !== allowlistEntry ||
+    (finalState.policy === 'canary' &&
+      (finalState.canary_allowlist.length !== 1 ||
+        finalState.canary_allowlist[0] !== allowlistEntry))
   ) {
-    fail('canary identity does not match the exact final allowlist');
+    fail('certification identity does not match the exact final principal');
   }
   return row;
 }
 
-function validateAdmittedSmoke({ smoke, target, dispatch, identity, rolloutAt }) {
+function validateDeployedCertification({
+  verification,
+  stage,
+  target,
+  dispatch,
+  identity,
+  finalState,
+  rolloutAt,
+}) {
+  const contract = stageContract(stage, target);
   const row = exactKeys(
-    smoke,
-    [
-      'agent_id',
-      'billing_mode',
-      'candidate_sha',
-      'compute_receipt_id',
-      'compute_run_id',
-      'function_name',
-      'generated_at',
-      'kind',
-      'marker_sha256',
-      'observed_states',
-      'policy_cleanup',
-      'result',
-      'schema_version',
-      'start_receipt_id',
-      'status_receipt_id',
-      'target',
-      'timestamps',
-      'usage',
-      'verified',
-      'workflow_run_id',
-    ],
-    'admitted smoke',
+    verification,
+    CERTIFICATION_KEYS,
+    'deployed certification',
   );
-  const result = exactKeys(
-    row.result,
-    [
-      'artifact_count',
-      'exit_code',
-      'status',
-      'stderr_bytes',
-      'stdout_sha256',
-    ],
-    'admitted smoke result',
+  const artifactDigests = exactKeys(
+    row.artifact_digests,
+    CERTIFICATION_ARTIFACT_DIGEST_KEYS,
+    'deployed certification artifact digests',
   );
-  const cleanup = exactKeys(
-    row.policy_cleanup,
-    ['disabled', 'revision'],
-    'admitted smoke cleanup',
+  const ownerId = canonicalUuid(row.owner_id, 'certification owner id');
+  const agentId = canonicalUuid(row.agent_id, 'certification Agent id');
+  const principal = `${ownerId}/${agentId}`;
+  const suiteGeneratedAt = timestamp(
+    row.suite_generated_at,
+    'certification suite generated_at',
   );
-  const usage = exactKeys(
-    row.usage,
-    ['actual', 'reserved', 'trueUp', 'unit'],
-    'admitted smoke usage',
+  const snapshotGeneratedAt = timestamp(
+    row.snapshot_generated_at,
+    'certification snapshot generated_at',
   );
-  const timestamps = exactKeys(
-    row.timestamps,
-    ['createdAt', 'finishedAt', 'startedAt'],
-    'admitted smoke timestamps',
+  const scenarioRunIds = Array.isArray(row.scenario_run_ids)
+    ? row.scenario_run_ids.map((runId) =>
+      canonicalUuid(runId, 'certification scenario run id')
+    )
+    : fail('certification scenario run ids are malformed');
+  const receiptIds = Array.isArray(row.compute_receipt_ids)
+    ? row.compute_receipt_ids.map((receiptId) =>
+      canonicalUuid(receiptId, 'certification Compute receipt id')
+    )
+    : fail('certification Compute receipt ids are malformed');
+  canonicalUuid(row.policy_compute_run_id, 'certification policy run id');
+  canonicalUuid(
+    row.promoted_api_version_id,
+    'certification promoted API version id',
   );
-  const agentId = canonicalUuid(row.agent_id, 'admitted smoke Agent id');
-  for (
-    const [value, label] of [
-      [row.compute_run_id, 'admitted smoke Compute run id'],
-      [row.compute_receipt_id, 'admitted smoke Compute receipt id'],
-      [row.start_receipt_id, 'admitted smoke start receipt id'],
-      [row.status_receipt_id, 'admitted smoke status receipt id'],
-    ]
-  ) canonicalUuid(value, label);
-  const generatedAt = timestamp(row.generated_at, 'admitted smoke generated_at');
-  const createdAt = timestamp(timestamps.createdAt, 'admitted smoke createdAt');
-  const startedAt = timestamp(timestamps.startedAt, 'admitted smoke startedAt');
-  const finishedAt = timestamp(timestamps.finishedAt, 'admitted smoke finishedAt');
-  const marker =
-    `galactic-compute-release-smoke-v1:${dispatch.git_sha}:${dispatch.workflow_run_id}\n`;
-  const markerSha256 = createHash('sha256').update(marker).digest('hex');
+  canonicalUuid(
+    row.promoted_compute_version_id,
+    'certification promoted Compute version id',
+  );
+  const browserDigests = Array.isArray(artifactDigests.browser)
+    ? artifactDigests.browser
+    : fail('certification browser digests are malformed');
+  const consumerDigests = Array.isArray(artifactDigests.consumer)
+    ? artifactDigests.consumer
+    : fail('certification consumer digests are malformed');
+  for (const value of [...browserDigests, ...consumerDigests]) {
+    if (typeof value !== 'string' || !HEX_SHA256.test(value)) {
+      fail('certification artifact digest is malformed');
+    }
+  }
+  const sortedUnique = (values) =>
+    values.length === new Set(values).size &&
+    JSON.stringify(values) === JSON.stringify([...values].sort());
   if (
-    row.schema_version !== 1 ||
-    row.kind !== 'galactic_compute_admitted_smoke' ||
-    row.verified !== true ||
-    row.target !== target ||
+    row.schema_version !== 1 || row.kind !== CERTIFICATION_KIND ||
+    row.verified !== true || row.target !== target ||
+    row.profile !== contract.certificationProfile ||
     row.candidate_sha !== dispatch.git_sha ||
     row.workflow_run_id !== dispatch.workflow_run_id ||
-    row.function_name !== 'run_compute_smoke' ||
-    (identity && agentId !== identity.agent_id) ||
-    row.marker_sha256 !== markerSha256 ||
-    !Array.isArray(row.observed_states) ||
-    row.observed_states.length === 0 ||
-    row.observed_states.at(-1) !== 'completed' ||
-    !row.observed_states.every((state) => typeof state === 'string' && state.length > 0) ||
-    typeof row.billing_mode !== 'string' ||
-    row.billing_mode.length === 0 ||
-    result.status !== 'completed' ||
-    result.exit_code !== 0 ||
-    result.stdout_sha256 !== markerSha256 ||
-    result.stderr_bytes !== 0 ||
-    result.artifact_count !== 0 ||
-    cleanup.disabled !== true ||
-    typeof cleanup.revision !== 'string' ||
-    !NONNEGATIVE_INTEGER.test(cleanup.revision) ||
-    ![usage.reserved, usage.actual, usage.trueUp].every(Number.isFinite) ||
-    typeof usage.unit !== 'string' ||
-    usage.unit.length === 0 ||
-    Math.abs((usage.actual - usage.reserved) - usage.trueUp) > 1e-9 ||
-    createdAt > startedAt ||
-    startedAt > finishedAt ||
-    generatedAt < finishedAt ||
-    generatedAt > rolloutAt
+    principal !== finalState.certification_principal ||
+    (identity !== null &&
+      (identity.owner_id !== ownerId || identity.agent_id !== agentId)) ||
+    row.environment_digest !== finalState.environment_digest ||
+    row.promoted_api_version_id !== finalState.api.version_id ||
+    row.promoted_compute_version_id !== finalState.compute.version_id ||
+    scenarioRunIds.length !== 10 ||
+    new Set(scenarioRunIds).size !== scenarioRunIds.length ||
+    scenarioRunIds.includes(row.policy_compute_run_id) ||
+    receiptIds.length !== 11 ||
+    new Set(receiptIds).size !== receiptIds.length ||
+    suiteGeneratedAt > snapshotGeneratedAt || snapshotGeneratedAt > rolloutAt ||
+    artifactDigests.deterministic_fixture !== FIXED_ARTIFACT_SHA256 ||
+    browserDigests.length !== 2 || consumerDigests.length !== 2 ||
+    !sortedUnique(browserDigests) || !sortedUnique(consumerDigests) ||
+    !consumerDigests.includes(FIXED_ARTIFACT_SHA256)
   ) {
-    fail('admitted smoke is not a clean terminal same-dispatch execution');
+    fail('deployed certification does not match the committed release state');
   }
   return row;
 }
@@ -903,24 +922,26 @@ export function verifyComputeRolloutPredecessor({
   } else if (rollout.canary_identity !== null) {
     fail(`${expectedStage} must not bind canary identity evidence`);
   }
-  if (contract.admittedSmoke) {
-    if (rollout.admitted_smoke === null) {
-      fail(`${expectedStage} requires admitted smoke evidence`);
+  if (contract.deployedCertification) {
+    if (rollout.deployed_certification === null) {
+      fail(`${expectedStage} requires deployed certification evidence`);
     }
-    validateAdmittedSmoke({
-      smoke: boundJson(
+    validateDeployedCertification({
+      verification: boundJson(
         evidenceDirectory,
-        rollout.admitted_smoke,
-        `compute-admitted-${expectedTarget}.json`,
-        'admitted smoke',
+        rollout.deployed_certification,
+        `compute-certification-verification-${expectedTarget}.json`,
+        'deployed certification',
       ),
+      stage: expectedStage,
       target: expectedTarget,
       dispatch,
       identity,
+      finalState,
       rolloutAt: generatedAt,
     });
-  } else if (rollout.admitted_smoke !== null) {
-    fail(`${expectedStage} must not bind admitted smoke evidence`);
+  } else if (rollout.deployed_certification !== null) {
+    fail(`${expectedStage} must not bind deployed certification evidence`);
   }
   if (rollout.compute_release === null) {
     fail('rollout must bind Compute release verification');

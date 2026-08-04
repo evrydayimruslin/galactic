@@ -25,6 +25,7 @@ const POLICY_BINDING_NAMES = new Set([
   'COMPUTE_ENVIRONMENT_DIGEST',
   'COMPUTE_ROLLOUT_MODE',
   'COMPUTE_CANARY_ALLOWLIST',
+  'COMPUTE_CERTIFICATION_PRINCIPAL',
 ]);
 const PHASES = new Set([
   'captured',
@@ -77,6 +78,7 @@ const TARGETS = Object.freeze({
 const STATE_KEYS = [
   'api',
   'canary_allowlist',
+  'certification_principal',
   'compute',
   'dispatch',
   'environment_digest',
@@ -236,6 +238,18 @@ function plainValue(version, name, label) {
   return binding.text;
 }
 
+function optionalPlainValue(version, name, label) {
+  const matches = bindingList(version, label).filter((binding) =>
+    binding?.name === name
+  );
+  if (matches.length === 0) return { present: false, value: null };
+  if (matches.length !== 1 || matches[0]?.type !== 'plain_text' ||
+    typeof matches[0]?.text !== 'string') {
+    fail(`${label} must contain at most one ${name} plain_text binding`);
+  }
+  return { present: true, value: matches[0].text };
+}
+
 function normalizedCanaryAllowlist(value, { allowUnknown = false } = {}) {
   if (value === '') return [];
   if (typeof value !== 'string') fail('canary allowlist is not a string');
@@ -252,6 +266,14 @@ function normalizedCanaryAllowlist(value, { allowUnknown = false } = {}) {
   return entries;
 }
 
+function normalizedCertificationPrincipal(value) {
+  if (value === '' || value === null) return null;
+  if (typeof value !== 'string' || !CANARY_ENTRY.test(value)) {
+    fail('certification principal is not one canonical owner/Agent pair');
+  }
+  return value;
+}
+
 function policyForVersion(version, label) {
   const enabled = plainValue(version, 'COMPUTE_ENABLED', label);
   const environmentDigest = digest(
@@ -264,50 +286,93 @@ function policyForVersion(version, label) {
     'COMPUTE_CANARY_ALLOWLIST',
     label,
   );
+  const principalBinding = optionalPlainValue(
+    version,
+    'COMPUTE_CERTIFICATION_PRINCIPAL',
+    label,
+  );
+  const certificationPrincipal = normalizedCertificationPrincipal(
+    principalBinding.value,
+  );
 
-  if (enabled === '0' && rolloutMode === 'canary' && rawAllowlist === '') {
+  if (
+    enabled === '0' && rolloutMode === 'canary' && rawAllowlist === '' &&
+    certificationPrincipal === null
+  ) {
     return {
       policy: 'off',
       canaryAllowlist: [],
+      certificationPrincipal,
+      certificationBindingPresent: principalBinding.present,
       environmentDigest,
     };
   }
-  if (enabled === '1' && rolloutMode === 'global' && rawAllowlist === '') {
+  if (
+    enabled === '1' && rolloutMode === 'global' && rawAllowlist === '' &&
+    certificationPrincipal !== null
+  ) {
     return {
       policy: 'global',
       canaryAllowlist: [],
+      certificationPrincipal,
+      certificationBindingPresent: principalBinding.present,
       environmentDigest,
     };
   }
   if (enabled === '1' && rolloutMode === 'canary') {
+    const canaryAllowlist = normalizedCanaryAllowlist(rawAllowlist, {
+      allowUnknown: true,
+    });
+    if (certificationPrincipal !== canaryAllowlist[0]) {
+      fail('canary certification principal must equal its admission allowlist');
+    }
     return {
       policy: 'canary',
-      canaryAllowlist: normalizedCanaryAllowlist(rawAllowlist, {
-        allowUnknown: true,
-      }),
+      canaryAllowlist,
+      certificationPrincipal,
+      certificationBindingPresent: principalBinding.present,
       environmentDigest,
     };
   }
   fail(`${label} does not carry a canonical OFF, canary, or global policy`);
 }
 
-function expectedPolicy(policy, rawCanaryAllowlist) {
+function expectedPolicy(
+  policy,
+  rawCanaryAllowlist,
+  rawCertificationPrincipal = '',
+) {
   if (!POLICIES.has(policy)) fail(`unsupported policy ${String(policy)}`);
   const canaryAllowlist = normalizedCanaryAllowlist(rawCanaryAllowlist);
+  const certificationPrincipal = normalizedCertificationPrincipal(
+    rawCertificationPrincipal,
+  );
   if (policy === 'canary' && canaryAllowlist.length !== 1) {
     fail('enabled canary policy requires one owner/Agent pair');
   }
   if (policy !== 'canary' && canaryAllowlist.length !== 0) {
     fail(`${policy} policy requires an empty canary allowlist`);
   }
-  return { policy, canaryAllowlist };
+  if (policy === 'off' && certificationPrincipal !== null) {
+    fail('off policy requires an empty certification principal');
+  }
+  if (policy !== 'off' && certificationPrincipal === null) {
+    fail(`${policy} policy requires one certification principal`);
+  }
+  if (
+    policy === 'canary' && certificationPrincipal !== canaryAllowlist[0]
+  ) {
+    fail('canary certification principal must equal its admission allowlist');
+  }
+  return { policy, canaryAllowlist, certificationPrincipal };
 }
 
 function assertExpectedPolicy(actual, expected, label) {
   if (
     actual.policy !== expected.policy ||
     JSON.stringify(actual.canaryAllowlist) !==
-      JSON.stringify(expected.canaryAllowlist)
+      JSON.stringify(expected.canaryAllowlist) ||
+    actual.certificationPrincipal !== expected.certificationPrincipal
   ) {
     fail(`${label} policy does not match the requested ${expected.policy} state`);
   }
@@ -617,6 +682,7 @@ function stateResult({
   target,
   policy,
   canaryAllowlist,
+  certificationPrincipal,
   environmentDigest,
   dispatch,
   api,
@@ -632,6 +698,7 @@ function stateResult({
     target,
     policy,
     canary_allowlist: [...canaryAllowlist],
+    certification_principal: certificationPrincipal,
     environment_digest: environmentDigest,
     dispatch,
     api,
@@ -674,11 +741,13 @@ export function validateRolloutState(value) {
   const expected = expectedPolicy(
     row.policy,
     Array.isArray(row.canary_allowlist) ? row.canary_allowlist.join(',') : null,
+    row.certification_principal,
   );
   if (
     !Array.isArray(row.canary_allowlist) ||
     JSON.stringify(row.canary_allowlist) !==
-      JSON.stringify(expected.canaryAllowlist)
+      JSON.stringify(expected.canaryAllowlist) ||
+    row.certification_principal !== expected.certificationPrincipal
   ) fail('rollout state canary allowlist is malformed');
   digest(row.environment_digest, 'rollout state environment digest');
   const dispatch = validateDispatch(row.dispatch);
@@ -723,6 +792,7 @@ export function verifyRolloutLivePair({
   phase,
   expectedPolicy: requestedPolicy = null,
   expectedCanaryAllowlist = null,
+  expectedCertificationPrincipal = null,
   apiStatus,
   apiVersion,
   computeStatus,
@@ -763,7 +833,14 @@ export function verifyRolloutLivePair({
   if (requestedPolicy !== null) {
     assertExpectedPolicy(
       actualPolicy,
-      expectedPolicy(requestedPolicy, expectedCanaryAllowlist ?? ''),
+      expectedPolicy(
+        requestedPolicy,
+        expectedCanaryAllowlist ?? '',
+        expectedCertificationPrincipal ??
+          (requestedPolicy === 'off'
+            ? ''
+            : actualPolicy.certificationPrincipal ?? ''),
+      ),
       'API',
     );
   }
@@ -784,6 +861,7 @@ export function verifyRolloutLivePair({
     target,
     policy: actualPolicy.policy,
     canaryAllowlist: actualPolicy.canaryAllowlist,
+    certificationPrincipal: actualPolicy.certificationPrincipal,
     environmentDigest: computeDigest,
     dispatch,
     api: workerState({
@@ -817,6 +895,7 @@ export function verifyRolloutUploadedApi({
   expectedVersionTag,
   expectedPolicy: requestedPolicy,
   expectedCanaryAllowlist = '',
+  expectedCertificationPrincipal = '',
   dispatch = rolloutDispatchFromEnv(),
 }) {
   const names = targetState(target);
@@ -829,6 +908,7 @@ export function verifyRolloutUploadedApi({
   const requested = expectedPolicy(
     requestedPolicy,
     expectedCanaryAllowlist,
+    expectedCertificationPrincipal,
   );
   const transition = `${baseline.phase}:${baseline.policy}->${requested.policy}`;
   if (!LEGAL_UPLOAD_TRANSITIONS.has(transition)) {
@@ -853,6 +933,9 @@ export function verifyRolloutUploadedApi({
     requested,
     'uploaded API',
   );
+  if (!actualPolicy.certificationBindingPresent) {
+    fail('uploaded API is missing the certification principal binding');
+  }
   if (actualPolicy.environmentDigest !== baseline.environment_digest) {
     fail('uploaded API changed the Compute environment digest');
   }
@@ -874,6 +957,7 @@ export function verifyRolloutUploadedApi({
     target,
     policy: actualPolicy.policy,
     canaryAllowlist: actualPolicy.canaryAllowlist,
+    certificationPrincipal: actualPolicy.certificationPrincipal,
     environmentDigest: baseline.environment_digest,
     dispatch: currentDispatch,
     api: workerState({
@@ -911,6 +995,7 @@ export function verifyRolloutPromotedPair({
     phase,
     expectedPolicy: candidate.policy,
     expectedCanaryAllowlist: candidate.canary_allowlist.join(','),
+    expectedCertificationPrincipal: candidate.certification_principal,
     apiStatus,
     apiVersion,
     computeStatus,
@@ -958,6 +1043,7 @@ export function verifyRolloutRevertedPair({
     phase: 'reverted',
     expectedPolicy: 'off',
     expectedCanaryAllowlist: '',
+    expectedCertificationPrincipal: '',
     apiStatus,
     apiVersion,
     computeStatus,
@@ -1006,6 +1092,7 @@ export function verifyRolloutFencedState({
     phase,
     expectedPolicy: expected.policy,
     expectedCanaryAllowlist: expected.canary_allowlist.join(','),
+    expectedCertificationPrincipal: expected.certification_principal,
     apiStatus,
     apiVersion,
     computeStatus,
@@ -1090,6 +1177,7 @@ export function verifyRolloutRevalidatedOffAnchor({
     target: prior.target,
     policy: 'off',
     canaryAllowlist: [],
+    certificationPrincipal: null,
     environmentDigest: prior.environment_digest,
     dispatch: currentDispatch,
     api: { ...prior.api, deployment_id: null },
@@ -1157,15 +1245,16 @@ export function main(argv, env = process.env) {
       dispatch,
     }));
   }
-  if (mode === 'uploaded' && argv.length === 8) {
+  if (mode === 'uploaded' && argv.length === 9) {
     return print(verifyRolloutUploadedApi({
       target: argv[1],
       expectedPolicy: argv[2],
       expectedCanaryAllowlist: argv[3] === '-' ? '' : argv[3],
-      baselineState: readJson(argv[4], 'rollout baseline state'),
-      uploadedVersion: readJson(argv[5], 'uploaded API version detail'),
-      expectedVersionId: argv[6],
-      expectedVersionTag: argv[7],
+      expectedCertificationPrincipal: argv[4] === '-' ? '' : argv[4],
+      baselineState: readJson(argv[5], 'rollout baseline state'),
+      uploadedVersion: readJson(argv[6], 'uploaded API version detail'),
+      expectedVersionId: argv[7],
+      expectedVersionTag: argv[8],
       dispatch,
     }));
   }
@@ -1219,7 +1308,8 @@ export function main(argv, env = process.env) {
       'deploy-output <ndjson> <worker> <environment> <version-id> | ' +
       'inspect <target> <api-status> <api-version> <compute-status> ' +
       '<compute-version> | uploaded <target> <off|canary|global> ' +
-      '<allowlist|-> <baseline-state> <uploaded-version> <version-id> <tag> | ' +
+      '<allowlist|-> <certification-principal|-> <baseline-state> ' +
+      '<uploaded-version> <version-id> <tag> | ' +
       'promoted <target> <candidate-state> <api-status> <api-version> ' +
       '<compute-status> <compute-version> <deployment-id> | ' +
       'fence <state> <api-status> <api-version> <compute-status> ' +

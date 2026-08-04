@@ -69,6 +69,7 @@ const OTHER_DISPATCH = Object.freeze({
 const STATE_KEYS = [
   'api',
   'canary_allowlist',
+  'certification_principal',
   'compute',
   'dispatch',
   'environment_digest',
@@ -148,19 +149,30 @@ function wranglerDeployContent(records = wranglerDeployRecords()) {
   return `${records.map((record) => JSON.stringify(record)).join('\n')}\n`;
 }
 
-function policyValues(policy, canaryAllowlist) {
+function policyValues(policy, canaryAllowlist, certificationPrincipal) {
   if (policy === 'off') {
-    return { enabled: '0', rolloutMode: 'canary', canaryAllowlist: '' };
+    return {
+      enabled: '0',
+      rolloutMode: 'canary',
+      canaryAllowlist: '',
+      certificationPrincipal: '',
+    };
   }
   if (policy === 'canary') {
     return {
       enabled: '1',
       rolloutMode: 'canary',
       canaryAllowlist,
+      certificationPrincipal,
     };
   }
   if (policy === 'global') {
-    return { enabled: '1', rolloutMode: 'global', canaryAllowlist: '' };
+    return {
+      enabled: '1',
+      rolloutMode: 'global',
+      canaryAllowlist: '',
+      certificationPrincipal,
+    };
   }
   throw new Error(`unsupported test policy ${policy}`);
 }
@@ -171,11 +183,16 @@ function apiVersion({
   tag = OFF_TAG,
   policy = 'off',
   canaryAllowlist = policy === 'canary' ? CANARY_PAIR : '',
+  certificationPrincipal = policy === 'off' ? '' : CANARY_PAIR,
   environmentDigest = ENVIRONMENT_DIGEST,
   etag = API_ETAG,
 } = {}) {
   const names = TARGETS[target];
-  const values = policyValues(policy, canaryAllowlist);
+  const values = policyValues(
+    policy,
+    canaryAllowlist,
+    certificationPrincipal,
+  );
   return {
     id,
     annotations: { 'workers/tag': tag },
@@ -201,6 +218,11 @@ function apiVersion({
           type: 'plain_text',
           name: 'COMPUTE_CANARY_ALLOWLIST',
           text: values.canaryAllowlist,
+        },
+        {
+          type: 'plain_text',
+          name: 'COMPUTE_CERTIFICATION_PRINCIPAL',
+          text: values.certificationPrincipal,
         },
         {
           type: 'service',
@@ -301,6 +323,7 @@ function livePair({
   target = 'production',
   policy = 'off',
   canaryAllowlist = policy === 'canary' ? CANARY_PAIR : '',
+  certificationPrincipal = policy === 'off' ? '' : CANARY_PAIR,
   apiId = IDS.offApi,
   apiTag = OFF_TAG,
   apiDeploymentId = IDS.offApiDeployment,
@@ -317,6 +340,7 @@ function livePair({
       tag: apiTag,
       policy,
       canaryAllowlist,
+      certificationPrincipal,
       environmentDigest,
     }),
     computeStatus: status(computeId, computeDeploymentId),
@@ -346,12 +370,18 @@ function inspectPolicy({
   target = 'production',
   policy = 'canary',
   canaryAllowlist = policy === 'canary' ? CANARY_PAIR : '',
+  certificationPrincipal = policy === 'off' ? '' : CANARY_PAIR,
   dispatch = DISPATCH,
 } = {}) {
   return verifyRolloutLivePair({
     target,
     phase: 'inspected',
-    ...livePair({ target, policy, canaryAllowlist }),
+    ...livePair({
+      target,
+      policy,
+      canaryAllowlist,
+      certificationPrincipal,
+    }),
     dispatch,
   });
 }
@@ -361,12 +391,14 @@ function uploadCandidate({
   baseline = captureOff(target),
   policy = 'canary',
   canaryAllowlist = policy === 'canary' ? CANARY_PAIR : '',
+  certificationPrincipal = policy === 'off' ? '' : CANARY_PAIR,
   uploadedVersion = apiVersion({
     target,
     id: IDS.candidateApi,
     tag: CANDIDATE_TAG,
     policy,
     canaryAllowlist,
+    certificationPrincipal,
   }),
   expectedVersionId = IDS.candidateApi,
   expectedVersionTag = CANDIDATE_TAG,
@@ -380,6 +412,7 @@ function uploadCandidate({
     expectedVersionTag,
     expectedPolicy: policy,
     expectedCanaryAllowlist: canaryAllowlist,
+    expectedCertificationPrincipal: certificationPrincipal,
     dispatch,
   });
 }
@@ -388,11 +421,13 @@ function promotedInputs({
   target = 'production',
   policy = 'canary',
   canaryAllowlist = policy === 'canary' ? CANARY_PAIR : '',
+  certificationPrincipal = policy === 'off' ? '' : CANARY_PAIR,
 } = {}) {
   return livePair({
     target,
     policy,
     canaryAllowlist,
+    certificationPrincipal,
     apiId: IDS.candidateApi,
     apiTag: CANDIDATE_TAG,
     apiDeploymentId: IDS.candidateApiDeployment,
@@ -404,7 +439,13 @@ function promoteCandidate({
   candidate = uploadCandidate({ target }),
   policy = candidate.policy,
   canaryAllowlist = candidate.canary_allowlist.join(','),
-  pair = promotedInputs({ target, policy, canaryAllowlist }),
+  certificationPrincipal = candidate.certification_principal,
+  pair = promotedInputs({
+    target,
+    policy,
+    canaryAllowlist,
+    certificationPrincipal,
+  }),
   dispatch = DISPATCH,
 } = {}) {
   return verifyRolloutPromotedPair({
@@ -1366,6 +1407,7 @@ test('requires exact candidate-to-anchor API and Compute lineage during revalida
       (state) => {
         state.policy = 'off';
         state.canary_allowlist = [];
+        state.certification_principal = null;
       },
       /current fenced rollout is not admission-enabled/u,
     ],

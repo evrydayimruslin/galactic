@@ -33,12 +33,11 @@ const API_DEPLOYMENT_ID = '66666666-6666-4666-8666-666666666666';
 const CANDIDATE_DEPLOYMENT_ID = '77777777-7777-4777-8777-777777777777';
 const COMPUTE_DEPLOYMENT_ID = '88888888-8888-4888-8888-888888888888';
 const COMPUTE_RUN_ID = '99999999-9999-4999-8999-999999999999';
-const COMPUTE_RECEIPT_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-const START_RECEIPT_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
-const STATUS_RECEIPT_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const NOW_MS = Date.parse('2030-01-01T00:00:00.000Z');
 const GENERATED_AT = '2020-01-02T12:00:00.000Z';
 const SOAK_ELIGIBLE_AT = '2020-01-02T13:00:00.000Z';
+const FIXED_ARTIFACT_SHA256 =
+  '6ad9b8ea5280658dc4b229a2b6180d530c4d3824b541d218266ea6049e8b763b';
 
 const TARGETS = {
   staging: {
@@ -84,6 +83,10 @@ function jsonBytes(value) {
 
 function hash(value) {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function uuid(index) {
+  return `10000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`;
 }
 
 function writeJson(directory, file, value) {
@@ -137,6 +140,7 @@ function rolloutState({
     target,
     policy,
     canary_allowlist: canaryAllowlist,
+    certification_principal: policy === 'off' ? null : ALLOWLIST_ENTRY,
     environment_digest: DIGEST,
     dispatch: stateDispatch,
     api: workerState(names.apiWorker, {
@@ -219,41 +223,37 @@ function canaryIdentity(target) {
   };
 }
 
-function admittedSmoke(target, smokeDispatch, identity = null) {
-  const marker =
-    `galactic-compute-release-smoke-v1:${smokeDispatch.git_sha}:${smokeDispatch.workflow_run_id}\n`;
-  const markerSha256 = hash(marker);
+function deployedCertification(stage, target, certificationDispatch, finalState) {
+  const profile = {
+    staging_canary: 'staging-full',
+    production_canary: 'production-canary',
+    production_global: 'production-global',
+  }[stage];
   return {
     schema_version: 1,
-    kind: 'galactic_compute_admitted_smoke',
+    kind: 'galactic_compute_certification_verification',
     verified: true,
     target,
-    candidate_sha: smokeDispatch.git_sha,
-    workflow_run_id: smokeDispatch.workflow_run_id,
-    agent_id: identity?.agent_id ?? AGENT_ID,
-    function_name: 'run_compute_smoke',
-    marker_sha256: markerSha256,
-    compute_run_id: COMPUTE_RUN_ID,
-    compute_receipt_id: COMPUTE_RECEIPT_ID,
-    start_receipt_id: START_RECEIPT_ID,
-    status_receipt_id: STATUS_RECEIPT_ID,
-    observed_states: ['queued', 'settlement_pending', 'completed'],
-    billing_mode: 'subscription_capacity',
-    usage: { reserved: 0.5, actual: 0.25, trueUp: -0.25, unit: 'Light' },
-    timestamps: {
-      createdAt: '2020-01-02T11:57:00.000Z',
-      startedAt: '2020-01-02T11:58:00.000Z',
-      finishedAt: '2020-01-02T11:59:00.000Z',
+    profile,
+    candidate_sha: certificationDispatch.git_sha,
+    workflow_run_id: certificationDispatch.workflow_run_id,
+    owner_id: OWNER_ID,
+    agent_id: AGENT_ID,
+    environment_digest: finalState.environment_digest,
+    promoted_api_version_id: finalState.api.version_id,
+    promoted_compute_version_id: finalState.compute.version_id,
+    suite_generated_at: '2020-01-02T11:59:30.000Z',
+    snapshot_generated_at: '2020-01-02T11:59:45.000Z',
+    scenario_run_ids: Array.from({ length: 10 }, (_, index) => uuid(100 + index)),
+    policy_compute_run_id: uuid(200),
+    compute_receipt_ids: Array.from({ length: 11 }, (_, index) =>
+      uuid(300 + index)
+    ),
+    artifact_digests: {
+      deterministic_fixture: FIXED_ARTIFACT_SHA256,
+      browser: ['1'.repeat(64), '2'.repeat(64)],
+      consumer: [FIXED_ARTIFACT_SHA256, 'd'.repeat(64)],
     },
-    result: {
-      status: 'completed',
-      exit_code: 0,
-      stdout_sha256: markerSha256,
-      stderr_bytes: 0,
-      artifact_count: 0,
-    },
-    policy_cleanup: { disabled: true, revision: '8' },
-    generated_at: '2020-01-02T11:59:30.000Z',
   };
 }
 
@@ -328,8 +328,10 @@ function createFixture(
   if (stage === 'revert_off') {
     finalState.source_api_version_id = null;
   }
-  const identity = contract.policy === 'canary' ? canaryIdentity(target) : null;
-  const smoke = contract.policy !== 'off' ? admittedSmoke(target, currentDispatch, identity) : null;
+  const identity = contract.policy !== 'off' ? canaryIdentity(target) : null;
+  const certification = contract.policy !== 'off'
+    ? deployedCertification(stage, target, currentDispatch, finalState)
+    : null;
   const releaseVerification = computeReleaseVerification(target, finalState);
   const priorStage = priorStageFor(stage, target);
   const prior = priorStage ? predecessorVerification(priorStage, target) : null;
@@ -368,13 +370,13 @@ function createFixture(
         sha256: writeJson(directory, 'canary-identity.json', identity),
       }
       : null,
-    admitted_smoke: smoke
+    deployed_certification: certification
       ? {
-        evidence_file: `compute-admitted-${target}.json`,
+        evidence_file: `compute-certification-verification-${target}.json`,
         sha256: writeJson(
           directory,
-          `compute-admitted-${target}.json`,
-          smoke,
+          `compute-certification-verification-${target}.json`,
+          certification,
         ),
       }
       : null,
@@ -404,7 +406,7 @@ function createFixture(
     rollbackAnchor,
     finalState,
     identity,
-    smoke,
+    certification,
     releaseVerification,
     prior,
   };
@@ -772,7 +774,7 @@ test('rejects final-state policy, target, dispatch, digest, or Compute drift', (
   }
 });
 
-test('rejects canary identity and admitted-smoke drift', () => {
+test('rejects canary identity and deployed-certification drift', () => {
   const cases = [
     ['missing canary identity', (fixture) => {
       fixture.rollout.canary_identity = null;
@@ -781,18 +783,30 @@ test('rejects canary identity and admitted-smoke drift', () => {
     ['wrong allowlist identity', (fixture) => {
       fixture.identity.allowlist_entry = `${OWNER_ID}/${COMPUTE_RUN_ID}`;
     }],
-    ['smoke not verified', (fixture) => fixture.smoke.verified = false],
-    ['wrong smoke SHA', (fixture) => fixture.smoke.candidate_sha = RELEASE_SHA],
-    ['wrong smoke run', (fixture) => {
-      fixture.smoke.workflow_run_id = '31000000001';
+    ['certification not verified', (fixture) => {
+      fixture.certification.verified = false;
     }],
-    ['wrong smoke Agent', (fixture) => fixture.smoke.agent_id = OWNER_ID],
-    ['nonterminal smoke', (fixture) => {
-      fixture.smoke.observed_states = ['queued', 'running'];
+    ['wrong certification SHA', (fixture) => {
+      fixture.certification.candidate_sha = RELEASE_SHA;
     }],
-    ['failed result', (fixture) => fixture.smoke.result.exit_code = 1],
-    ['cleanup enabled', (fixture) => {
-      fixture.smoke.policy_cleanup.disabled = false;
+    ['wrong certification run', (fixture) => {
+      fixture.certification.workflow_run_id = '31000000001';
+    }],
+    ['wrong certification Agent', (fixture) => {
+      fixture.certification.agent_id = OWNER_ID;
+    }],
+    ['wrong certification profile', (fixture) => {
+      fixture.certification.profile = 'production-global';
+    }],
+    ['missing scenario execution', (fixture) => {
+      fixture.certification.scenario_run_ids.pop();
+    }],
+    ['wrong promoted API', (fixture) => {
+      fixture.certification.promoted_api_version_id = API_ID;
+    }],
+    ['wrong artifact digest', (fixture) => {
+      fixture.certification.artifact_digests.deterministic_fixture =
+        'f'.repeat(64);
     }],
   ];
   for (const [name, mutate] of cases) {
@@ -809,9 +823,9 @@ test('rejects canary identity and admitted-smoke drift', () => {
       }
       rebind(
         fixture,
-        'admitted_smoke',
-        'compute-admitted-production.json',
-        fixture.smoke,
+        'deployed_certification',
+        'compute-certification-verification-production.json',
+        fixture.certification,
       );
       persist(fixture);
       assert.throws(

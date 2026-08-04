@@ -180,6 +180,11 @@ function preserveOffFixture() {
         name: "COMPUTE_CANARY_ALLOWLIST",
         text: "",
       },
+      {
+        type: "plain_text",
+        name: "COMPUTE_CERTIFICATION_PRINCIPAL",
+        text: "",
+      },
     ],
   };
   const policyAfter = {
@@ -205,6 +210,11 @@ function preserveOffFixture() {
       {
         type: "plain_text",
         name: "COMPUTE_CANARY_ALLOWLIST",
+        text: "",
+      },
+      {
+        type: "plain_text",
+        name: "COMPUTE_CERTIFICATION_PRINCIPAL",
         text: "",
       },
       {
@@ -449,6 +459,65 @@ test("accepts exact-tag schema 6 preserve_off evidence", () => {
     assert.equal(Object.hasOwn(result, "compute_run_id"), false);
   } finally {
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("accepts a historical OFF snapshot without a certification principal", () => {
+  const fixture = preserveOffFixture();
+  try {
+    fixture.policyBefore.selected_bindings =
+      fixture.policyBefore.selected_bindings.filter((binding) =>
+        binding.name !== "COMPUTE_CERTIFICATION_PRINCIPAL"
+      );
+    fixture.release.policy_before.sha256 = bindJson(
+      fixture.directory,
+      "pre-rollout-api-version.json",
+      fixture.policyBefore,
+    );
+    writeRelease(fixture.directory, fixture.release);
+    assert.equal(verify(fixture.directory, "preserve_off").verified, true);
+  } finally {
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("accepts a historical post-rollout OFF snapshot without a principal", () => {
+  const fixture = preserveOffFixture();
+  try {
+    fixture.policyAfter.selected_bindings =
+      fixture.policyAfter.selected_bindings.filter((binding) =>
+        binding.name !== "COMPUTE_CERTIFICATION_PRINCIPAL"
+      );
+    fixture.release.policy_after.sha256 = bindJson(
+      fixture.directory,
+      "active-preserve-off-api-version.json",
+      fixture.policyAfter,
+    );
+    writeRelease(fixture.directory, fixture.release);
+    assert.equal(verify(fixture.directory, "preserve_off").verified, true);
+  } finally {
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("rejects a nonempty post-rollout certification principal", () => {
+  const fixture = preserveOffFixture();
+  try {
+    fixture.policyAfter.selected_bindings.find((binding) =>
+      binding.name === "COMPUTE_CERTIFICATION_PRINCIPAL"
+    ).text = "owner/agent";
+    fixture.release.policy_after.sha256 = bindJson(
+      fixture.directory,
+      "active-preserve-off-api-version.json",
+      fixture.policyAfter,
+    );
+    writeRelease(fixture.directory, fixture.release);
+    assert.throws(
+      () => verify(fixture.directory, "preserve_off"),
+      /post-rollout/u,
+    );
+  } finally {
+    rmSync(fixture.directory, { recursive: true, force: true });
   }
 });
 

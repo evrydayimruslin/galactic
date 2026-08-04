@@ -1,4 +1,5 @@
 import type { Env } from "../../lib/env.ts";
+import { computePrivilegedCredentialsReady } from "../compute-credential-isolation.ts";
 
 const IMAGE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 const CANARY_ENTRY_PATTERN =
@@ -34,6 +35,8 @@ export interface ComputeRuntimeConfig {
     | "dispatch_queue"
     | "artifact_bucket"
     | "token_pepper"
+    | "privileged_credentials"
+    | "credential_isolation"
     | "rollout_policy"
   >;
 }
@@ -63,14 +66,21 @@ export function resolveComputeRuntimeConfig(
     ).filter(Boolean)
     : [];
   const canaryAllowlist = Array.from(new Set(rawCanaries));
+  const certificationPrincipal = typeof env?.COMPUTE_CERTIFICATION_PRINCIPAL ===
+      "string"
+    ? env.COMPUTE_CERTIFICATION_PRINCIPAL.trim().toLowerCase()
+    : "";
   const missing: ComputeRuntimeConfig["missing"] = [];
   if (!enabled) missing.push("feature_flag");
   if (!environmentDigest) missing.push("environment_digest");
   if (
     !rolloutMode ||
+    !CANARY_ENTRY_PATTERN.test(certificationPrincipal) ||
     (rolloutMode === "canary" &&
       (canaryAllowlist.length === 0 ||
-        canaryAllowlist.some((entry) => !CANARY_ENTRY_PATTERN.test(entry))))
+        canaryAllowlist.some((entry) => !CANARY_ENTRY_PATTERN.test(entry)) ||
+        canaryAllowlist.length !== 1 ||
+        canaryAllowlist[0] !== certificationPrincipal))
   ) missing.push("rollout_policy");
   if (
     !env?.COMPUTE_PLANE ||
@@ -90,6 +100,11 @@ export function resolveComputeRuntimeConfig(
     typeof env?.COMPUTE_JOB_TOKEN_PEPPER !== "string" ||
     env.COMPUTE_JOB_TOKEN_PEPPER.length < 32
   ) missing.push("token_pepper");
+  const credentials = env
+    ? computePrivilegedCredentialsReady(env)
+    : { configured: false, isolated: true };
+  if (!credentials.configured) missing.push("privileged_credentials");
+  if (!credentials.isolated) missing.push("credential_isolation");
   return {
     enabled,
     environmentDigest,

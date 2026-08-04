@@ -30,7 +30,7 @@ describe("Compute release workflow static guards", () => {
     expect(deploy).toContain("scripts/hash-migrations.mjs");
     expect(deploy).toContain("20260720124500_compute_capacity_conservation.sql");
     expect(deploy).toContain("20260720125000_compute_execution_recovery.sql");
-    expect(deploy).toContain(".schema_version = 5");
+    expect(deploy).not.toContain(".schema_version = 5");
     expect(deploy).toContain(".schema_version = 6");
     expect(deploy).toContain("binding_preflight = {");
     expect(deploy).toContain("preflight_sha256");
@@ -56,9 +56,11 @@ describe("Compute release workflow static guards", () => {
     });
     expect(deploy).toMatch(/on:\n\s+workflow_dispatch:/u);
     expect(deploy).toMatch(
-      /admission_mode:\n\s+description:[^\n]+\n\s+required: true\n\s+default: preserve_off\n\s+type: choice\n\s+options:\n\s+- preserve_off\n\s+- enable_global/u,
+      /admission_mode:\n\s+description:[^\n]+\n\s+required: true\n\s+default: preserve_off\n\s+type: choice\n\s+options:\n\s+- preserve_off/u,
     );
+    expect(deploy).not.toContain("enable_global");
     expect(deploy).not.toMatch(/^\s+- global$/mu);
+    expect(deploy).toContain("compute-canary-rollout.yml");
     expect(deploy).toContain(
       '[ "$REQUESTED_ADMISSION_MODE" != "$policy_admission_mode" ]',
     );
@@ -183,6 +185,51 @@ describe("Compute release workflow static guards", () => {
         ),
       ).toBeLessThan(
         job.indexOf(`Deploy ${target} worker`),
+      );
+    }
+  });
+
+  it("preserves all five Compute policy bindings across ordinary API deploys", async () => {
+    const apiDeploy = await text(".github/workflows/api-deploy.yml");
+    const stateVerifier = await text(
+      "scripts/release/verify-api-compute-deploy-state.mjs",
+    );
+    expect(apiDeploy).toContain("Wrangler Dry Run (Compute disabled)");
+    expect(apiDeploy).toContain("--var COMPUTE_CERTIFICATION_PRINCIPAL:");
+    expect(stateVerifier).toContain("certificationPrincipal");
+    expect(stateVerifier).toContain("COMPUTE_CERTIFICATION_PRINCIPAL");
+
+    for (const target of ["staging", "production"]) {
+      const jobStart = apiDeploy.indexOf(`  deploy_${target}:`);
+      const nextJob = apiDeploy.indexOf("\n  deploy_", jobStart + 1);
+      const job = apiDeploy.slice(
+        jobStart,
+        nextJob === -1 ? apiDeploy.length : nextJob,
+      );
+      const captureStart = job.indexOf(
+        `Capture exact live ${target} Compute policy`,
+      );
+      const captureEnd = job.indexOf("\n      - name:", captureStart);
+      const capture = job.slice(captureStart, captureEnd);
+      const deployStart = job.indexOf(`Deploy ${target} worker`);
+      const deployEnd = job.indexOf("\n      - name:", deployStart);
+      const deployment = job.slice(deployStart, deployEnd);
+
+      expect(jobStart).toBeGreaterThan(0);
+      expect(captureStart).toBeGreaterThan(0);
+      expect(deployStart).toBeGreaterThan(captureStart);
+      expect(capture).toContain(
+        `PRESERVED_COMPUTE_CERTIFICATION_PRINCIPAL=$(jq -er '.certificationPrincipal' "$state")`,
+      );
+      expect(deployment).toContain(
+        "--var COMPUTE_CERTIFICATION_PRINCIPAL:",
+      );
+      expect(deployment).toContain(
+        '--var "COMPUTE_CERTIFICATION_PRINCIPAL:' +
+          '$PRESERVED_COMPUTE_CERTIFICATION_PRINCIPAL"',
+      );
+      expect(job).toContain(
+        `$RUNNER_TEMP/${target}-api-live-compute-state.json`,
       );
     }
   });
@@ -620,7 +667,7 @@ describe("Compute release workflow static guards", () => {
     );
   });
 
-  it("runs Compute last and restores the captured stable pair after any mutation failure", async () => {
+  it("runs Compute last, remains admission-OFF, and restores the captured stable pair after any mutation failure", async () => {
     const deploy = await text(".github/workflows/compute-deploy.yml");
     const waitForDeploys = deploy.indexOf(
       "Wait for every exact-tag production deploy before Compute mutation",
@@ -639,14 +686,6 @@ describe("Compute release workflow static guards", () => {
     const preserveOff = deploy.indexOf(
       "Finalize policy-preserving admission-OFF release evidence",
     );
-    const globalDryRun = deploy.indexOf(
-      "Typecheck and dry-run global admission",
-    );
-    const enableGlobal = deploy.indexOf("Enable global admission from the exact certified pair");
-    const verifyGlobal = deploy.indexOf("Verify exact global admission postcondition");
-    const admittedSmoke = deploy.indexOf("Run one bounded admitted Compute job");
-    const postSmokeFence = deploy.indexOf("Fence exact live versions after admitted smoke");
-    const finalize = deploy.indexOf("Finalize globally enabled release evidence");
     const compensation = deploy.indexOf(
       "Restore the stable API and Compute pair after any release failure",
     );
@@ -658,24 +697,43 @@ describe("Compute release workflow static guards", () => {
     expect(refreshFixture).toBeGreaterThan(certifyOff);
     expect(bindingPreflight).toBeGreaterThan(refreshFixture);
     expect(preserveOff).toBeGreaterThan(bindingPreflight);
-    expect(globalDryRun).toBeGreaterThan(preserveOff);
-    expect(enableGlobal).toBeGreaterThan(globalDryRun);
-    expect(verifyGlobal).toBeGreaterThan(enableGlobal);
-    expect(admittedSmoke).toBeGreaterThan(verifyGlobal);
-    expect(postSmokeFence).toBeGreaterThan(admittedSmoke);
-    expect(finalize).toBeGreaterThan(postSmokeFence);
-    expect(compensation).toBeGreaterThan(finalize);
+    expect(compensation).toBeGreaterThan(preserveOff);
     expect(deploy).toContain('--tag "api-$GITHUB_SHA-admission-off"');
-    expect(deploy).toContain("--var COMPUTE_ROLLOUT_MODE:global");
+    expect(deploy).not.toContain("--var COMPUTE_ROLLOUT_MODE:global");
+    expect(deploy).not.toContain("COMPUTE_ENABLED:1");
+    expect(deploy).not.toContain("enable_global");
+    expect(deploy).toContain("compute-canary-rollout.yml");
+    const offWrites = deploy.match(/--var COMPUTE_ENABLED:0/gu) ?? [];
+    const clearedCertificationPrincipals = deploy.match(
+      /--var COMPUTE_CERTIFICATION_PRINCIPAL:/gu,
+    ) ?? [];
+    expect(offWrites.length).toBeGreaterThan(0);
+    expect(clearedCertificationPrincipals).toHaveLength(offWrites.length);
+    expect(deploy).toContain(
+      'value("COMPUTE_CERTIFICATION_PRINCIPAL") == ""',
+    );
+    expect(deploy).toContain(
+      'optional_value("COMPUTE_CERTIFICATION_PRINCIPAL") == ""',
+    );
+    expect(
+      deploy.match(/\.name == "COMPUTE_CERTIFICATION_PRINCIPAL"/gu) ?? [],
+    ).toHaveLength(3);
+    for (const removedStep of [
+      "Typecheck and dry-run global admission",
+      "Enable global admission from the exact certified pair",
+      "Verify exact global admission postcondition",
+      "Run one bounded admitted Compute job",
+      "Fence exact live versions after admitted smoke",
+      "Finalize globally enabled release evidence",
+    ]) {
+      expect(deploy).not.toContain(removedStep);
+    }
     expect(deploy).toContain("steps.capture_stable.outputs.captured == 'true'");
     expect(deploy).toContain(
       "steps.deploy_compute.outputs.attempted == 'true'",
     );
     expect(deploy).toContain(
       "steps.certify_off.outputs.attempted == 'true'",
-    );
-    expect(deploy).toContain(
-      "steps.enable_global.outputs.attempted == 'true'",
     );
     expect(deploy).toContain(
       'versions deploy "$PRE_ROLLOUT_API_VERSION_ID@100%"',
@@ -701,7 +759,7 @@ describe("Compute release workflow static guards", () => {
     expect(deploy).not.toContain(
       "Promote certified OFF version after any ambiguous global enable",
     );
-    expect(deploy).toContain("compute-admitted-$REQUESTED_TARGET.json");
+    expect(deploy).not.toContain("compute-admitted-$REQUESTED_TARGET.json");
     expect(deploy).toContain("compute-preflight-$REQUESTED_TARGET.json");
     for (const [workflow, name] of [
       ["supabase-production-db.yml", "Supabase Production DB"],
@@ -730,7 +788,7 @@ describe("Compute release workflow static guards", () => {
     expect(preflightStep).not.toContain("--token");
     expect(preflightStep).not.toContain("--app-id");
     expect(preflightStep).not.toContain("GALACTIC_OWNER_ACCESS_TOKEN:");
-    const preserveStep = deploy.slice(preserveOff, globalDryRun);
+    const preserveStep = deploy.slice(preserveOff, compensation);
     expect(preserveStep).toContain(
       "if: inputs.admission_mode == 'preserve_off'",
     );
@@ -747,16 +805,7 @@ describe("Compute release workflow static guards", () => {
     expect(preserveStep).not.toContain(
       "scripts/smoke/compute-admitted-smoke.mjs\n",
     );
-    for (const [start, end] of [
-      [globalDryRun, enableGlobal],
-      [enableGlobal, verifyGlobal],
-      [verifyGlobal, admittedSmoke],
-      [admittedSmoke, postSmokeFence],
-      [postSmokeFence, finalize],
-    ]) {
-      expect(deploy.slice(start, end)).toContain("enable_global");
-    }
-    const fixtureStep = deploy.slice(refreshFixture, enableGlobal);
+    const fixtureStep = deploy.slice(refreshFixture, bindingPreflight);
     const fixtureScript = await text(
       "scripts/smoke/interface-deploy-smoke.mjs",
     );
@@ -1054,6 +1103,7 @@ describe("Compute canary rollout workflow static guards", () => {
       COMPUTE_ENVIRONMENT_DIGEST: 2,
       COMPUTE_ROLLOUT_MODE: 2,
       COMPUTE_CANARY_ALLOWLIST: 2,
+      COMPUTE_CERTIFICATION_PRINCIPAL: 2,
     });
     expect(workflow.match(/--keep-vars --strict/gu)).toHaveLength(2);
     expect(workflow).not.toMatch(/\bnpx wrangler deploy(?:\s|$)/u);
@@ -1063,6 +1113,13 @@ describe("Compute canary rollout workflow static guards", () => {
       /\bdocker\b|\bbuildx?\b|\bpush\b|dockerfile|\bsbom\b|\bsyft\b|\bgrype\b/iu,
     );
     expect(workflow).not.toMatch(/\bdocker\s+push\b|\bwrangler\s+secret\b/iu);
+    expect(workflow).toContain(
+      'certification_principal="$(jq -er \'.allowlist_entry\' "$EVIDENCE_DIR/canary-identity.json")"',
+    );
+    expect(workflow).toContain("certification_principal,");
+    expect(workflow).toContain(
+      'upload_policy rollback off 0 canary "" ""',
+    );
   });
 
   it("keeps Cloudflare, emergency-latch, and owner credentials in separate steps", async () => {
@@ -1088,6 +1145,7 @@ describe("Compute canary rollout workflow static guards", () => {
       const domains = [
         secrets.some((value) => cloudflare.has(value)),
         secrets.includes("COMPUTE_EMERGENCY_STOP_TOKEN"),
+        secrets.includes("COMPUTE_CERTIFICATION_TOKEN"),
         secrets.some((value) => owner.test(value)),
       ].filter(Boolean);
       expect(domains.length, name).toBeLessThanOrEqual(1);
@@ -1121,10 +1179,21 @@ describe("Compute canary rollout workflow static guards", () => {
       "Verify the emergency-stop latch after unpublished-evidence OFF restore",
       ["COMPUTE_EMERGENCY_STOP_TOKEN"],
     );
+    exactSecrets("Read the least-privilege Compute certification snapshot", [
+      "COMPUTE_CERTIFICATION_TOKEN",
+    ]);
+    const certificationSnapshot = rolloutStep(
+      workflow,
+      "Read the least-privilege Compute certification snapshot",
+    );
+    expect(certificationSnapshot).not.toContain("COMPUTE_EMERGENCY_STOP_TOKEN");
+    expect(certificationSnapshot).not.toContain("CLOUDFLARE_API_TOKEN");
+    expect(certificationSnapshot).not.toContain("SUPABASE_ACCESS_TOKEN");
+    expect(certificationSnapshot).not.toContain("ULTRALIGHT_TOKEN");
 
     const identity = rolloutStep(
       workflow,
-      "Resolve the one canary owner/Agent pair",
+      "Resolve the fixed certification owner/Agent pair",
     );
     expect(identity).not.toContain("SUPABASE_ACCESS_TOKEN");
     expect(identity).not.toContain("SUPABASE_STAGING_PROJECT_ID");
@@ -1190,7 +1259,7 @@ describe("Compute canary rollout workflow static guards", () => {
     expect(prepare).toContain('rollback_anchor="$EVIDENCE_DIR/rollback-anchor.json"');
     expect(prepare).toContain('cp "$baseline" "$rollback_anchor"');
     expect(prepare).toContain(
-      'upload_policy rollback off 0 canary "" "$rollback_tag" "$rollback_anchor"',
+      'upload_policy rollback off 0 canary "" ""',
     );
     expect(prepare).not.toContain("predecessor-rollout.json");
     expect(prepare).not.toContain("CERTIFIED_OFF_API_VERSION_ID");
@@ -1300,19 +1369,21 @@ describe("Compute canary rollout workflow static guards", () => {
 
     const revertCleanup = rolloutStep(
       workflow,
-      "Disable the fixed canary fixture after revert_off",
+      "Clean the fixed certification fixture after revert_off",
     );
     expect(revertCleanup).toContain("inputs.stage == 'revert_off'");
     expect(revertCleanup).toContain('revert_target == \'staging\'');
     expect(revertCleanup).toContain('revert_target == \'production\'');
-    expect(revertCleanup).toContain("compute-admitted-smoke.mjs --cleanup-only");
-    expect(revertCleanup).not.toContain("run_compute_smoke");
+    expect(revertCleanup).toContain(
+      "compute-certification-suite.mjs --cleanup-only",
+    );
+    expect(revertCleanup).not.toContain("run_compute_certification");
     expect(postRevertRelease).toContain(
       '"$after_file" disabled clear',
     );
   });
 
-  it("derives canary identity from the authenticated fixture and runs a bounded retry-safe smoke before the final fence", async () => {
+  it("binds every enabled stage to the closed full-suite fixture and combined deployed evidence", async () => {
     const workflow = await text(
       ".github/workflows/compute-canary-rollout.yml",
     );
@@ -1321,35 +1392,49 @@ describe("Compute canary rollout workflow static guards", () => {
     );
     const inputs = workflowSlice(workflow, "    inputs:\n", "permissions:");
     const identityAt = workflow.indexOf(
-      "Resolve the one canary owner/Agent pair",
+      "Resolve the fixed certification owner/Agent pair",
     );
     const refreshAt = workflow.indexOf(
-      "Refresh the fixed canary fixture",
+      "Refresh the fixed certification fixture",
     );
     const prepareAt = workflow.indexOf(
       "Upload and byte-verify rollback and desired policy versions",
     );
-    const smokeAt = workflow.indexOf(
-      "Run one bounded admitted canary certification job",
+    const suiteAt = workflow.indexOf(
+      "Run the deployed Compute certification suite",
+    );
+    const snapshotAt = workflow.indexOf(
+      "Read the least-privilege Compute certification snapshot",
+    );
+    const certificationAt = workflow.indexOf(
+      "Verify combined deployed Compute certification evidence",
     );
     const finalFenceAt = workflow.indexOf(
       "Final exact live fence after certification",
     );
     const identity = rolloutStep(
       workflow,
-      "Resolve the one canary owner/Agent pair",
+      "Resolve the fixed certification owner/Agent pair",
     );
     const refresh = rolloutStep(
       workflow,
-      "Refresh the fixed canary fixture",
+      "Refresh the fixed certification fixture",
     );
     const prepare = rolloutStep(
       workflow,
       "Upload and byte-verify rollback and desired policy versions",
     );
-    const smoke = rolloutStep(
+    const suite = rolloutStep(
       workflow,
-      "Run one bounded admitted canary certification job",
+      "Run the deployed Compute certification suite",
+    );
+    const snapshot = rolloutStep(
+      workflow,
+      "Read the least-privilege Compute certification snapshot",
+    );
+    const certification = rolloutStep(
+      workflow,
+      "Verify combined deployed Compute certification evidence",
     );
     const finalFence = rolloutStep(
       workflow,
@@ -1367,6 +1452,17 @@ describe("Compute canary rollout workflow static guards", () => {
     expect(identityAt).toBeGreaterThan(0);
     expect(refreshAt).toBeGreaterThan(identityAt);
     expect(prepareAt).toBeGreaterThan(refreshAt);
+    expect(suiteAt).toBeGreaterThan(prepareAt);
+    expect(snapshotAt).toBeGreaterThan(suiteAt);
+    expect(certificationAt).toBeGreaterThan(snapshotAt);
+    expect(finalFenceAt).toBeGreaterThan(certificationAt);
+    expect(workflow).toContain("certification_profile=staging-full");
+    expect(workflow).toContain("certification_profile=production-canary");
+    expect(workflow).toContain("certification_profile=production-global");
+    expect(workflow).toContain(
+      'echo "COMPUTE_CERTIFICATION_PROFILE=$certification_profile"',
+    );
+    expect(identity).toContain("if: inputs.stage != 'revert_off'");
     expect(identity).toContain("ULTRALIGHT_TOKEN_STAGING");
     expect(identity).toContain("GALACTIC_SMOKE_APP_ID_STAGING");
     expect(identity).toContain("ULTRALIGHT_TOKEN");
@@ -1382,27 +1478,50 @@ describe("Compute canary rollout workflow static guards", () => {
     expect(refresh).toContain(
       "steps.canary_identity.outputs.verified == 'true'",
     );
+    expect(refresh).toContain("--dir examples/compute-certification");
+    expect(refresh).toContain("--reviewed-fixture compute-certification");
+    expect(refresh).toContain("--reviewed-function run_compute_certification");
+    expect(refresh).toContain("--reviewed-compute-tools browser,shell");
+    expect(refresh).toContain("--reviewed-compute-secrets none");
     expect(identityResolver).toContain("resolveSmokeOwner");
     expect(identityResolver).toContain("allowlist_entry: allowlistEntry");
     expect(prepare).toContain(
       'allowlist="$(jq -er \'.allowlist_entry\' "$EVIDENCE_DIR/canary-identity.json")"',
     );
-    expect(smokeAt).toBeGreaterThan(prepareAt);
-    expect(finalFenceAt).toBeGreaterThan(smokeAt);
-    expect(smoke).toContain("if: inputs.stage != 'revert_off'");
-    expect(smoke).toContain("for attempt in 1 2");
-    expect(smoke).toContain('smoke_rc="${PIPESTATUS[0]}"');
-    expect(smoke).toContain(".verified == false");
-    expect(smoke).toContain(".compute_run_id == null");
-    expect(smoke).toContain(".compute_receipt_id == null");
-    expect(smoke).toContain(".policy_cleanup.disabled == true");
-    expect(smoke).toContain(
-      '"COMPUTE_ADMISSION_DISABLED"',
+    expect(suite).toContain("compute-certification-suite.mjs");
+    expect(suite).toContain("galactic_compute_deployed_certification");
+    expect(suite).toContain("(.scenarios | length) == 10");
+    expect(suite).toContain("(.run_ids | length) == 11");
+    expect(suite).toContain(".cleanup.active_compute_runs_remaining == 0");
+    expect(suite).toContain(".cleanup.active_routine_runs_remaining == 0");
+    expect(suite).toContain(".cleanup.compute_policy_disabled == true");
+    expect(suite).not.toContain("for attempt in 1 2");
+    expect(snapshot).toContain("COMPUTE_CERTIFICATION_TOKEN");
+    expect(snapshot).toContain("/api/admin/compute/certification");
+    expect(snapshot).toContain("owner_id: $identity[0].owner_id");
+    expect(snapshot).toContain("run_ids: $run_set[0].run_ids");
+    expect(snapshot).toContain("since: $run_set[0].since");
+    expect(snapshot).toContain("unset COMPUTE_CERTIFICATION_TOKEN");
+    expect(certification).toContain(
+      "scripts/release/verify-compute-certification-evidence.mjs",
     );
-    expect(smoke).toContain("sleep 15");
-    expect(smoke).toContain(".verified == true");
-    expect(smoke).toContain('.result.status == "completed"');
-    expect(smoke).toContain(".result.exit_code == 0");
+    for (const flag of [
+      "--suite-evidence",
+      "--run-set",
+      "--operator-snapshot",
+      "--canary-identity",
+      "--promoted-state",
+      "--expected-target",
+      "--expected-profile",
+      "--expected-candidate-sha",
+      "--expected-workflow-run-id",
+      "--output",
+    ]) {
+      expect(certification).toContain(flag);
+    }
+    expect(workflow).toContain("deployed_certification: $deployed_certification");
+    expect(workflow).not.toContain("admitted_smoke:");
+    expect(workflow).not.toContain("compute-admitted-smoke.mjs");
     expect(finalFence).toContain(
       "verify-api-compute-rollout-state.mjs",
     );
@@ -1425,7 +1544,7 @@ describe("Compute canary rollout workflow static guards", () => {
     );
     const compensationFixture = rolloutStep(
       workflow,
-      "Disable the fixed canary fixture after OFF compensation",
+      "Clean the fixed certification fixture after OFF compensation",
     );
     const manifest = rolloutStep(
       workflow,
@@ -1438,6 +1557,10 @@ describe("Compute canary rollout workflow static guards", () => {
     const unpublishedLatch = rolloutStep(
       workflow,
       "Verify the emergency-stop latch after unpublished-evidence OFF restore",
+    );
+    const unpublishedFixture = rolloutStep(
+      workflow,
+      "Clean the fixed certification fixture after unpublished restore",
     );
 
     expect(compensation).toContain("always()");
@@ -1474,7 +1597,7 @@ describe("Compute canary rollout workflow static guards", () => {
       "inputs.stage != 'staging_canary' && secrets.SUPABASE_PRODUCTION_PROJECT_ID",
     );
     expect(compensationFixture).toContain(
-      "compute-admitted-smoke.mjs --cleanup-only",
+      "compute-certification-suite.mjs --cleanup-only",
     );
     expect(compensationFixture).toContain(
       "steps.compensate.outputs.verified == 'true'",
@@ -1500,15 +1623,22 @@ describe("Compute canary rollout workflow static guards", () => {
     expect(unpublishedLatch).toContain(
       "steps.unpublished_restore.outputs.verified == 'true'",
     );
+    expect(unpublishedFixture).toContain(
+      "steps.unpublished_restore_latch.outputs.verified == 'true'",
+    );
+    expect(unpublishedFixture).toContain(
+      "compute-certification-suite.mjs --cleanup-only",
+    );
 
     const orderedSteps = [
       "Restore this dispatch's exact OFF anchor after any failure",
       "Verify the emergency-stop latch after OFF compensation",
-      "Disable the fixed canary fixture after OFF compensation",
+      "Clean the fixed certification fixture after OFF compensation",
       "Write deterministic evidence manifest",
       "Upload private rollout evidence",
       "Restore OFF if committed evidence was not published",
       "Verify the emergency-stop latch after unpublished-evidence OFF restore",
+      "Clean the fixed certification fixture after unpublished restore",
     ].map((name) => workflow.indexOf(`      - name: ${name}`));
     expect(orderedSteps.every((position) => position > 0)).toBe(true);
     expect(orderedSteps).toEqual([...orderedSteps].sort((a, b) => a - b));

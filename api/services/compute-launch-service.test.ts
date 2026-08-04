@@ -581,6 +581,7 @@ Deno.test("Compute Launch history uses an opaque stable cursor and returns no ar
   const firstRunQuery = paths.find((path) => path.startsWith("compute_runs?"));
   assert(firstRunQuery);
   assert(!decodeURIComponent(firstRunQuery).includes("storage_key"));
+  assert(!decodeURIComponent(firstRunQuery).includes("state=in."));
 
   page = [];
   await service.listRuns({
@@ -591,6 +592,20 @@ Deno.test("Compute Launch history uses an opaque stable cursor and returns no ar
   });
   assert(paths.at(-1)!.includes("created_at.lt."));
   assert(paths.at(-1)!.includes(`id.lt.${RUN_ID}`));
+
+  page = [];
+  await service.listRuns({
+    userId: USER_ID,
+    agentId: AGENT_ID,
+    limit: 10,
+    cursor: null,
+    activeOnly: true,
+  });
+  assert(
+    decodeURIComponent(paths.at(-1)!).includes(
+      "state=in.(admitted,queued,provisioning,running)",
+    ),
+  );
 });
 
 Deno.test("Compute Launch keeps subscription receipts pending and never fabricates a wallet link", async () => {

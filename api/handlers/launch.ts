@@ -6279,6 +6279,12 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             pattern: "^[A-Za-z0-9_-]+$",
           },
         },
+        {
+          name: "active",
+          in: "query",
+          schema: { type: "string", enum: ["true"] },
+          description: "When true, return only nonterminal Compute runs.",
+        },
       ],
       responses: {
         "200": {
@@ -13287,6 +13293,7 @@ async function buildLaunchAgentRoutineResponse(
     failureCount: stored.failure_count,
     autoPauseReason,
     errorReason,
+    activeRunCount: detail.routine.active_run_count,
     recentRuns: detail.routine.recent_runs.slice(0, 5).map(toLaunchRoutineRun),
     actions: {
       canApproveCapabilities: hasPendingCapabilities,

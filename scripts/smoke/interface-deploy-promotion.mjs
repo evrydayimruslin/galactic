@@ -4,22 +4,87 @@ const CANONICAL_VERSION_RE =
   /^(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/u;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const COMPUTE_CERTIFICATION_MANIFEST_SHA256 =
+  "1f03b36bf0cf347becc5395f9d4728ae8aeeea7cdf929d4f83321fe7476352e4";
 
-export const REVIEWED_COMPUTE_FIXTURE = Object.freeze({
+const COMPUTE_CERTIFICATION_SCENARIOS = Object.freeze([
+  "sync_toolchain",
+  "async_echo",
+  "browser_https",
+  "artifact_producer",
+  "artifact_consumer",
+  "exit_23",
+  "timeout",
+  "cancellable",
+  "https_egress_boundaries",
+  "raw_tcp_denied",
+]);
+
+const INTERFACE_DEMO_FIXTURE = Object.freeze({
+  name: "interface-demo",
+  directory: "examples/interface-demo",
+  uploadName: "Interface Demo (smoke)",
   permission: "compute:exec",
   functionName: "run_compute_smoke",
+  testFunctionName: "get_greeting",
+  testArgs: Object.freeze({ name: "smoke" }),
+  exports: Object.freeze(["get_greeting", "roll_dice", "run_compute_smoke"]),
   profile: "developer-v1",
   tools: Object.freeze(["shell"]),
   secrets: Object.freeze([]),
+  sourcePaths: null,
+  requiresInterface: true,
+  requiresIdentityProbe: false,
 });
 
-const REVIEW_FLAGS = Object.freeze({
-  "--reviewed-permission": REVIEWED_COMPUTE_FIXTURE.permission,
-  "--reviewed-function": REVIEWED_COMPUTE_FIXTURE.functionName,
-  "--reviewed-compute-profile": REVIEWED_COMPUTE_FIXTURE.profile,
-  "--reviewed-compute-tools": "shell",
-  "--reviewed-compute-secrets": "none",
+const COMPUTE_CERTIFICATION_FIXTURE = Object.freeze({
+  name: "compute-certification",
+  directory: "examples/compute-certification",
+  uploadName: "Compute Certification",
+  permission: "compute:exec",
+  functionName: "run_compute_certification",
+  testFunctionName: "fixture_identity",
+  testArgs: Object.freeze({}),
+  exports: Object.freeze([
+    "fixture_identity",
+    "run_compute_certification",
+    "run_compute_policy_probe",
+  ]),
+  profile: "developer-v1",
+  tools: Object.freeze(["browser", "shell"]),
+  secrets: Object.freeze([]),
+  sourcePaths: Object.freeze(["index.ts", "manifest.json"]),
+  requiresInterface: false,
+  requiresIdentityProbe: true,
 });
+
+const REVIEWED_FIXTURES = Object.freeze({
+  [INTERFACE_DEMO_FIXTURE.name]: INTERFACE_DEMO_FIXTURE,
+  [COMPUTE_CERTIFICATION_FIXTURE.name]: COMPUTE_CERTIFICATION_FIXTURE,
+});
+
+// Kept as the default/exported compatibility contract for existing callers.
+export const REVIEWED_COMPUTE_FIXTURE = INTERFACE_DEMO_FIXTURE;
+
+export function reviewedFixtureProfile(name = INTERFACE_DEMO_FIXTURE.name) {
+  const fixture = REVIEWED_FIXTURES[name];
+  if (!fixture) {
+    throw new Error(`Unknown reviewed fixture profile ${JSON.stringify(name)}.`);
+  }
+  return fixture;
+}
+
+function reviewFlags(fixture) {
+  return {
+    "--reviewed-permission": fixture.permission,
+    "--reviewed-function": fixture.functionName,
+    "--reviewed-compute-profile": fixture.profile,
+    "--reviewed-compute-tools": fixture.tools.join(","),
+    "--reviewed-compute-secrets": fixture.secrets.length === 0
+      ? "none"
+      : fixture.secrets.join(","),
+  };
+}
 
 function record(value, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -50,14 +115,28 @@ function parsedManifest(value, label) {
   return record(manifest, label);
 }
 
+function canonicalJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value).sort().map((key) => [key, canonicalJson(value[key])]),
+    );
+  }
+  return value;
+}
+
 export function reviewedPromotionConfig({
   args,
   ownerAccessToken,
   appId,
   allowCreate,
+  directory,
 }) {
   const enabled = args.has("--promote-reviewed");
   if (!enabled) return { enabled: false };
+  const fixture = reviewedFixtureProfile(
+    args.get("--reviewed-fixture") || INTERFACE_DEMO_FIXTURE.name,
+  );
   if (allowCreate) {
     throw new Error(
       "--promote-reviewed cannot be combined with --allow-create.",
@@ -73,7 +152,12 @@ export function reviewedPromotionConfig({
       "--promote-reviewed requires GALACTIC_OWNER_ACCESS_TOKEN from the owner-session helper.",
     );
   }
-  for (const [flag, expected] of Object.entries(REVIEW_FLAGS)) {
+  if ((directory || fixture.directory) !== fixture.directory) {
+    throw new Error(
+      `Reviewed ${fixture.name} promotion requires --dir ${fixture.directory}.`,
+    );
+  }
+  for (const [flag, expected] of Object.entries(reviewFlags(fixture))) {
     if (args.get(flag) !== expected) {
       throw new Error(
         `${flag} must explicitly acknowledge ${JSON.stringify(expected)}.`,
@@ -84,6 +168,7 @@ export function reviewedPromotionConfig({
     enabled: true,
     appId,
     ownerAccessToken: String(ownerAccessToken).trim(),
+    fixture,
   };
 }
 
@@ -182,25 +267,29 @@ export function fixtureRefreshPlan({ app, home, appId, sourceHash }) {
   return { action: "upload", version: nextFixtureVersion(projection) };
 }
 
-export function validateReviewedComputeManifest(value) {
+export function validateReviewedComputeManifest(
+  value,
+  fixtureName = INTERFACE_DEMO_FIXTURE.name,
+) {
+  const fixture = reviewedFixtureProfile(fixtureName);
   const manifest = parsedManifest(value, "Compute fixture manifest");
   exactStrings(
     manifest.permissions,
-    [REVIEWED_COMPUTE_FIXTURE.permission],
+    [fixture.permission],
     "Compute fixture permissions",
   );
   const compute = record(manifest.compute, "Compute fixture ceiling");
-  if (compute.profile !== REVIEWED_COMPUTE_FIXTURE.profile) {
+  if (compute.profile !== fixture.profile) {
     throw new Error("Compute fixture profile is not developer-v1.");
   }
   exactStrings(
     compute.tools,
-    REVIEWED_COMPUTE_FIXTURE.tools,
+    fixture.tools,
     "Compute fixture tools",
   );
   exactStrings(
     compute.secrets,
-    REVIEWED_COMPUTE_FIXTURE.secrets,
+    fixture.secrets,
     "Compute fixture secrets",
   );
   const functions = record(
@@ -208,13 +297,83 @@ export function validateReviewedComputeManifest(value) {
     "Compute fixture functions",
   );
   const smokeFunction = record(
-    functions[REVIEWED_COMPUTE_FIXTURE.functionName],
+    functions[fixture.functionName],
     "Compute fixture release function",
   );
   if (smokeFunction.uses_compute !== true) {
     throw new Error("Compute fixture release function must declare uses_compute.");
   }
+  if (fixture.name === COMPUTE_CERTIFICATION_FIXTURE.name) {
+    if (
+      manifest.name !== "Compute Certification" ||
+      manifest.version !== "1.0.0" ||
+      manifest.type !== "mcp" ||
+      manifest.entry?.functions !== "index.ts" ||
+      Object.keys(manifest.entry).length !== 1 ||
+      Object.hasOwn(manifest, "interfaces")
+    ) {
+      throw new Error("Compute certification manifest identity drifted.");
+    }
+    exactStrings(
+      Object.keys(functions).sort(),
+      [...fixture.exports].sort(),
+      "Compute certification functions",
+    );
+    if (
+      Object.hasOwn(functions.fixture_identity, "uses_compute") ||
+      functions.run_compute_policy_probe?.uses_compute !== true
+    ) {
+      throw new Error("Compute certification function authority drifted.");
+    }
+    if (!Array.isArray(manifest.routines) || manifest.routines.length !== 1) {
+      throw new Error("Compute certification routine declaration drifted.");
+    }
+    const routine = record(
+      manifest.routines[0],
+      "Compute certification routine",
+    );
+    if (
+      routine.id !== "compute_policy_probe" ||
+      routine.label !== "Compute policy certification" ||
+      routine.handler !== "run_compute_policy_probe" ||
+      routine.default_schedule?.every_minutes !== 60 ||
+      Object.keys(routine.default_schedule ?? {}).length !== 1 ||
+      Object.keys(record(routine.config_schema, "Routine config schema")).length !== 0 ||
+      Object.keys(record(routine.default_config, "Routine default config")).length !== 0
+    ) {
+      throw new Error("Compute certification routine declaration drifted.");
+    }
+    if (
+      sha256(JSON.stringify(canonicalJson(manifest))) !==
+        COMPUTE_CERTIFICATION_MANIFEST_SHA256
+    ) {
+      throw new Error("Compute certification manifest content drifted.");
+    }
+  }
   return manifest;
+}
+
+export function validateReviewedFixtureIdentity(
+  value,
+  fixtureName = INTERFACE_DEMO_FIXTURE.name,
+) {
+  const fixture = reviewedFixtureProfile(fixtureName);
+  if (!fixture.requiresIdentityProbe) return value;
+  const identity = record(value, "Reviewed fixture identity");
+  if (
+    identity.fixture !== "galactic-compute-certification" ||
+    identity.schema_version !== 1 ||
+    identity.deterministic_artifact_sha256 !==
+      "6ad9b8ea5280658dc4b229a2b6180d530c4d3824b541d218266ea6049e8b763b"
+  ) {
+    throw new Error("Compute certification fixture identity drifted.");
+  }
+  exactStrings(
+    identity.scenarios,
+    COMPUTE_CERTIFICATION_SCENARIOS,
+    "Compute certification identity scenarios",
+  );
+  return identity;
 }
 
 export function validateStagedPromotion({
@@ -275,7 +434,10 @@ export function validatePromotedComputeFixture({
   appId,
   version,
   sourceHash,
+  fixtureName = INTERFACE_DEMO_FIXTURE.name,
+  identity = null,
 }) {
+  const fixture = reviewedFixtureProfile(fixtureName);
   const appProjection = record(app, "Promoted fixture projection");
   if (
     appProjection.id !== appId ||
@@ -284,12 +446,15 @@ export function validatePromotedComputeFixture({
   ) {
     throw new Error("The exact private fixture version is not live.");
   }
-  validateReviewedComputeManifest(appProjection.manifest);
+  validateReviewedComputeManifest(appProjection.manifest, fixture.name);
   if (
     !Array.isArray(appProjection.exports) ||
-    !appProjection.exports.includes(REVIEWED_COMPUTE_FIXTURE.functionName)
+    (fixture.name === COMPUTE_CERTIFICATION_FIXTURE.name
+      ? appProjection.exports.length !== fixture.exports.length ||
+        [...fixture.exports].some((name) => !appProjection.exports.includes(name))
+      : !appProjection.exports.includes(fixture.functionName))
   ) {
-    throw new Error("The live fixture export list omits run_compute_smoke.");
+    throw new Error("The live fixture export list does not match the review profile.");
   }
 
   const snapshot = record(home, "Promoted Agent Home snapshot");
@@ -312,11 +477,16 @@ export function validatePromotedComputeFixture({
   if (
     functionProjection.agent?.id !== appId ||
     !Array.isArray(functionProjection.functions) ||
-    !functionProjection.functions.some((entry) =>
-      entry?.name === REVIEWED_COMPUTE_FIXTURE.functionName
-    )
+    (fixture.name === COMPUTE_CERTIFICATION_FIXTURE.name
+      ? functionProjection.functions.length !== fixture.exports.length ||
+        fixture.exports.some((name) =>
+          !functionProjection.functions.some((entry) => entry?.name === name)
+        )
+      : !functionProjection.functions.some((entry) =>
+        entry?.name === fixture.functionName
+      ))
   ) {
-    throw new Error("The promoted fixture does not expose run_compute_smoke.");
+    throw new Error("The promoted fixture functions do not match the review profile.");
   }
 
   const settingsProjection = record(
@@ -338,18 +508,19 @@ export function validatePromotedComputeFixture({
   );
   if (
     ceiling.enabled !== true ||
-    ceiling.profile !== REVIEWED_COMPUTE_FIXTURE.profile
+    ceiling.profile !== fixture.profile
   ) {
     throw new Error("The live Compute manifest ceiling is not enabled.");
   }
   exactStrings(
     ceiling.tools,
-    REVIEWED_COMPUTE_FIXTURE.tools,
+    fixture.tools,
     "Live Compute manifest tools",
   );
   exactStrings(
     ceiling.secrets,
-    REVIEWED_COMPUTE_FIXTURE.secrets,
+    fixture.secrets,
     "Live Compute manifest secrets",
   );
+  validateReviewedFixtureIdentity(identity, fixture.name);
 }

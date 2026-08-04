@@ -26,6 +26,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 interface HarnessOptions {
   grants?: unknown[];
+  functionPolicy?: unknown[];
   onPending?: (body: unknown) => void;
   onEntitlementCheck?: () => void;
 }
@@ -108,6 +109,9 @@ function installHarness(options: HarnessOptions = {}): () => void {
       options.onPending?.(JSON.parse(String(init?.body)));
       return jsonResponse([{ id: "pending-1" }]);
     }
+    if (p === "/rest/v1/agent_function_policies" && method === "GET") {
+      return jsonResponse(options.functionPolicy ?? []);
+    }
     // Permissive defaults for rate-limit / weekly-call / misc gates so the
     // call reaches the grant chokepoint without enumerating every gate.
     if (p.startsWith("/rest/v1/rpc/")) return jsonResponse(true);
@@ -145,6 +149,47 @@ async function callTarget(
   );
   return await response.json() as Record<string, unknown>;
 }
+
+Deno.test("autonomous policy denial exposes a stable POLICY_OFF JSON-RPC type", async () => {
+  const cleanup = installHarness({
+    functionPolicy: [{
+      app_id: TARGET_ID,
+      user_id: USER_ID,
+      function_name: "getStock",
+      policy: "off",
+      declaration_hash: null,
+      revision: "policy-revision-1",
+      set_by: { kind: "owner" },
+      updated_at: "2026-08-04T00:00:00.000Z",
+    }],
+  });
+  try {
+    const { token } = await createRoutineActorToken({
+      user: { id: USER_ID, email: "operator@example.com", tier: "pro" },
+      routine: {
+        id: "routine-1",
+        composerAppId: TARGET_ID,
+        composerAppSlug: "inventory",
+        handlerFunction: "getStock",
+      },
+      routineRunId: "run-1",
+      traceId: "trace-1",
+      tokenId: "routine-token-policy-off",
+      capabilities: [],
+    });
+    const body = await callTarget(null, "getStock", token);
+    const error = body.error as {
+      code?: number;
+      message?: string;
+      data?: { type?: string };
+    };
+    assertEquals(error.code, -32602);
+    assertEquals(error.data?.type, "POLICY_OFF");
+    assert(String(error.message).startsWith("POLICY_OFF:"));
+  } finally {
+    cleanup();
+  }
+});
 
 Deno.test("chokepoint: signed actors cannot bypass manifest bindings through synthetic SDK tools", async () => {
   const cleanup = installHarness();

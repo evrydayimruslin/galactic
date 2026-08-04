@@ -1,7 +1,7 @@
 name: Compute Canary Rollout
 
 # Restore the already-deployed Galactic Compute digest by changing only the
-# four API admission-policy vars. Every mutating dispatch captures or uploads
+# five API admission/certification-policy vars. Every mutating dispatch captures or uploads
 # its own exact admission-OFF rollback version before promotion. Historical
 # Compute Deploy evidence certifies only the Compute Worker/image pair and is
 # never accepted as rollback authority.
@@ -118,18 +118,21 @@ jobs:
               expected_confirmation=rollout-staging-canary
               expected_ref=refs/heads/main
               predecessor_required=false
+              certification_profile=staging-full
               ;;
             production_canary)
               expected_target=production
               expected_confirmation=rollout-production-canary
               expected_ref=tag
               predecessor_required=true
+              certification_profile=production-canary
               ;;
             production_global)
               expected_target=production
               expected_confirmation=rollout-production-global
               expected_ref=tag
               predecessor_required=true
+              certification_profile=production-global
               ;;
             revert_off)
               expected_target="$REVERT_TARGET_INPUT"
@@ -140,6 +143,11 @@ jobs:
                 expected_ref=tag
               fi
               predecessor_required=false
+              if [ "$REVERT_TARGET_INPUT" = "staging" ]; then
+                certification_profile=staging-full
+              else
+                certification_profile=production-global
+              fi
               ;;
             *)
               echo "Unsupported rollout stage." >&2
@@ -260,12 +268,14 @@ jobs:
             echo "API_BASE=$api_base"
             echo "API_UPLOAD_DIR=$GITHUB_WORKSPACE/api"
             echo "API_UPLOAD_SOURCE_SHA=$upload_source_sha"
+            echo "COMPUTE_CERTIFICATION_PROFILE=$certification_profile"
           } >> "$GITHUB_ENV"
 
           reason_sha256="$(printf '%s' "$ROLLOUT_REASON" | sha256sum | cut -d ' ' -f 1)"
           jq -n \
             --arg stage "$REQUESTED_STAGE" \
             --arg target "$REQUESTED_TARGET" \
+            --arg certification_profile "$certification_profile" \
             --arg confirmation "$ROLLOUT_CONFIRMATION" \
             --arg reason_sha256 "$reason_sha256" \
             --arg compute_release_run_id "$COMPUTE_RELEASE_RUN_ID_INPUT" \
@@ -277,6 +287,7 @@ jobs:
               schema_version: 1,
               stage: $stage,
               target: $target,
+              certification_profile: $certification_profile,
               confirmation: $confirmation,
               reason_sha256: $reason_sha256,
               compute_release_run_id: $compute_release_run_id,
@@ -528,6 +539,7 @@ jobs:
                   {
                     policy,
                     canary_allowlist,
+                    certification_principal,
                     environment_digest,
                     api,
                     compute
@@ -677,13 +689,13 @@ jobs:
           node scripts/release/verify-compute-emergency-stop-status.mjs \
             "$after_file" disabled clear
 
-      - name: Resolve the one canary owner/Agent pair
+      - name: Resolve the fixed certification owner/Agent pair
         id: canary_identity
-        if: inputs.stage == 'staging_canary' || inputs.stage == 'production_canary'
+        if: inputs.stage != 'revert_off'
         shell: bash
         env:
-          ULTRALIGHT_TOKEN: ${{ (inputs.stage == 'staging_canary' && secrets.ULTRALIGHT_TOKEN_STAGING) || (inputs.stage == 'production_canary' && secrets.ULTRALIGHT_TOKEN) }}
-          GALACTIC_SMOKE_APP_ID: ${{ (inputs.stage == 'staging_canary' && secrets.GALACTIC_SMOKE_APP_ID_STAGING) || (inputs.stage == 'production_canary' && secrets.GALACTIC_SMOKE_APP_ID) }}
+          ULTRALIGHT_TOKEN: ${{ (inputs.stage == 'staging_canary' && secrets.ULTRALIGHT_TOKEN_STAGING) || ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.ULTRALIGHT_TOKEN) }}
+          GALACTIC_SMOKE_APP_ID: ${{ (inputs.stage == 'staging_canary' && secrets.GALACTIC_SMOKE_APP_ID_STAGING) || ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.GALACTIC_SMOKE_APP_ID) }}
         run: |
           set -euo pipefail
           for required in "$ULTRALIGHT_TOKEN" "$GALACTIC_SMOKE_APP_ID"; do
@@ -706,31 +718,32 @@ jobs:
             ' "$identity" >/dev/null
           echo "verified=true" >> "$GITHUB_OUTPUT"
 
-      - name: Refresh the fixed canary fixture
+      - name: Refresh the fixed certification fixture
         if: >-
-          (inputs.stage == 'staging_canary' || inputs.stage == 'production_canary') &&
+          inputs.stage != 'revert_off' &&
           steps.canary_identity.outputs.verified == 'true'
         shell: bash
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_STAGING_PROJECT_ID: ${{ (inputs.stage == 'staging_canary' && secrets.SUPABASE_STAGING_PROJECT_ID) || '' }}
-          SUPABASE_PRODUCTION_PROJECT_ID: ${{ (inputs.stage == 'production_canary' && secrets.SUPABASE_PRODUCTION_PROJECT_ID) || '' }}
-          ULTRALIGHT_TOKEN: ${{ (inputs.stage == 'staging_canary' && secrets.ULTRALIGHT_TOKEN_STAGING) || (inputs.stage == 'production_canary' && secrets.ULTRALIGHT_TOKEN) }}
-          GALACTIC_SMOKE_APP_ID: ${{ (inputs.stage == 'staging_canary' && secrets.GALACTIC_SMOKE_APP_ID_STAGING) || (inputs.stage == 'production_canary' && secrets.GALACTIC_SMOKE_APP_ID) }}
+          SUPABASE_PRODUCTION_PROJECT_ID: ${{ ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.SUPABASE_PRODUCTION_PROJECT_ID) || '' }}
+          ULTRALIGHT_TOKEN: ${{ (inputs.stage == 'staging_canary' && secrets.ULTRALIGHT_TOKEN_STAGING) || ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.ULTRALIGHT_TOKEN) }}
+          GALACTIC_SMOKE_APP_ID: ${{ (inputs.stage == 'staging_canary' && secrets.GALACTIC_SMOKE_APP_ID_STAGING) || ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.GALACTIC_SMOKE_APP_ID) }}
         run: |
           set -euo pipefail
           node scripts/smoke/with-staging-owner-session.mjs \
             --target "$REQUESTED_TARGET" \
             -- node scripts/smoke/interface-deploy-smoke.mjs \
               --url "$API_BASE" \
-              --dir examples/interface-demo \
+              --dir examples/compute-certification \
               --promote-reviewed \
+              --reviewed-fixture compute-certification \
               --reviewed-permission compute:exec \
-              --reviewed-function run_compute_smoke \
+              --reviewed-function run_compute_certification \
               --reviewed-compute-profile developer-v1 \
-              --reviewed-compute-tools shell \
+              --reviewed-compute-tools browser,shell \
               --reviewed-compute-secrets none \
-            | tee "$EVIDENCE_DIR/canary-fixture-refresh.txt"
+            | tee "$EVIDENCE_DIR/certification-fixture-refresh.txt"
 
       - name: Upload and byte-verify rollback and desired policy versions
         id: prepare
@@ -753,8 +766,9 @@ jobs:
             local enabled="$3"
             local mode="$4"
             local allowlist="$5"
-            local tag="$6"
-            local state_file="$7"
+            local certification_principal="$6"
+            local tag="$7"
+            local state_file="$8"
             local upload_output="$RUNNER_TEMP/$label-upload.ndjson"
             local uploaded_version="$RUNNER_TEMP/$label-version.json"
             local dry_run_dir="$RUNNER_TEMP/$label-dry-run"
@@ -771,6 +785,7 @@ jobs:
               --var "COMPUTE_ENVIRONMENT_DIGEST:$ENVIRONMENT_DIGEST" \
               --var "COMPUTE_ROLLOUT_MODE:$mode" \
               --var "COMPUTE_CANARY_ALLOWLIST:$allowlist" \
+              --var "COMPUTE_CERTIFICATION_PRINCIPAL:$certification_principal" \
               --keep-vars --strict --outdir "$dry_run_dir" >&2
             : > "$upload_output"
             WRANGLER_OUTPUT_FILE_PATH="$upload_output" \
@@ -782,6 +797,7 @@ jobs:
                 --var "COMPUTE_ENVIRONMENT_DIGEST:$ENVIRONMENT_DIGEST" \
                 --var "COMPUTE_ROLLOUT_MODE:$mode" \
                 --var "COMPUTE_CANARY_ALLOWLIST:$allowlist" \
+                --var "COMPUTE_CERTIFICATION_PRINCIPAL:$certification_principal" \
                 --keep-vars --strict \
                 | tee "$EVIDENCE_DIR/$label-upload.txt" >&2
             local version_id
@@ -796,6 +812,7 @@ jobs:
             node scripts/release/verify-api-compute-rollout-state.mjs \
               uploaded "$REQUESTED_TARGET" "$policy" \
               "$([ -n "$allowlist" ] && printf '%s' "$allowlist" || printf '%s' -)" \
+              "$([ -n "$certification_principal" ] && printf '%s' "$certification_principal" || printf '%s' -)" \
               "$baseline" "$uploaded_version" "$version_id" "$tag" \
               > "$state_file"
             printf '%s' "$version_id"
@@ -807,23 +824,28 @@ jobs:
           else
             rollback_tag="api-$short_sha-rollout-$GITHUB_RUN_ID-off"
             rollback_version_id="$(
-              upload_policy rollback off 0 canary "" "$rollback_tag" "$rollback_anchor"
+              upload_policy rollback off 0 canary "" "" \
+                "$rollback_tag" "$rollback_anchor"
             )"
           fi
 
           case "$REQUESTED_STAGE" in
             staging_canary|production_canary)
               allowlist="$(jq -er '.allowlist_entry' "$EVIDENCE_DIR/canary-identity.json")"
+              certification_principal="$allowlist"
               candidate_tag="api-$short_sha-rollout-$GITHUB_RUN_ID-canary"
               candidate_version_id="$(
                 upload_policy candidate canary 1 canary "$allowlist" \
+                  "$certification_principal" \
                   "$candidate_tag" "$candidate_state"
               )"
               ;;
             production_global)
+              certification_principal="$(jq -er '.allowlist_entry' "$EVIDENCE_DIR/canary-identity.json")"
               candidate_tag="api-$short_sha-rollout-$GITHUB_RUN_ID-global"
               candidate_version_id="$(
                 upload_policy candidate global 1 global "" \
+                  "$certification_principal" \
                   "$candidate_tag" "$candidate_state"
               )"
               ;;
@@ -890,6 +912,7 @@ jobs:
             local state_file="$1"
             local policy="$2"
             local allowlist="$3"
+            local certification_principal="$4"
             local version_id
             local version_tag
             local version_file="$RUNNER_TEMP/recheck-$policy-version.json"
@@ -903,19 +926,23 @@ jobs:
             node scripts/release/verify-api-compute-rollout-state.mjs \
               uploaded "$REQUESTED_TARGET" "$policy" \
               "$([ -n "$allowlist" ] && printf '%s' "$allowlist" || printf '%s' -)" \
+              "$([ -n "$certification_principal" ] && printf '%s' "$certification_principal" || printf '%s' -)" \
               "$baseline" "$version_file" "$version_id" "$version_tag" \
               > "$RUNNER_TEMP/rechecked-$policy-state.json"
             cmp --silent "$state_file" "$RUNNER_TEMP/rechecked-$policy-state.json"
           }
           if [ "$BASELINE_POLICY" != "off" ]; then
-            verify_uploaded_again "$EVIDENCE_DIR/rollback-anchor.json" off ""
+            verify_uploaded_again \
+              "$EVIDENCE_DIR/rollback-anchor.json" off "" ""
           fi
           if [ "$REQUESTED_STAGE" != "revert_off" ]; then
             candidate_policy="$(jq -er '.policy' "$EVIDENCE_DIR/candidate-state.json")"
             candidate_allowlist="$(jq -r '.canary_allowlist | join(",")' "$EVIDENCE_DIR/candidate-state.json")"
+            candidate_certification_principal="$(jq -er '.certification_principal' "$EVIDENCE_DIR/candidate-state.json")"
             verify_uploaded_again \
               "$EVIDENCE_DIR/candidate-state.json" \
-              "$candidate_policy" "$candidate_allowlist"
+              "$candidate_policy" "$candidate_allowlist" \
+              "$candidate_certification_principal"
           fi
           echo "verified=true" >> "$GITHUB_OUTPUT"
 
@@ -1181,7 +1208,7 @@ jobs:
           node scripts/release/verify-compute-emergency-stop-status.mjs \
             "$after_file" disabled clear
 
-      - name: Disable the fixed canary fixture after revert_off
+      - name: Clean the fixed certification fixture after revert_off
         if: inputs.stage == 'revert_off'
         shell: bash
         env:
@@ -1197,84 +1224,159 @@ jobs:
           set -euo pipefail
           node scripts/smoke/with-staging-owner-session.mjs \
             --target "$REQUESTED_TARGET" \
-            -- node scripts/smoke/compute-admitted-smoke.mjs --cleanup-only
+            -- node scripts/smoke/compute-certification-suite.mjs --cleanup-only
 
-      - name: Run one bounded admitted canary certification job
+      - name: Run the deployed Compute certification suite
         if: inputs.stage != 'revert_off'
-        id: smoke
+        id: certification_suite
         shell: bash
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          SUPABASE_STAGING_PROJECT_ID: ${{ ((inputs.stage == 'staging_canary' || (inputs.stage == 'revert_off' && inputs.revert_target == 'staging')) && secrets.SUPABASE_STAGING_PROJECT_ID) || '' }}
-          SUPABASE_PRODUCTION_PROJECT_ID: ${{ ((inputs.stage == 'production_canary' || inputs.stage == 'production_global' || (inputs.stage == 'revert_off' && inputs.revert_target == 'production')) && secrets.SUPABASE_PRODUCTION_PROJECT_ID) || '' }}
-          ULTRALIGHT_TOKEN: ${{ ((inputs.stage == 'staging_canary' || (inputs.stage == 'revert_off' && inputs.revert_target == 'staging')) && secrets.ULTRALIGHT_TOKEN_STAGING) || ((inputs.stage == 'production_canary' || inputs.stage == 'production_global' || (inputs.stage == 'revert_off' && inputs.revert_target == 'production')) && secrets.ULTRALIGHT_TOKEN) || '' }}
-          GALACTIC_SMOKE_APP_ID: ${{ ((inputs.stage == 'staging_canary' || (inputs.stage == 'revert_off' && inputs.revert_target == 'staging')) && secrets.GALACTIC_SMOKE_APP_ID_STAGING) || ((inputs.stage == 'production_canary' || inputs.stage == 'production_global' || (inputs.stage == 'revert_off' && inputs.revert_target == 'production')) && secrets.GALACTIC_SMOKE_APP_ID) || '' }}
+          SUPABASE_STAGING_PROJECT_ID: ${{ (inputs.stage == 'staging_canary' && secrets.SUPABASE_STAGING_PROJECT_ID) || '' }}
+          SUPABASE_PRODUCTION_PROJECT_ID: ${{ ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.SUPABASE_PRODUCTION_PROJECT_ID) || '' }}
+          ULTRALIGHT_TOKEN: ${{ (inputs.stage == 'staging_canary' && secrets.ULTRALIGHT_TOKEN_STAGING) || ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.ULTRALIGHT_TOKEN) || '' }}
+          GALACTIC_SMOKE_APP_ID: ${{ (inputs.stage == 'staging_canary' && secrets.GALACTIC_SMOKE_APP_ID_STAGING) || ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.GALACTIC_SMOKE_APP_ID) || '' }}
           COMPUTE_RELEASE_SHA: ${{ github.sha }}
           COMPUTE_RELEASE_RUN_ID: ${{ github.run_id }}
           COMPUTE_RELEASE_EVIDENCE_DIR: ${{ github.workspace }}/compute-rollout-evidence
         run: |
           set -euo pipefail
-          smoke_file="$EVIDENCE_DIR/compute-admitted-$REQUESTED_TARGET.json"
-          smoke_ok=false
-          for attempt in 1 2; do
-            set +e
-            node scripts/smoke/with-staging-owner-session.mjs \
-              --target "$REQUESTED_TARGET" \
-              -- node scripts/smoke/compute-admitted-smoke.mjs \
-              2>&1 | tee "$EVIDENCE_DIR/admitted-smoke-attempt-$attempt.txt"
-            smoke_rc="${PIPESTATUS[0]}"
-            set -e
-            if [ "$smoke_rc" -eq 0 ]; then
-              smoke_ok=true
-              break
-            fi
-            if [ "$attempt" -eq 1 ] &&
-               jq -e '
-                 .verified == false and
-                 .compute_run_id == null and
-                 .compute_receipt_id == null and
-                 .policy_cleanup.disabled == true and
-                 .failure_diagnostic.stage == "compute_start" and
-                 .failure_diagnostic.public_compute_code ==
-                   "COMPUTE_ADMISSION_DISABLED"
-               ' "$smoke_file" >/dev/null; then
-              cp "$smoke_file" \
-                "$EVIDENCE_DIR/compute-admitted-transient-attempt-1.json"
-              sleep 15
-              continue
-            fi
-            exit "$smoke_rc"
-          done
-          [ "$smoke_ok" = "true" ]
+          suite_file="$EVIDENCE_DIR/compute-certification-$REQUESTED_TARGET.json"
+          run_set_file="$EVIDENCE_DIR/compute-certification-run-ids-$REQUESTED_TARGET.json"
+          node scripts/smoke/with-staging-owner-session.mjs \
+            --target "$REQUESTED_TARGET" \
+            -- node scripts/smoke/compute-certification-suite.mjs \
+            2>&1 | tee "$EVIDENCE_DIR/compute-certification-suite.txt"
+          jq -e \
+            --arg target "$REQUESTED_TARGET" \
+            --arg profile "$COMPUTE_CERTIFICATION_PROFILE" \
+            --arg sha "$GITHUB_SHA" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg agent "$GALACTIC_SMOKE_APP_ID" '
+              .schema_version == 1 and
+              .kind == "galactic_compute_deployed_certification" and
+              .verified == true and
+              .target == $target and
+              .profile == $profile and
+              .candidate_sha == $sha and
+              .workflow_run_id == $run_id and
+              .agent_id == ($agent | ascii_downcase) and
+              .function_name == "run_compute_certification" and
+              (.scenarios | length) == 10 and
+              .operator_snapshot_required == true and
+              .cleanup.active_compute_runs_remaining == 0 and
+              .cleanup.active_routine_runs_remaining == 0 and
+              .cleanup.compute_policy_disabled == true and
+              .cleanup.policy_probe_paused_and_free == true
+            ' "$suite_file" >/dev/null
           jq -e \
             --arg target "$REQUESTED_TARGET" \
             --arg sha "$GITHUB_SHA" \
             --arg run_id "$GITHUB_RUN_ID" \
             --arg agent "$GALACTIC_SMOKE_APP_ID" '
               .schema_version == 1 and
-              .kind == "galactic_compute_admitted_smoke" and
-              .verified == true and
+              .kind == "galactic_compute_certification_run_set" and
               .target == $target and
               .candidate_sha == $sha and
               .workflow_run_id == $run_id and
               .agent_id == ($agent | ascii_downcase) and
-              .function_name == "run_compute_smoke" and
-              (.compute_run_id | type == "string") and
-              (.compute_receipt_id | type == "string") and
-              (.observed_states | index("completed")) != null and
-              .result.status == "completed" and
-              .result.exit_code == 0 and
-              .result.stderr_bytes == 0 and
-              .result.artifact_count == 0 and
-              .policy_cleanup.disabled == true
-            ' "$smoke_file" >/dev/null
-          if [ "$REQUESTED_STAGE" != "production_global" ]; then
-            jq -e \
-              --slurpfile smoke "$smoke_file" \
-              --slurpfile identity "$EVIDENCE_DIR/canary-identity.json" '
-                $smoke[0].agent_id == $identity[0].agent_id
-              ' </dev/null >/dev/null
-          fi
+              (.run_ids | length) == 11 and
+              (.run_ids | unique | length) == 11
+            ' "$run_set_file" >/dev/null
+          jq -e \
+            --slurpfile suite "$suite_file" \
+            --slurpfile run_set "$run_set_file" \
+            --slurpfile identity "$EVIDENCE_DIR/canary-identity.json" '
+              $suite[0].agent_id == $identity[0].agent_id and
+              $run_set[0].agent_id == $identity[0].agent_id
+            ' </dev/null >/dev/null
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Read the least-privilege Compute certification snapshot
+        if: >-
+          inputs.stage != 'revert_off' &&
+          steps.certification_suite.outputs.verified == 'true'
+        id: certification_snapshot
+        shell: bash
+        env:
+          COMPUTE_CERTIFICATION_TOKEN: ${{ secrets.COMPUTE_CERTIFICATION_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [ -n "$COMPUTE_CERTIFICATION_TOKEN" ] || {
+            echo "The selected environment must provide COMPUTE_CERTIFICATION_TOKEN." >&2
+            exit 1
+          }
+          identity="$EVIDENCE_DIR/canary-identity.json"
+          run_set="$EVIDENCE_DIR/compute-certification-run-ids-$REQUESTED_TARGET.json"
+          request_file="$RUNNER_TEMP/compute-certification-snapshot-request.json"
+          response_file="$RUNNER_TEMP/compute-certification-snapshot-response.json"
+          snapshot_file="$EVIDENCE_DIR/compute-certification-snapshot-$REQUESTED_TARGET.json"
+          jq -n \
+            --slurpfile identity "$identity" \
+            --slurpfile run_set "$run_set" \
+            --arg target "$REQUESTED_TARGET" \
+            --arg sha "$GITHUB_SHA" \
+            --arg run_id "$GITHUB_RUN_ID" '
+              if
+                ($identity | length) == 1 and
+                ($run_set | length) == 1 and
+                $identity[0].target == $target and
+                $run_set[0].target == $target and
+                $run_set[0].candidate_sha == $sha and
+                $run_set[0].workflow_run_id == $run_id and
+                $identity[0].agent_id == $run_set[0].agent_id
+              then {
+                owner_id: $identity[0].owner_id,
+                agent_id: $identity[0].agent_id,
+                run_ids: $run_set[0].run_ids,
+                since: $run_set[0].since
+              }
+              else error("Certification identity/run-set binding failed")
+              end
+            ' > "$request_file"
+          curl --fail-with-body --silent --show-error \
+            --retry 2 --retry-all-errors \
+            --connect-timeout 10 --max-time 60 \
+            -X POST \
+            -H "Authorization: Bearer $COMPUTE_CERTIFICATION_TOKEN" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
+            --data-binary "@$request_file" \
+            "$API_BASE/api/admin/compute/certification" > "$response_file"
+          unset COMPUTE_CERTIFICATION_TOKEN
+          chmod 600 "$response_file"
+          mv "$response_file" "$snapshot_file"
+          jq -e \
+            --slurpfile identity "$identity" \
+            --slurpfile run_set "$run_set" '
+              .schema_version == 1 and
+              .owner_id == $identity[0].owner_id and
+              .agent_id == $identity[0].agent_id and
+              .requested_run_count == ($run_set[0].run_ids | length) and
+              .selected_run_count == ($run_set[0].run_ids | length)
+            ' "$snapshot_file" >/dev/null
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Verify combined deployed Compute certification evidence
+        if: >-
+          inputs.stage != 'revert_off' &&
+          steps.certification_snapshot.outputs.verified == 'true'
+        id: certification
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/release/verify-compute-certification-evidence.mjs \
+            --suite-evidence "$EVIDENCE_DIR/compute-certification-$REQUESTED_TARGET.json" \
+            --run-set "$EVIDENCE_DIR/compute-certification-run-ids-$REQUESTED_TARGET.json" \
+            --operator-snapshot "$EVIDENCE_DIR/compute-certification-snapshot-$REQUESTED_TARGET.json" \
+            --canary-identity "$EVIDENCE_DIR/canary-identity.json" \
+            --promoted-state "$EVIDENCE_DIR/promoted-state.json" \
+            --expected-target "$REQUESTED_TARGET" \
+            --expected-profile "$COMPUTE_CERTIFICATION_PROFILE" \
+            --expected-candidate-sha "$GITHUB_SHA" \
+            --expected-workflow-run-id "$GITHUB_RUN_ID" \
+            --output "$EVIDENCE_DIR/compute-certification-verification-$REQUESTED_TARGET.json"
           echo "verified=true" >> "$GITHUB_OUTPUT"
 
       - name: Final exact live fence after certification
@@ -1359,7 +1461,11 @@ jobs:
         id: finalize
         if: >-
           steps.final_fence.outputs.verified == 'true' &&
-          steps.final_latch_fence.outputs.verified == 'true'
+          steps.final_latch_fence.outputs.verified == 'true' &&
+          (
+            inputs.stage == 'revert_off' ||
+            steps.certification.outputs.verified == 'true'
+          )
         shell: bash
         run: |
           set -euo pipefail
@@ -1383,14 +1489,14 @@ jobs:
           else
             identity_json=null
           fi
-          smoke_file="compute-admitted-$REQUESTED_TARGET.json"
-          if [ -f "$EVIDENCE_DIR/$smoke_file" ]; then
-            smoke_json="$(jq -n \
-              --arg file "$smoke_file" \
-              --arg sha256 "$(hash_file "$smoke_file")" \
+          certification_file="compute-certification-verification-$REQUESTED_TARGET.json"
+          if [ -f "$EVIDENCE_DIR/$certification_file" ]; then
+            certification_json="$(jq -n \
+              --arg file "$certification_file" \
+              --arg sha256 "$(hash_file "$certification_file")" \
               '{evidence_file: $file, sha256: $sha256}')"
           else
-            smoke_json=null
+            certification_json=null
           fi
           if [ -f "$EVIDENCE_DIR/predecessor-verification.json" ]; then
             predecessor_json="$(jq -n \
@@ -1424,7 +1530,7 @@ jobs:
             --arg rollback_sha "$rollback_sha" \
             --arg active_sha "$active_sha" \
             --argjson canary_identity "$identity_json" \
-            --argjson admitted_smoke "$smoke_json" \
+            --argjson deployed_certification "$certification_json" \
             --argjson predecessor "$predecessor_json" '
               {
                 schema_version: 1,
@@ -1457,7 +1563,7 @@ jobs:
                   sha256: $active_sha
                 },
                 canary_identity: $canary_identity,
-                admitted_smoke: $admitted_smoke,
+                deployed_certification: $deployed_certification,
                 predecessor: $predecessor
               }
             ' > "$EVIDENCE_DIR/rollout.json"
@@ -1628,7 +1734,7 @@ jobs:
           esac
           echo "verified=true" >> "$GITHUB_OUTPUT"
 
-      - name: Disable the fixed canary fixture after OFF compensation
+      - name: Clean the fixed certification fixture after OFF compensation
         id: compensate_fixture
         if: >-
           always() &&
@@ -1648,7 +1754,7 @@ jobs:
           mkdir -p "$COMPUTE_RELEASE_EVIDENCE_DIR"
           node scripts/smoke/with-staging-owner-session.mjs \
             --target "$REQUESTED_TARGET" \
-            -- node scripts/smoke/compute-admitted-smoke.mjs --cleanup-only
+            -- node scripts/smoke/compute-certification-suite.mjs --cleanup-only
           echo "verified=true" >> "$GITHUB_OUTPUT"
 
       - name: Write deterministic evidence manifest
@@ -1845,3 +1951,25 @@ jobs:
           echo "verified=true" >> "$GITHUB_OUTPUT"
           echo "Committed evidence was not published; restored this dispatch's OFF anchor." \
             >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Clean the fixed certification fixture after unpublished restore
+        if: >-
+          always() &&
+          inputs.stage != 'revert_off' &&
+          steps.unpublished_restore_latch.outputs.verified == 'true'
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_STAGING_PROJECT_ID: ${{ (inputs.stage == 'staging_canary' && secrets.SUPABASE_STAGING_PROJECT_ID) || '' }}
+          SUPABASE_PRODUCTION_PROJECT_ID: ${{ ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.SUPABASE_PRODUCTION_PROJECT_ID) || '' }}
+          ULTRALIGHT_TOKEN: ${{ (inputs.stage == 'staging_canary' && secrets.ULTRALIGHT_TOKEN_STAGING) || ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.ULTRALIGHT_TOKEN) || '' }}
+          GALACTIC_SMOKE_APP_ID: ${{ (inputs.stage == 'staging_canary' && secrets.GALACTIC_SMOKE_APP_ID_STAGING) || ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.GALACTIC_SMOKE_APP_ID) || '' }}
+          COMPUTE_RELEASE_SHA: ${{ github.sha }}
+          COMPUTE_RELEASE_RUN_ID: ${{ github.run_id }}
+          COMPUTE_RELEASE_EVIDENCE_DIR: ${{ github.workspace }}/compute-rollout-evidence/unpublished-cleanup
+        run: |
+          set -euo pipefail
+          mkdir -p "$COMPUTE_RELEASE_EVIDENCE_DIR"
+          node scripts/smoke/with-staging-owner-session.mjs \
+            --target "$REQUESTED_TARGET" \
+            -- node scripts/smoke/compute-certification-suite.mjs --cleanup-only

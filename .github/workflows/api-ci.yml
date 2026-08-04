@@ -10,6 +10,7 @@ on:
       - 'capacity-tail-worker/**'
       - 'apps/**'
       - 'examples/interface-demo/**'
+      - 'examples/compute-certification/**'
       - 'cli/**'
       - 'packages/types/**'
       - 'scripts/contracts/**'
@@ -32,6 +33,8 @@ on:
       - 'scripts/release/verify-api-compute-rollout-state.test.mjs'
       - 'scripts/release/verify-compute-emergency-stop-status.mjs'
       - 'scripts/release/verify-compute-emergency-stop-status.test.mjs'
+      - 'scripts/release/verify-compute-certification-evidence.mjs'
+      - 'scripts/release/verify-compute-certification-evidence.test.mjs'
       - 'scripts/release/verify-compute-rollout-predecessor.mjs'
       - 'scripts/release/verify-compute-rollout-predecessor.test.mjs'
       - 'scripts/release/verify-compute-rollout-release-evidence.mjs'
@@ -46,6 +49,8 @@ on:
       - 'scripts/smoke/owner-attention-probe.test.mjs'
       - 'scripts/smoke/compute-admitted-smoke.mjs'
       - 'scripts/smoke/compute-admitted-smoke.test.mjs'
+      - 'scripts/smoke/compute-certification-suite.mjs'
+      - 'scripts/smoke/compute-certification-suite.test.mjs'
       - 'scripts/smoke/resolve-compute-canary-identity.mjs'
       - 'scripts/smoke/resolve-compute-canary-identity.test.mjs'
       - 'scripts/smoke/interface-deploy-smoke.mjs'
@@ -78,6 +83,7 @@ on:
       - 'capacity-tail-worker/**'
       - 'apps/**'
       - 'examples/interface-demo/**'
+      - 'examples/compute-certification/**'
       - 'cli/**'
       - 'packages/types/**'
       - 'scripts/contracts/**'
@@ -100,6 +106,8 @@ on:
       - 'scripts/release/verify-api-compute-rollout-state.test.mjs'
       - 'scripts/release/verify-compute-emergency-stop-status.mjs'
       - 'scripts/release/verify-compute-emergency-stop-status.test.mjs'
+      - 'scripts/release/verify-compute-certification-evidence.mjs'
+      - 'scripts/release/verify-compute-certification-evidence.test.mjs'
       - 'scripts/release/verify-compute-rollout-predecessor.mjs'
       - 'scripts/release/verify-compute-rollout-predecessor.test.mjs'
       - 'scripts/release/verify-compute-rollout-release-evidence.mjs'
@@ -114,6 +122,8 @@ on:
       - 'scripts/smoke/owner-attention-probe.test.mjs'
       - 'scripts/smoke/compute-admitted-smoke.mjs'
       - 'scripts/smoke/compute-admitted-smoke.test.mjs'
+      - 'scripts/smoke/compute-certification-suite.mjs'
+      - 'scripts/smoke/compute-certification-suite.test.mjs'
       - 'scripts/smoke/resolve-compute-canary-identity.mjs'
       - 'scripts/smoke/resolve-compute-canary-identity.test.mjs'
       - 'scripts/smoke/interface-deploy-smoke.mjs'
@@ -200,6 +210,7 @@ jobs:
             scripts/release/verify-api-compute-deploy-state.test.mjs \
             scripts/release/verify-api-compute-off-bridge.test.mjs \
             scripts/release/verify-api-compute-rollout-state.test.mjs \
+            scripts/release/verify-compute-certification-evidence.test.mjs \
             scripts/release/verify-compute-emergency-stop-status.test.mjs \
             scripts/release/verify-compute-rollout-predecessor.test.mjs \
             scripts/release/verify-compute-rollout-release-evidence.test.mjs \
@@ -207,6 +218,7 @@ jobs:
             scripts/release/verify-production-compute-release-evidence.test.mjs \
             scripts/release/write-api-compute-disabled-config.test.mjs \
             scripts/smoke/compute-admitted-smoke.test.mjs \
+            scripts/smoke/compute-certification-suite.test.mjs \
             scripts/smoke/resolve-compute-canary-identity.test.mjs \
             scripts/smoke/gx-test-containment-smoke.test.mjs \
             scripts/smoke/interface-deploy-promotion.test.mjs \

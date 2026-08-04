@@ -58,6 +58,7 @@ export type SensitiveRoute =
   | "admin:app_category"
   | "admin:app_featured"
   | "admin:payout_process"
+  | "admin:compute_certification"
   | "admin:compute_emergency_stop_status"
   | "admin:compute_emergency_stop";
 
@@ -638,6 +639,16 @@ export const SENSITIVE_ROUTE_RATE_LIMITS: Record<
       "Too many Compute emergency-stop status checks. Please wait and retry the preflight.",
     unavailableMessage:
       "Compute emergency-stop status protection is unavailable; the preflight failed closed.",
+  },
+  "admin:compute_certification": {
+    endpoint: "admin:compute_certification",
+    limit: 120,
+    windowMinutes: 10,
+    resource: "POST /api/admin/compute/certification",
+    limitMessage:
+      "Too many Compute certification snapshot requests. Wait before retrying the bounded probe.",
+    unavailableMessage:
+      "Compute certification protection is unavailable; the snapshot failed closed.",
   },
   "admin:compute_emergency_stop": {
     endpoint: "admin:compute_emergency_stop",

@@ -53,6 +53,7 @@ function routine(
     name: "Check the inbox",
     nextOccurrences: ["2026-07-27T12:15:00.000Z"],
     nextRunAt: "2026-07-27T12:15:00.000Z",
+    activeRunCount: 0,
     recentRuns: [],
     reportingDestination: {
       kind: "galactic_inbox",

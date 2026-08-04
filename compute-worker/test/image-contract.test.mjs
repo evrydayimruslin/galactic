@@ -519,6 +519,9 @@ describe("Compute release supply-chain contract", () => {
 
   it("certifies tagged API and Compute versions before admission", () => {
     const release = repositoryFile(".github/workflows/compute-deploy.yml");
+    const rollout = repositoryFile(
+      ".github/workflows/compute-canary-rollout.yml",
+    );
     const apiDeploy = repositoryFile(".github/workflows/api-deploy.yml");
     expect(release).toContain('--tag "compute-$GITHUB_SHA"');
     expect(release).toContain('--tag "api-$GITHUB_SHA-admission-off"');
@@ -529,8 +532,17 @@ describe("Compute release supply-chain contract", () => {
     expect(release).toContain("API is not one stable 100% version");
     expect(release).toContain("Compute is not one stable 100% version");
     expect(release).toContain('value("COMPUTE_ENABLED") == "0"');
-    expect(release).toContain('value("COMPUTE_ENABLED") == "1"');
     expect(release).toContain('value("COMPUTE_CANARY_ALLOWLIST") == ""');
+    expect(release).not.toContain("enable_global");
+    expect(release).not.toContain("--var COMPUTE_ENABLED:1");
+    expect(rollout).toContain(
+      "upload_policy candidate canary 1 canary",
+    );
+    expect(rollout).toContain(
+      'upload_policy candidate global 1 global ""',
+    );
+    expect(rollout).toContain("verify-compute-certification-evidence.mjs");
+    expect(rollout).toContain("COMPUTE_CERTIFICATION_PRINCIPAL");
     expect(apiDeploy.match(/--tag "api-\$GITHUB_SHA"/g)?.length).toBe(2);
     expect(apiDeploy.match(/persist-credentials: false/g)?.length).toBe(3);
     expect(apiDeploy).toContain(
@@ -561,9 +573,11 @@ describe("Compute release supply-chain contract", () => {
     const runbook = repositoryFile("docs/GALACTIC_COMPUTE_RUNBOOK.md");
     const devVars = repositoryFile("api/.dev.vars.example");
     expect(workflow).toContain("COMPUTE_EMERGENCY_STOP_TOKEN");
+    expect(workflow).toContain("COMPUTE_CERTIFICATION_TOKEN");
     expect(workflow).toContain("any(.[]; .name == $name)");
     expect(devVars).toContain("COMPUTE_JOB_TOKEN_PEPPER=");
     expect(devVars).toContain("COMPUTE_EMERGENCY_STOP_TOKEN=");
+    expect(devVars).toContain("COMPUTE_CERTIFICATION_TOKEN=");
     expect(runbook).toContain(
       "Authorization: Bearer ${COMPUTE_EMERGENCY_STOP_TOKEN}",
     );

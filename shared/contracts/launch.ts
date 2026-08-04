@@ -1872,6 +1872,8 @@ export interface LaunchAgentRoutineOverview {
   failureCount: number;
   autoPauseReason: string | null;
   errorReason: string | null;
+  /** Exact owner-safe count of queued or running executions for this routine. */
+  activeRunCount: number;
   recentRuns: LaunchAgentRoutineRun[];
   actions: {
     canApproveCapabilities: boolean;

@@ -173,6 +173,11 @@ function env(): Partial<Env> {
     COMPUTE_ENVIRONMENT_DIGEST: `sha256:${"b".repeat(64)}`,
     COMPUTE_ROLLOUT_MODE: "global",
     COMPUTE_CANARY_ALLOWLIST: "",
+    COMPUTE_CERTIFICATION_PRINCIPAL:
+      "11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222",
+    SUPABASE_SERVICE_ROLE_KEY: "s".repeat(32),
+    COMPUTE_EMERGENCY_STOP_TOKEN: "e".repeat(32),
+    COMPUTE_CERTIFICATION_TOKEN: "c".repeat(32),
     COMPUTE_JOB_TOKEN_PEPPER: "p".repeat(32),
     COMPUTE_QUEUE: { send: () => Promise.resolve() },
     COMPUTE_PLANE: {
@@ -457,6 +462,8 @@ Deno.test("Compute canary rollout is exact to owner and Agent", async () => {
     ...fixture.deps.env,
     COMPUTE_ROLLOUT_MODE: "canary",
     COMPUTE_CANARY_ALLOWLIST:
+      "11111111-1111-4111-8111-111111111111/99999999-9999-4999-8999-999999999999",
+    COMPUTE_CERTIFICATION_PRINCIPAL:
       "11111111-1111-4111-8111-111111111111/99999999-9999-4999-8999-999999999999",
   };
   const error = await assertRejects(

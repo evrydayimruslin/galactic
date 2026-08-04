@@ -241,6 +241,20 @@ Deno.test("emergency operator identity is credential-derived and fail-closed", a
     ),
     { status: "unavailable" },
   );
+  for (
+    const collision of [
+      { COMPUTE_CERTIFICATION_TOKEN: EMERGENCY_TOKEN },
+      { SUPABASE_SERVICE_ROLE_KEY: EMERGENCY_TOKEN },
+    ]
+  ) {
+    assertEquals(
+      await authenticateComputeEmergencyStopOperator(
+        request({}, { Authorization: `Bearer ${EMERGENCY_TOKEN}` }),
+        { COMPUTE_EMERGENCY_STOP_TOKEN: EMERGENCY_TOKEN, ...collision },
+      ),
+      { status: "unavailable" },
+    );
+  }
 });
 
 Deno.test("request JSON cannot self-assert the emergency audit actor", async () => {

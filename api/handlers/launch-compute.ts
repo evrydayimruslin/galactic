@@ -209,6 +209,7 @@ export interface ComputeLaunchService {
     agentId: string;
     limit: number;
     cursor: string | null;
+    activeOnly?: boolean;
   }): Promise<{
     runs: ComputeLaunchRunSummary[];
     nextCursor: string | null;
@@ -357,8 +358,10 @@ function onlyQuery(url: URL, allowed: readonly string[]): void {
   }
 }
 
-function parseRunPage(url: URL): { limit: number; cursor: string | null } {
-  onlyQuery(url, ['limit', 'cursor']);
+function parseRunPage(
+  url: URL,
+): { limit: number; cursor: string | null; activeOnly: boolean } {
+  onlyQuery(url, ['limit', 'cursor', 'active']);
   const rawLimit = url.searchParams.get('limit');
   const limit = rawLimit === null ? DEFAULT_RUN_LIMIT : Number(rawLimit);
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_RUN_LIMIT) {
@@ -371,7 +374,11 @@ function parseRunPage(url: URL): { limit: number; cursor: string | null } {
   if (cursor !== null && !CURSOR_PATTERN.test(cursor)) {
     invalid('INVALID_CURSOR', 'cursor is invalid');
   }
-  return { limit, cursor };
+  const active = url.searchParams.get('active');
+  if (active !== null && active !== 'true') {
+    invalid('INVALID_ACTIVE_FILTER', 'active must be true when supplied');
+  }
+  return { limit, cursor, activeOnly: active === 'true' };
 }
 
 function asObject(value: unknown, label: string): Record<string, unknown> {

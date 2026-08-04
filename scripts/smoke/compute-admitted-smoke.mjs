@@ -159,17 +159,6 @@ function timestamp(value, label) {
   return value;
 }
 
-function finiteNumber(value, label, minimum = -Infinity) {
-  if (
-    typeof value !== "number" ||
-    !Number.isFinite(value) ||
-    value < minimum
-  ) {
-    fail("INVALID_RESPONSE", `${label} must be a finite number.`);
-  }
-  return value;
-}
-
 function sha256(value) {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
@@ -555,9 +544,15 @@ function validateAcceptedRun(value) {
   const run = object(value, "Compute admission result");
   const runId = assertUuid(run.run_id, "Compute run id");
   const receiptId = assertUuid(run.receipt_id, "Compute receipt id");
+  const acceptedActive = run.async === true && ACTIVE_STATUSES.has(run.status);
+  // The executor can finish a tiny async job before the admission response is
+  // projected. `projectPublicComputeResult()` truthfully returns async:false in
+  // that race, so treating only the accepted shape as success makes the smoke
+  // fail against a healthy, fast production body.
+  const acceptedTerminal = run.async === false &&
+    (run.status === "completed" || run.status === "settlement_pending");
   if (
-    run.async !== true ||
-    !ACTIVE_STATUSES.has(run.status) ||
+    (!acceptedActive && !acceptedTerminal) ||
     run.profile !== "developer-v1"
   ) {
     fail(
@@ -647,11 +642,9 @@ function validateCompletedOwnerRun(value, expected) {
   const run = object(value, "Completed Compute owner run");
   if (
     run.runId !== expected.runId ||
-    run.receiptId !== expected.receiptId ||
     run.status !== "completed" ||
     run.agentId !== expected.agentId ||
-    run.functionName !== COMPUTE_SMOKE_FUNCTION ||
-    !["wallet", "subscription_capacity"].includes(run.billingMode)
+    run.functionName !== COMPUTE_SMOKE_FUNCTION
   ) {
     fail(
       "INVALID_COMPLETION",
@@ -667,16 +660,22 @@ function validateCompletedOwnerRun(value, expected) {
   ) {
     fail("INVALID_COMPLETION", "Compute owner timestamps are not monotonic.");
   }
-  const usage = object(run.usage, "Compute owner usage");
-  const reserved = finiteNumber(usage.reserved, "Compute reserved usage", 0);
-  const actual = finiteNumber(usage.actual, "Compute actual usage", 0);
-  const trueUp = finiteNumber(usage.trueUp, "Compute usage true-up");
-  if (
-    typeof usage.unit !== "string" ||
-    !usage.unit.trim() ||
-    Math.abs((actual - reserved) - trueUp) > 1e-9
-  ) {
-    fail("INVALID_COMPLETION", "Compute usage settlement is invalid.");
+  // The owner HTTP boundary deliberately strips private accounting. Keep the
+  // smoke coupled to that real projection so a richer test double cannot hide
+  // production drift. Durable accounting is certified by the separate,
+  // operator-only snapshot rather than widening this owner response.
+  for (const privateField of [
+    "receiptId",
+    "receiptUrl",
+    "billingMode",
+    "usage",
+  ]) {
+    if (Object.hasOwn(run, privateField)) {
+      fail(
+        "INVALID_COMPLETION",
+        "Compute owner projection exposed private accounting data.",
+      );
+    }
   }
   if (
     run.exitCode !== 0 ||
@@ -687,17 +686,10 @@ function validateCompletedOwnerRun(value, expected) {
   ) {
     fail(
       "INVALID_COMPLETION",
-      "Compute teardown or terminal result was not clean.",
+      "Compute owner projection did not report a clean terminal result.",
     );
   }
   return {
-    billingMode: run.billingMode,
-    usage: {
-      reserved,
-      actual,
-      trueUp,
-      unit: usage.unit,
-    },
     timestamps: { createdAt, startedAt, finishedAt },
   };
 }
@@ -1068,11 +1060,8 @@ export async function runAdmittedComputeSmoke(
       });
       const settlement = validateCompletedOwnerRun(completed, {
         runId: state.runId,
-        receiptId: state.computeReceiptId,
         agentId: context.agentId,
       });
-      state.billingMode = settlement.billingMode;
-      state.usage = settlement.usage;
       state.timestamps = settlement.timestamps;
 
       const checked = await invokeSmokeFunction(

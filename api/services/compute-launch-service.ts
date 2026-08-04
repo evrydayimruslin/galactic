@@ -1213,9 +1213,13 @@ export function createComputeLaunchService(
             `and(created_at.eq.${encodeURIComponent(cursor.createdAt)},` +
             `id.lt.${encodeURIComponent(cursor.runId)}))`
           : "";
+        const activeFilter = input.activeOnly
+          ? "&state=in.(admitted,queued,provisioning,running)"
+          : "";
         const rows = await operations.queryRows(
           `compute_runs?user_id=eq.${encodeURIComponent(input.userId)}` +
-            `&agent_id=eq.${encodeURIComponent(input.agentId)}` + cursorFilter +
+            `&agent_id=eq.${encodeURIComponent(input.agentId)}` + activeFilter +
+            cursorFilter +
             `&select=${encodeURIComponent(ownerRunSelect())}` +
             `&order=created_at.desc,id.desc&limit=${input.limit + 1}`,
         );

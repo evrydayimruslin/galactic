@@ -17,6 +17,8 @@ const BRIDGE_ID = "33333333-3333-4333-8333-333333333333";
 const OTHER_ID = "44444444-4444-4444-8444-444444444444";
 const DIGEST = `sha256:${"b".repeat(64)}`;
 const UPLOAD_ID = "55555555-5555-4555-8555-555555555555";
+const CERTIFICATION_PRINCIPAL =
+  "66666666-6666-4666-8666-666666666666/77777777-7777-4777-8777-777777777777";
 
 const TARGETS = {
   production: {
@@ -61,6 +63,10 @@ function fixture(policy = "global", target = "production") {
           policyBinding("COMPUTE_ENVIRONMENT_DIGEST", DIGEST),
           policyBinding("COMPUTE_ROLLOUT_MODE", rolloutMode),
           policyBinding("COMPUTE_CANARY_ALLOWLIST", ""),
+          policyBinding(
+            "COMPUTE_CERTIFICATION_PRINCIPAL",
+            policy === "global" ? CERTIFICATION_PRINCIPAL : "",
+          ),
           {
             type: "service",
             name: "COMPUTE_PLANE",
@@ -283,6 +289,7 @@ function uploadedFixture(target = "production") {
   uploadedVersion.annotations["workers/tag"] = BRIDGE_TAG;
   binding(uploadedVersion, "COMPUTE_ENABLED").text = "0";
   binding(uploadedVersion, "COMPUTE_ROLLOUT_MODE").text = "canary";
+  binding(uploadedVersion, "COMPUTE_CERTIFICATION_PRINCIPAL").text = "";
   return { currentInput, currentState, uploadedVersion };
 }
 
@@ -343,6 +350,15 @@ test("accepts an exact already-OFF current source without uploading a bridge", (
   }
 });
 
+test("accepts a legacy global source without a certification principal", () => {
+  const input = fixture("global");
+  input.apiVersion.resources.bindings =
+    input.apiVersion.resources.bindings.filter(
+      (value) => value.name !== "COMPUTE_CERTIFICATION_PRINCIPAL",
+    );
+  assert.equal(verifyCurrentPair(input).policy, "global");
+});
+
 test("rejects an old source version even when its policy is already OFF", () => {
   const input = fixture("off");
   input.apiVersion.annotations["workers/tag"] = `api-${"c".repeat(40)}`;
@@ -373,6 +389,19 @@ for (
         binding(input.apiVersion, "COMPUTE_ENABLED").text = "0";
         binding(input.apiVersion, "COMPUTE_ROLLOUT_MODE").text = "canary";
         binding(input.apiVersion, "COMPUTE_CANARY_ALLOWLIST").text = "owner/agent";
+      },
+    ],
+    [
+      "global empty certification principal",
+      (input) => {
+        binding(input.apiVersion, "COMPUTE_CERTIFICATION_PRINCIPAL").text = "";
+      },
+    ],
+    [
+      "OFF certification principal",
+      (input) => {
+        binding(input.apiVersion, "COMPUTE_ENABLED").text = "0";
+        binding(input.apiVersion, "COMPUTE_ROLLOUT_MODE").text = "canary";
       },
     ],
   ]
@@ -608,6 +637,10 @@ for (
       (args) => {
         binding(args.uploadedVersion, "COMPUTE_ENABLED").text = "1";
         binding(args.uploadedVersion, "COMPUTE_ROLLOUT_MODE").text = "global";
+        binding(
+          args.uploadedVersion,
+          "COMPUTE_CERTIFICATION_PRINCIPAL",
+        ).text = CERTIFICATION_PRINCIPAL;
       },
       /uploaded API policy is not OFF/u,
     ],
@@ -664,6 +697,26 @@ for (
         });
       },
       /secret_text binding names must be nonempty and unique/u,
+    ],
+    [
+      "missing certification principal binding",
+      (args) => {
+        args.uploadedVersion.resources.bindings =
+          args.uploadedVersion.resources.bindings.filter(
+            (value) => value.name !== "COMPUTE_CERTIFICATION_PRINCIPAL",
+          );
+      },
+      /missing the empty certification principal binding/u,
+    ],
+    [
+      "nonempty certification principal",
+      (args) => {
+        binding(
+          args.uploadedVersion,
+          "COMPUTE_CERTIFICATION_PRINCIPAL",
+        ).text = CERTIFICATION_PRINCIPAL;
+      },
+      /policy must be exactly global.*or OFF/u,
     ],
   ]
 ) {

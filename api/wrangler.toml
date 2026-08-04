@@ -233,6 +233,8 @@ COMPUTE_ENABLED = "0"
 # promote COMPUTE_ROLLOUT_MODE to "global" deliberately.
 COMPUTE_ROLLOUT_MODE = "canary"
 COMPUTE_CANARY_ALLOWLIST = ""
+# Release uploads bind the read-only certification bearer to one exact pair.
+COMPUTE_CERTIFICATION_PRINCIPAL = ""
 
 [env.staging]
 # Staging gets its own worker script name (`ultralight-api-staging`) and its
@@ -378,6 +380,7 @@ CF_ACCOUNT_ID = "8d2df08dac65694aa1c6bf56233a2090"
 COMPUTE_ENABLED = "0"
 COMPUTE_ROLLOUT_MODE = "canary"
 COMPUTE_CANARY_ALLOWLIST = ""
+COMPUTE_CERTIFICATION_PRINCIPAL = ""
 # Optional rollout knob for Wave 4 alias retirement:
 # PLATFORM_MCP_DISABLED_ALIASES = "removable"
 
@@ -439,12 +442,16 @@ crons = [
 #   COMPUTE_EMERGENCY_STOP_TOKEN — dedicated >=32-byte random bearer accepted
 #     only by the global Compute stop/release routes. Never reuse the Supabase
 #     service role or any human/Agent/provider credential.
+#   COMPUTE_CERTIFICATION_TOKEN — separate >=32-byte random bearer accepted
+#     only by the bounded, read-only deployed-certification snapshot route.
+#     Never reuse the emergency-stop or owner-session credential.
 #
 # Required immutable rollout var (set after image publication):
 #   COMPUTE_ENVIRONMENT_DIGEST=sha256:<developer-v1 image digest>
 # Required rollout vars:
 #   COMPUTE_ROLLOUT_MODE=canary|global
 #   COMPUTE_CANARY_ALLOWLIST=<owner UUID>/<Agent UUID>[,...]
+#   COMPUTE_CERTIFICATION_PRINCIPAL=<owner UUID>/<Agent UUID>
 #
 # Optional vars/secrets for chat capture:
 #   CHAT_CAPTURE_ENABLED=true|false

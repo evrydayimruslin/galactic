@@ -1,9 +1,9 @@
 import type { Env } from "../lib/env.ts";
 import { getEnv } from "../lib/env.ts";
-
-const MIN_TOKEN_BYTES = 32;
-const MAX_TOKEN_BYTES = 512;
-const BEARER_TOKEN_PATTERN = /^[A-Za-z0-9._~+\/-]+={0,2}$/u;
+import {
+  isComputeCredentialIsolated,
+  isComputeOperatorTokenUsable,
+} from "./compute-credential-isolation.ts";
 
 export type ComputeEmergencyStopAuthorization =
   | { status: "authorized"; operatorReference: string }
@@ -38,12 +38,6 @@ function bearerToken(request: Request): string {
   return match?.[1] ?? "";
 }
 
-function isTokenShapeValid(value: string): boolean {
-  const length = bytes(value).byteLength;
-  return length >= MIN_TOKEN_BYTES && length <= MAX_TOKEN_BYTES &&
-    BEARER_TOKEN_PATTERN.test(value);
-}
-
 function digestHex(digest: Uint8Array): string {
   return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join(
     "",
@@ -73,9 +67,12 @@ export async function authenticateComputeEmergencyStopOperator(
     sha256(supplied),
   ]);
 
-  if (!isTokenShapeValid(expected)) return { status: "unavailable" };
+  if (
+    !isComputeOperatorTokenUsable(expected) ||
+    !isComputeCredentialIsolated(env, "COMPUTE_EMERGENCY_STOP_TOKEN")
+  ) return { status: "unavailable" };
   const digestMatches = fixedTimeEqual(expectedDigest, suppliedDigest);
-  if (!isTokenShapeValid(supplied) || !digestMatches) {
+  if (!isComputeOperatorTokenUsable(supplied) || !digestMatches) {
     return { status: "unauthorized" };
   }
 

@@ -1,5 +1,8 @@
 import { getEnv, getExecQueue } from "../lib/env.ts";
-import type { RoutineBudgetDefaults } from "../../shared/contracts/routine.ts";
+import {
+  AUTONOMOUS_POLICY_OFF_ERROR_TYPE,
+  type RoutineBudgetDefaults,
+} from "../../shared/contracts/routine.ts";
 import type { LaunchOperatorRunDiagnostic } from "../../shared/contracts/launch.ts";
 import {
   createRoutineActorTokenForRun,
@@ -1445,6 +1448,24 @@ async function invokeRoutineHandler(
         rpc.error.data.concurrency_scope ?? null,
       );
     }
+    if (rpc.error.data?.type === AUTONOMOUS_POLICY_OFF_ERROR_TYPE) {
+      const message = rpc.error.message ||
+        "The owner disabled this function for autonomous runs.";
+      throw new RoutineOperatorDiagnosticError(
+        normalizeOperatorDiagnostic({
+          error: {
+            type: AUTONOMOUS_POLICY_OFF_ERROR_TYPE,
+            message,
+          },
+          provenance: "platform",
+          platform: {
+            code: AUTONOMOUS_POLICY_OFF_ERROR_TYPE,
+            summary: message,
+            retryable: false,
+          },
+        }),
+      );
+    }
     throw new Error(
       rpc.error.message || `Routine MCP error ${rpc.error.code ?? ""}`.trim(),
     );
@@ -2036,7 +2057,10 @@ async function executeClaimedRun(
       return { status: "skipped", budgetSkipped: true };
     }
     const policy = retryPolicyFrom(routine, run);
-    const willRetry = run.attempt_count < policy.maxAttempts;
+    const willRetry = !(
+      err instanceof RoutineOperatorDiagnosticError &&
+      err.diagnostic.code === AUTONOMOUS_POLICY_OFF_ERROR_TYPE
+    ) && run.attempt_count < policy.maxAttempts;
     // Failed runs spend too — fold terminal attempts into the rollup. Retried
     // runs settle when they terminally complete (total_light spans attempts).
     const accounting = willRetry
