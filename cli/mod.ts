@@ -59,7 +59,7 @@ import {
 } from "./source-files.ts";
 import { createHash } from "node:crypto";
 
-const VERSION = "2.4.0";
+const VERSION = "2.5.0";
 const cliLogger = createCliLogger("CLI");
 const writeStderr = (line: string): void => console.error(line);
 
