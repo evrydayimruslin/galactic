@@ -3,6 +3,7 @@ import {
   assertRejects,
 } from "https://deno.land/std@0.210.0/assert/mod.ts";
 
+import { trustedDownstreamToolFailureResult } from "../compute-platform-gateway.ts";
 import { executeComputeAgentFunction } from "./agent-call-executor.ts";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
@@ -79,9 +80,14 @@ Deno.test("Compute Agent call keeps host tokens private and ignores body confirm
       url: `https://internal/mcp/${TARGET_ID}`,
       fetchFn: (input, init) => {
         request = new Request(input, init);
-        return Promise.resolve(new Response(JSON.stringify({
-          result: { content: [{ type: "text", text: '{"ok":true}' }] },
-        }), { headers: { "content-type": "application/json" } }));
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              result: { content: [{ type: "text", text: '{"ok":true}' }] },
+            }),
+            { headers: { "content-type": "application/json" } },
+          ),
+        );
       },
     }),
   });
@@ -89,7 +95,10 @@ Deno.test("Compute Agent call keeps host tokens private and ignores body confirm
   assertEquals(result, { ok: true });
   const sent = request as Request | null;
   if (!sent) throw new Error("Agent call was not dispatched");
-  assertEquals(sent.headers.get("Authorization"), "Bearer host-only-actor-token");
+  assertEquals(
+    sent.headers.get("Authorization"),
+    "Bearer host-only-actor-token",
+  );
   assertEquals(sent.headers.get("X-Galactic-Caller"), "host-only-caller-token");
   assertEquals(sent.headers.get("X-Galactic-Confirm"), null);
   const payload = await sent.json() as { params?: unknown };
@@ -97,6 +106,44 @@ Deno.test("Compute Agent call keeps host tokens private and ignores body confirm
     name: "summarize",
     arguments: { text: "hello" },
   });
+});
+
+Deno.test("Compute Agent call preserves a trusted downstream MCP tool failure", async () => {
+  const downstreamFailure = {
+    content: [{ type: "text" as const, text: "Compute admission is closed." }],
+    structuredContent: {
+      error: "Compute admission is closed.",
+      error_details: { code: "COMPUTE_ADMISSION_DISABLED" },
+    },
+    isError: true as const,
+  };
+  let caught: unknown;
+  try {
+    await executeComputeAgentFunction(call, principal, {
+      authorizeExact: () => Promise.resolve(true),
+      mintActorToken: () => Promise.resolve("host-only-actor-token"),
+      mintCallerToken: () => Promise.resolve("host-only-caller-token"),
+      resolveInternalCall: () => ({
+        url: `https://internal/mcp/${TARGET_ID}`,
+        fetchFn: () =>
+          Promise.resolve(
+            new Response(
+              JSON.stringify({
+                result: downstreamFailure,
+              }),
+              { headers: { "content-type": "application/json" } },
+            ),
+          ),
+      }),
+    });
+  } catch (error) {
+    caught = error;
+  }
+
+  assertEquals(
+    trustedDownstreamToolFailureResult(caught),
+    downstreamFailure,
+  );
 });
 
 Deno.test("Compute Agent call rejects a mismatched job user", async () => {

@@ -10,6 +10,7 @@ import {
   requiredString,
 } from "./compute/database.ts";
 import { requireComputeUuid } from "./compute/authority.ts";
+import { computeAdmissionFlagState } from "./compute/config.ts";
 import { terminalizeComputeRunCancellation } from "./compute/runs.ts";
 import type { ComputeRunState } from "./compute/types.ts";
 const ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]{0,127}$/u;
@@ -78,6 +79,53 @@ export interface ComputeEmergencyStopReleaseInput {
   operatorReference: string;
   reason: string;
 }
+
+interface ComputeEmergencyStopStatusBase {
+  schemaVersion: 1;
+  operationId: string | null;
+  cutoffAt: string | null;
+  targetCount: number | null;
+  terminalizedCount: number | null;
+  pendingTargetCount: number | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  completedAt: string | null;
+}
+
+export type ComputeEmergencyStopStatus =
+  | (ComputeEmergencyStopStatusBase & {
+    latchState: "clear";
+    operationId: null;
+    cutoffAt: null;
+    targetCount: null;
+    terminalizedCount: null;
+    pendingTargetCount: null;
+    createdAt: null;
+    updatedAt: null;
+    completedAt: null;
+  })
+  | (ComputeEmergencyStopStatusBase & {
+    latchState: "active";
+    operationId: string;
+    cutoffAt: string;
+    targetCount: number;
+    terminalizedCount: number;
+    pendingTargetCount: number;
+    createdAt: string;
+    updatedAt: string;
+    completedAt: null;
+  })
+  | (ComputeEmergencyStopStatusBase & {
+    latchState: "completed";
+    operationId: string;
+    cutoffAt: string;
+    targetCount: number;
+    terminalizedCount: number;
+    pendingTargetCount: 0;
+    createdAt: string;
+    updatedAt: string;
+    completedAt: string;
+  });
 
 export interface ComputeEmergencyStopDeps {
   env?: Partial<Env>;
@@ -244,6 +292,149 @@ function mapBatch(value: unknown): ComputeEmergencyStopBatch {
   };
 }
 
+const COMPUTE_EMERGENCY_STOP_STATUS_KEYS = [
+  "completed_at",
+  "created_at",
+  "cutoff_at",
+  "latch_state",
+  "operation_id",
+  "pending_target_count",
+  "schema_version",
+  "target_count",
+  "terminalized_count",
+  "updated_at",
+];
+
+function invalidStatus(message: string): never {
+  throw new ComputeControlPlaneError({
+    code: "COMPUTE_DATABASE_INVALID_RESPONSE",
+    status: 503,
+    message: `Emergency-stop status ${message}.`,
+  });
+}
+
+function statusTimestamp(value: unknown, field: string): string {
+  if (
+    typeof value !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u
+      .test(value) ||
+    !Number.isFinite(Date.parse(value))
+  ) invalidStatus(`returned an invalid ${field}`);
+  return value;
+}
+
+function statusCount(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    invalidStatus(`returned an invalid ${field}`);
+  }
+  return value;
+}
+
+function mapStatus(value: unknown): ComputeEmergencyStopStatus {
+  // This RPC returns one scalar jsonb object. Do not use firstComputeRow here:
+  // accepting a PostgREST row array would hide a return-shape/schema drift.
+  const row = record(value, "Read Compute emergency-stop status");
+  const keys = Object.keys(row).sort();
+  if (
+    keys.length !== COMPUTE_EMERGENCY_STOP_STATUS_KEYS.length ||
+    keys.some((key, index) =>
+      key !== COMPUTE_EMERGENCY_STOP_STATUS_KEYS[index]
+    ) ||
+    row.schema_version !== 1
+  ) {
+    invalidStatus("returned an invalid schema");
+  }
+  const latchState = row.latch_state;
+  if (
+    latchState !== "clear" && latchState !== "active" &&
+    latchState !== "completed"
+  ) invalidStatus("returned an invalid latch state");
+
+  if (latchState === "clear") {
+    if (
+      COMPUTE_EMERGENCY_STOP_STATUS_KEYS.some((key) =>
+        key !== "schema_version" && key !== "latch_state" && row[key] !== null
+      )
+    ) invalidStatus("returned metadata for a clear latch");
+    return {
+      schemaVersion: 1,
+      latchState,
+      operationId: null,
+      cutoffAt: null,
+      targetCount: null,
+      terminalizedCount: null,
+      pendingTargetCount: null,
+      createdAt: null,
+      updatedAt: null,
+      completedAt: null,
+    };
+  }
+
+  let operationId: string;
+  try {
+    operationId = requireComputeUuid(row.operation_id, "operationId");
+  } catch {
+    invalidStatus("returned an invalid operation id");
+  }
+  const cutoffAt = statusTimestamp(row.cutoff_at, "cutoff timestamp");
+  const createdAt = statusTimestamp(row.created_at, "creation timestamp");
+  const updatedAt = statusTimestamp(row.updated_at, "update timestamp");
+  const targetCount = statusCount(row.target_count, "target count");
+  const terminalizedCount = statusCount(
+    row.terminalized_count,
+    "terminalized count",
+  );
+  const pendingTargetCount = statusCount(
+    row.pending_target_count,
+    "pending target count",
+  );
+  if (
+    terminalizedCount > targetCount ||
+    pendingTargetCount !== targetCount - terminalizedCount ||
+    Date.parse(updatedAt) < Date.parse(createdAt)
+  ) invalidStatus("returned inconsistent operation progress");
+
+  if (latchState === "active") {
+    if (row.completed_at !== null) {
+      invalidStatus("returned a completion timestamp for an active latch");
+    }
+    return {
+      schemaVersion: 1,
+      latchState,
+      operationId,
+      cutoffAt,
+      targetCount,
+      terminalizedCount,
+      pendingTargetCount,
+      createdAt,
+      updatedAt,
+      completedAt: null,
+    };
+  }
+
+  const completedAt = statusTimestamp(
+    row.completed_at,
+    "completion timestamp",
+  );
+  if (
+    terminalizedCount !== targetCount || pendingTargetCount !== 0 ||
+    Date.parse(completedAt) < Date.parse(createdAt) ||
+    Date.parse(completedAt) > Date.parse(updatedAt)
+  ) invalidStatus("returned an incomplete completed latch");
+  return {
+    schemaVersion: 1,
+    latchState,
+    operationId,
+    cutoffAt,
+    targetCount,
+    terminalizedCount,
+    pendingTargetCount: 0,
+    createdAt,
+    updatedAt,
+    completedAt,
+  };
+}
+
 async function sha256(value: string): Promise<string> {
   const digest = await crypto.subtle.digest(
     "SHA-256",
@@ -353,6 +544,14 @@ export async function recordComputeEmergencyStopTargetFailure(
   }, deps);
 }
 
+export async function getComputeEmergencyStopStatus(
+  deps: ComputeDatabaseDeps = {},
+): Promise<ComputeEmergencyStopStatus> {
+  return mapStatus(
+    await callComputeRpc("get_compute_emergency_stop_status", {}, deps),
+  );
+}
+
 export async function releaseComputeEmergencyStop(
   input: ComputeEmergencyStopReleaseInput,
   deps: {
@@ -382,11 +581,11 @@ export async function releaseComputeEmergencyStop(
   );
   const reason = exactText(input.reason, "reason", 1024);
   const env = deps.env ?? getEnv();
-  if (env.COMPUTE_ENABLED === "1") {
+  if (computeAdmissionFlagState(env) !== "disabled") {
     throw new ComputeEmergencyStopError(
       "COMPUTE_ADMISSION_MUST_BE_DISABLED",
       409,
-      "Keep new Compute admission disabled while releasing the emergency-stop latch.",
+      "Set COMPUTE_ENABLED to its canonical disabled value before releasing the emergency-stop latch.",
     );
   }
   const requestHash = await sha256(JSON.stringify({

@@ -48,7 +48,7 @@ import {
   saveConfig,
 } from "./config.ts";
 import { resolveComputeJobEnvironment } from "./job-context.ts";
-import { ApiClient } from "./api.ts";
+import { ApiClient, ApiToolError } from "./api.ts";
 import { colors } from "./colors.ts";
 import { createCliLogger } from "./logging.ts";
 import {
@@ -143,13 +143,29 @@ async function main() {
       command,
       error: err instanceof Error ? err : new Error(String(err)),
     });
-    if (err instanceof Error) {
-      writeStderr(colors.red(`Error: ${err.message}`));
-    } else {
-      writeStderr(colors.red("An unexpected error occurred"));
+    for (const line of formatCliError(err, commandArgs.includes("--json"))) {
+      writeStderr(line);
     }
     Deno.exit(1);
   }
+}
+
+/** Format a command failure without interpreting arbitrary tool error data. */
+export function formatCliError(err: unknown, jsonOutput = false): string[] {
+  if (!(err instanceof Error)) {
+    return [colors.red("An unexpected error occurred")];
+  }
+
+  const lines = [colors.red(`Error: ${err.message}`)];
+  if (
+    !jsonOutput &&
+    err instanceof ApiToolError &&
+    err.code === "COMPUTE_ADMISSION_DISABLED"
+  ) {
+    lines.push(`Code: ${err.code}`);
+    lines.push(`Hint: ${err.hint}`);
+  }
+  return lines;
 }
 
 type ToolArgs = Record<string, unknown>;
@@ -3416,4 +3432,4 @@ function assertInterfaceEntriesPresent(
 }
 
 // Run main
-main();
+if (import.meta.main) main();

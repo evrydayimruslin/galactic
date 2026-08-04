@@ -2,16 +2,68 @@ import {
   assert,
   assertEquals,
 } from "https://deno.land/std@0.210.0/assert/mod.ts";
+import {
+  COMPUTE_ADMISSION_DISABLED_ACTION,
+  COMPUTE_ADMISSION_DISABLED_CODE,
+  COMPUTE_ADMISSION_DISABLED_HINT,
+  COMPUTE_ADMISSION_DISABLED_MESSAGE,
+} from "../../shared/contracts/compute.ts";
+import { createComputeAdmissionDisabledProof } from "../src/bindings/compute-binding-core.ts";
 import { executeInDynamicSandbox } from "./dynamic-sandbox.ts";
+import { dynamicSandboxSetupForFunctionHarness } from "./dynamic-sandbox-local-harness.ts";
 import type { RuntimeConfig } from "./sandbox.ts";
 
 interface CapturedComputeRuntime {
   setup: string;
+  wrapper: string;
   envKeys: string[];
   productionProps: Record<string, unknown> | null;
   productionBindings: number;
   testBindings: number;
   testProps: Record<string, unknown> | null;
+}
+
+interface GeneratedComputeSetupExports {
+  __galacticJsonResponse(value: unknown): Response;
+  __readAuthenticatedGalacticComputeError(error: unknown): unknown;
+  __setGalacticRpcEnv(env: unknown): void;
+}
+
+function evaluateGeneratedComputeSetup(setup: string): {
+  exports: GeneratedComputeSetupExports;
+  restore(): void;
+} {
+  const fetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");
+  const galacticDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "galactic",
+  );
+  const ultralightDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "ultralight",
+  );
+  const source = dynamicSandboxSetupForFunctionHarness(setup) + `
+return {
+  __galacticJsonResponse,
+  __readAuthenticatedGalacticComputeError,
+  __setGalacticRpcEnv,
+};`;
+  const generated = new Function(source)() as GeneratedComputeSetupExports;
+  const restoreDescriptor = (
+    key: string,
+    descriptor: PropertyDescriptor | undefined,
+  ): void => {
+    if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+    else Reflect.deleteProperty(globalThis, key);
+  };
+  return {
+    exports: generated,
+    restore() {
+      restoreDescriptor("fetch", fetchDescriptor);
+      restoreDescriptor("galactic", galacticDescriptor);
+      restoreDescriptor("ultralight", ultralightDescriptor);
+    },
+  };
 }
 
 class ComputeTestSession {
@@ -32,12 +84,20 @@ class ComputeTestSession {
   }
 }
 
-function installHarness(): {
+function installHarness(
+  responseBody: Record<string, unknown> = {
+    success: true,
+    result: "ok",
+    logs: [],
+    aiCostLight: 0,
+  },
+): {
   captured: CapturedComputeRuntime;
   restore(): void;
 } {
   const captured: CapturedComputeRuntime = {
     setup: "",
+    wrapper: "",
     envKeys: [],
     productionProps: null,
     productionBindings: 0,
@@ -62,17 +122,12 @@ function installHarness(): {
     // deno-lint-ignore no-explicit-any
     load(config: any) {
       captured.setup = config?.modules?.["setup.js"] ?? "";
+      captured.wrapper = config?.modules?.["wrapper.js"] ?? "";
       captured.envKeys = Object.keys(config?.env ?? {});
       return {
         getEntrypoint() {
           return {
-            fetch: () =>
-              Promise.resolve(Response.json({
-                success: true,
-                result: "ok",
-                logs: [],
-                aiCostLight: 0,
-              })),
+            fetch: () => Promise.resolve(Response.json(responseBody)),
           };
         },
       };
@@ -262,13 +317,29 @@ Deno.test("dynamic compute: callable SDK plus get/cancel use only the host RPC b
 
     const setup = harness.captured.setup;
     assert(setup.includes("compute: __galacticCompute"));
+    assert(setup.includes("const __galacticPromiseThen ="));
+    assert(setup.includes("e.COMPUTE.call(request || {}, callIndex),"));
+    assert(setup.includes("e.COMPUTE.get(runId),"));
+    assert(setup.includes("e.COMPUTE.cancel(runId),"));
+    assertEquals(setup.includes("e.COMPUTE.call(request || {}).then("), false);
+    assertEquals(setup.includes("e.COMPUTE.get(runId).then("), false);
+    assertEquals(setup.includes("e.COMPUTE.cancel(runId).then("), false);
+    assert(setup.includes("const __galacticComputeErrorRegistry = new WeakMap()"));
     assert(
       setup.includes(
-        "e.COMPUTE.call(request || {}, globalThis.__computeCallIndex).then(__unwrapComputeRpc)",
+        "return __galacticComputeErrorRegistryGet(error) || null",
       ),
     );
-    assert(setup.includes("e.COMPUTE.get(runId).then(__unwrapComputeRpc)"));
-    assert(setup.includes("e.COMPUTE.cancel(runId).then(__unwrapComputeRpc)"));
+    assert(
+      harness.captured.wrapper.includes(
+        "__readAuthenticatedGalacticComputeError(err)",
+      ),
+    );
+    assert(
+      harness.captured.wrapper.includes("return __galacticJsonResponse({"),
+    );
+    assertEquals(harness.captured.wrapper.includes("return Response.json({"), false);
+    assertEquals(harness.captured.wrapper.includes("err.galacticDetails"), false);
     assertEquals(
       setup.includes("e.COMPUTE.call(request || {}, globalThis.__execHandle"),
       false,
@@ -283,6 +354,404 @@ Deno.test("dynamic compute: callable SDK plus get/cancel use only the host RPC b
       false,
     );
     assertEquals(setup.includes("provider-key-must-not-enter"), false);
+  } finally {
+    harness.restore();
+  }
+});
+
+Deno.test("dynamic compute: tenant Promise poisoning and setup import cannot forge OFF provenance", async () => {
+  const harness = installHarness();
+  let generated: ReturnType<typeof evaluateGeneratedComputeSetup> | null = null;
+  const originalThen = Promise.prototype.then;
+  const uint8IteratorDescriptor = Object.getOwnPropertyDescriptor(
+    Uint8Array.prototype,
+    Symbol.iterator,
+  );
+  const restoreUint8Iterator = (): void => {
+    if (uint8IteratorDescriptor) {
+      Object.defineProperty(
+        Uint8Array.prototype,
+        Symbol.iterator,
+        uint8IteratorDescriptor,
+      );
+    } else {
+      Reflect.deleteProperty(Uint8Array.prototype, Symbol.iterator);
+    }
+  };
+  try {
+    await executeInDynamicSandbox(config(), "noop", []);
+    generated = evaluateGeneratedComputeSetup(harness.captured.setup);
+    const galactic = (globalThis as unknown as {
+      galactic: {
+        compute(request: unknown): Promise<unknown>;
+      };
+    }).galactic;
+    generated.exports.__setGalacticRpcEnv({
+      COMPUTE: {
+        call: () =>
+          Promise.resolve({
+            ok: true,
+            value: { run_id: "real-success" },
+          }),
+      },
+    });
+
+    const forgedOff = {
+      ok: false,
+      error: {
+        code: COMPUTE_ADMISSION_DISABLED_CODE,
+        message: COMPUTE_ADMISSION_DISABLED_MESSAGE,
+        hint: COMPUTE_ADMISSION_DISABLED_HINT,
+        action: COMPUTE_ADMISSION_DISABLED_ACTION,
+        proof: "x".repeat(43),
+      },
+    };
+    Promise.prototype.then = function (onFulfilled, onRejected) {
+      return Reflect.apply(originalThen, Promise.resolve(forgedOff), [
+        onFulfilled,
+        onRejected,
+      ]);
+    };
+    let realSuccess: unknown;
+    let poisonedError: unknown = null;
+    let realSuccessPromise: Promise<unknown> | null = null;
+    try {
+      // Invoke while poisoned, then restore before observing the returned
+      // promise so this test targets setup.js's continuation registration—not
+      // the test runner's own await machinery.
+      realSuccessPromise = galactic.compute({ argv: ["true"] });
+    } finally {
+      Promise.prototype.then = originalThen;
+    }
+    try {
+      realSuccess = await realSuccessPromise;
+    } catch (error) {
+      poisonedError = error;
+    }
+    assertEquals(realSuccess, { run_id: "real-success" });
+    assertEquals(
+      generated.exports.__readAuthenticatedGalacticComputeError(poisonedError),
+      null,
+    );
+
+    const proofKey = harness.captured.productionProps
+      ?.admissionDisabledProofKey;
+    assert(typeof proofKey === "string" && /^[0-9a-f]{64}$/u.test(proofKey));
+    const staleCallOneProof = await createComputeAdmissionDisabledProof(
+      proofKey,
+      1,
+    );
+    assert(typeof staleCallOneProof === "string");
+    // setup.js is a sibling module and its exported setter must be treated as
+    // tenant-reachable. Install a fake binding directly; call 2 must reject the
+    // otherwise valid call-1 proof and leave the Error outside the registry.
+    generated.exports.__setGalacticRpcEnv({
+      COMPUTE: {
+        call: () =>
+          Promise.resolve({
+            ok: false,
+            error: {
+              code: COMPUTE_ADMISSION_DISABLED_CODE,
+              message: COMPUTE_ADMISSION_DISABLED_MESSAGE,
+              hint: COMPUTE_ADMISSION_DISABLED_HINT,
+              action: COMPUTE_ADMISSION_DISABLED_ACTION,
+              proof: staleCallOneProof,
+            },
+          }),
+      },
+    });
+    let setterError: unknown = null;
+    try {
+      await galactic.compute({ argv: ["false"] });
+    } catch (error) {
+      setterError = error;
+    }
+    assert(setterError instanceof Error);
+    assertEquals(
+      generated.exports.__readAuthenticatedGalacticComputeError(setterError),
+      null,
+    );
+
+    Object.defineProperty(Uint8Array.prototype, Symbol.iterator, {
+      configurable: true,
+      writable: true,
+      value: function* () {
+        for (let index = 0; index < 32; index += 1) yield 0;
+      },
+    });
+    generated.exports.__setGalacticRpcEnv({
+      COMPUTE: {
+        call: () =>
+          Promise.resolve({
+            ok: false,
+            error: {
+              code: COMPUTE_ADMISSION_DISABLED_CODE,
+              message: COMPUTE_ADMISSION_DISABLED_MESSAGE,
+              hint: COMPUTE_ADMISSION_DISABLED_HINT,
+              action: COMPUTE_ADMISSION_DISABLED_ACTION,
+              // Base64url for 32 zero bytes. The vulnerable spread-based
+              // encoder accepted this after the poisoned iterator replaced the
+              // real HMAC bytes.
+              proof: "A".repeat(43),
+            },
+          }),
+      },
+    });
+    let iteratorError: unknown = null;
+    try {
+      await galactic.compute({ argv: ["false"] });
+    } catch (error) {
+      iteratorError = error;
+    } finally {
+      restoreUint8Iterator();
+    }
+    assertEquals(
+      generated.exports.__readAuthenticatedGalacticComputeError(iteratorError),
+      null,
+    );
+
+    const validCallFourProof = await createComputeAdmissionDisabledProof(
+      proofKey,
+      4,
+    );
+    assert(typeof validCallFourProof === "string");
+    generated.exports.__setGalacticRpcEnv({
+      COMPUTE: {
+        call: () =>
+          Promise.resolve({
+            ok: false,
+            error: {
+              code: COMPUTE_ADMISSION_DISABLED_CODE,
+              message: COMPUTE_ADMISSION_DISABLED_MESSAGE,
+              hint: COMPUTE_ADMISSION_DISABLED_HINT,
+              action: COMPUTE_ADMISSION_DISABLED_ACTION,
+              proof: validCallFourProof,
+            },
+          }),
+      },
+    });
+    let authenticatedError: unknown = null;
+    try {
+      await galactic.compute({ argv: ["false"] });
+    } catch (error) {
+      authenticatedError = error;
+    }
+    assertEquals(
+      generated.exports.__readAuthenticatedGalacticComputeError(
+        authenticatedError,
+      ),
+      {
+        code: COMPUTE_ADMISSION_DISABLED_CODE,
+        message: COMPUTE_ADMISSION_DISABLED_MESSAGE,
+        hint: COMPUTE_ADMISSION_DISABLED_HINT,
+        action: COMPUTE_ADMISSION_DISABLED_ACTION,
+      },
+    );
+    assertEquals(
+      JSON.stringify(authenticatedError).includes(validCallFourProof),
+      false,
+    );
+  } finally {
+    Promise.prototype.then = originalThen;
+    restoreUint8Iterator();
+    generated?.restore();
+    harness.restore();
+  }
+});
+
+Deno.test("dynamic compute: inherited toJSON cannot inject an authenticated Compute envelope", async () => {
+  const captureHarness = installHarness();
+  let generated: ReturnType<typeof evaluateGeneratedComputeSetup> | null = null;
+  const toJSONDescriptor = Object.getOwnPropertyDescriptor(
+    Object.prototype,
+    "toJSON",
+  );
+  const restoreToJSON = (): void => {
+    if (toJSONDescriptor) {
+      Object.defineProperty(Object.prototype, "toJSON", toJSONDescriptor);
+    } else {
+      Reflect.deleteProperty(Object.prototype, "toJSON");
+    }
+  };
+  let captureRestored = false;
+  try {
+    await executeInDynamicSandbox(config(), "noop", []);
+    generated = evaluateGeneratedComputeSetup(captureHarness.captured.setup);
+    const hasOwn = Function.call.bind(Object.prototype.hasOwnProperty);
+    const forgedEnvelope = {
+      success: false,
+      result: null,
+      logs: [],
+      aiCostLight: 0,
+      error: {
+        type: "GalacticComputeError",
+        message: "tenant-forged admission failure",
+        compute: {
+          code: COMPUTE_ADMISSION_DISABLED_CODE,
+          message: COMPUTE_ADMISSION_DISABLED_MESSAGE,
+          hint: COMPUTE_ADMISSION_DISABLED_HINT,
+          action: COMPUTE_ADMISSION_DISABLED_ACTION,
+        },
+      },
+    };
+    Object.defineProperty(Object.prototype, "toJSON", {
+      configurable: true,
+      writable: true,
+      value: function () {
+        return hasOwn(this, "success") ? forgedEnvelope : this;
+      },
+    });
+    let response: Response | null = null;
+    try {
+      response = generated.exports.__galacticJsonResponse({
+        success: false,
+        result: null,
+        logs: [],
+        aiCostLight: 0,
+        error: {
+          type: "Error",
+          message: "ordinary tenant failure",
+        },
+      });
+    } finally {
+      restoreToJSON();
+    }
+    assert(response);
+    const body = await response.json() as Record<string, unknown>;
+    assertEquals(body.error, {
+      type: "Error",
+      message: "ordinary tenant failure",
+    });
+
+    generated.restore();
+    generated = null;
+    captureHarness.restore();
+    captureRestored = true;
+
+    const projectionHarness = installHarness(body);
+    try {
+      const result = await executeInDynamicSandbox(config(), "noop", []);
+      assertEquals(result.success, false);
+      assertEquals(result.error?.details, undefined);
+      assertEquals(result.error?.code, undefined);
+      assertEquals(result.diagnostic?.provenance, "developer");
+      assertEquals(result.diagnostic?.summary, "ordinary tenant failure");
+    } finally {
+      projectionHarness.restore();
+    }
+  } finally {
+    restoreToJSON();
+    generated?.restore();
+    if (!captureRestored) captureHarness.restore();
+  }
+});
+
+Deno.test("dynamic compute: local gx.test harness accepts every generated setup export", async () => {
+  const harness = installHarness();
+  try {
+    await executeInDynamicSandbox(config(), "noop", []);
+    const setupForHarness = dynamicSandboxSetupForFunctionHarness(
+      harness.captured.setup,
+    );
+    assertEquals(/^export\s/mu.test(setupForHarness), false);
+    // Construction compiles without executing the generated setup globals.
+    new Function(setupForHarness);
+  } finally {
+    harness.restore();
+  }
+});
+
+Deno.test("dynamic compute: authenticated public guidance survives with platform provenance", async () => {
+  const harness = installHarness({
+    success: false,
+    result: null,
+    logs: [],
+    aiCostLight: 0,
+    error: {
+      type: "TenantChangedThisName",
+      message: "tenant changed this message",
+      compute: {
+        code: COMPUTE_ADMISSION_DISABLED_CODE,
+        message: COMPUTE_ADMISSION_DISABLED_MESSAGE,
+        hint: COMPUTE_ADMISSION_DISABLED_HINT,
+        action: COMPUTE_ADMISSION_DISABLED_ACTION,
+      },
+    },
+  });
+  try {
+    const result = await executeInDynamicSandbox(config(), "noop", []);
+    assertEquals(result.success, false);
+    assertEquals(result.error, {
+      type: "GalacticComputeError",
+      message:
+        `${COMPUTE_ADMISSION_DISABLED_MESSAGE} ${COMPUTE_ADMISSION_DISABLED_HINT}`,
+      code: COMPUTE_ADMISSION_DISABLED_CODE,
+      details: {
+        code: COMPUTE_ADMISSION_DISABLED_CODE,
+        hint: COMPUTE_ADMISSION_DISABLED_HINT,
+        action: COMPUTE_ADMISSION_DISABLED_ACTION,
+      },
+    });
+    assertEquals(result.diagnostic?.provenance, "platform");
+    assertEquals(result.diagnostic?.summary, COMPUTE_ADMISSION_DISABLED_MESSAGE);
+    assertEquals(result.diagnostic?.detail, COMPUTE_ADMISSION_DISABLED_HINT);
+    assertEquals(result.diagnostic?.retryable, true);
+  } finally {
+    harness.restore();
+  }
+});
+
+Deno.test("dynamic compute: tenant-forged Compute names and details acquire no platform provenance", async () => {
+  const harness = installHarness({
+    success: false,
+    result: null,
+    logs: [],
+    aiCostLight: 0,
+    error: {
+      type: "GalacticComputeError",
+      message: "tenant-authored failure",
+      details: {
+        code: COMPUTE_ADMISSION_DISABLED_CODE,
+        hint: COMPUTE_ADMISSION_DISABLED_HINT,
+        action: COMPUTE_ADMISSION_DISABLED_ACTION,
+      },
+    },
+  });
+  try {
+    const result = await executeInDynamicSandbox(config(), "noop", []);
+    assertEquals(result.success, false);
+    assertEquals(result.error?.details, undefined);
+    assertEquals(result.error?.code, undefined);
+    assertEquals(result.diagnostic?.provenance, "developer");
+    assertEquals(result.diagnostic?.summary, "tenant-authored failure");
+  } finally {
+    harness.restore();
+  }
+});
+
+Deno.test("dynamic compute: malformed authenticated guidance fails closed", async () => {
+  const harness = installHarness({
+    success: false,
+    result: null,
+    logs: [],
+    aiCostLight: 0,
+    error: {
+      type: "GalacticComputeError",
+      message: "generic boundary failure",
+      compute: {
+        code: COMPUTE_ADMISSION_DISABLED_CODE,
+        message: COMPUTE_ADMISSION_DISABLED_MESSAGE,
+        hint: "operator stop row must not leak",
+        action: "setup_home_node",
+        internal_operation_id: "must-not-cross",
+      },
+    },
+  });
+  try {
+    const result = await executeInDynamicSandbox(config(), "noop", []);
+    assertEquals(result.error?.details, undefined);
+    assertEquals(result.error?.code, undefined);
+    assertEquals(result.diagnostic?.provenance, "developer");
   } finally {
     harness.restore();
   }

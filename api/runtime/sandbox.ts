@@ -8,6 +8,7 @@ import type {
 } from "../../shared/types/index.ts";
 import { formatLight } from "../../shared/types/index.ts";
 import type { AIRequest, AIResponse } from "../../shared/contracts/ai.ts";
+import type { ComputePublicErrorDetails } from "../../shared/contracts/compute.ts";
 import type { ResolvedCredential } from "../../shared/contracts/env.ts";
 import type { LaunchOperatorRunDiagnostic } from "../../shared/contracts/launch.ts";
 import type { BillingConfig } from "../services/billing-config.ts";
@@ -322,6 +323,8 @@ export interface ExecutionResult {
     message: string;
     code?: string;
     stack?: string;
+    /** Authenticated, closed Compute guidance from the parent RPC boundary. */
+    details?: ComputePublicErrorDetails;
   };
   /**
    * Host-normalized, secret-safe operator diagnosis. Tenant error names and

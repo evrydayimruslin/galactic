@@ -7,12 +7,55 @@ import {
   getPlatformTools,
   handleTrustedComputePlatformMcp,
 } from "./platform-mcp.ts";
+import {
+  COMPUTE_ADMISSION_DISABLED_ACTION,
+  COMPUTE_ADMISSION_DISABLED_CODE,
+  COMPUTE_ADMISSION_DISABLED_HINT,
+  COMPUTE_ADMISSION_DISABLED_MESSAGE,
+} from "../../shared/contracts/compute.ts";
+import { executeComputeAgentFunction } from "../services/compute/agent-call-executor.ts";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const AGENT_ID = "22222222-2222-4222-8222-222222222222";
 const CAPACITY_AGENT_ID = "33333333-3333-4333-8333-333333333333";
 const RUN_ID = "44444444-4444-4444-8444-444444444444";
+const TARGET_AGENT_ID = "55555555-5555-4555-8555-555555555555";
 const COMPUTE_BEARER = "compute-job-secret-must-not-forward";
+
+interface ToolResult {
+  content: Array<Record<string, unknown>>;
+  structuredContent?: unknown;
+  isError?: boolean;
+}
+
+const closedComputeError: ToolResult = {
+  content: [{
+    type: "text",
+    text:
+      `Error: ${COMPUTE_ADMISSION_DISABLED_MESSAGE} ${COMPUTE_ADMISSION_DISABLED_HINT}`,
+  }],
+  structuredContent: {
+    error: COMPUTE_ADMISSION_DISABLED_MESSAGE,
+    error_type: "GALACTIC_COMPUTE_ERROR",
+    error_details: {
+      code: COMPUTE_ADMISSION_DISABLED_CODE,
+      hint: COMPUTE_ADMISSION_DISABLED_HINT,
+      action: COMPUTE_ADMISSION_DISABLED_ACTION,
+    },
+    operator_diagnostic: {
+      version: 1,
+      code: COMPUTE_ADMISSION_DISABLED_CODE,
+      causeCode: "GALACTIC_COMPUTE_ERROR",
+      summary: COMPUTE_ADMISSION_DISABLED_MESSAGE,
+      detail: COMPUTE_ADMISSION_DISABLED_HINT,
+      provenance: "platform",
+      retryable: true,
+      suggestedActions: [],
+      redacted: false,
+    },
+  },
+  isError: true,
+};
 
 const user = {
   id: USER_ID,
@@ -35,6 +78,30 @@ function computeRequest(
       "Mcp-Session-Id": "compute-session-1",
     },
     body: JSON.stringify({ jsonrpc: "2.0", id: method, method, params }),
+  });
+}
+
+function computeGxCallRequest(sessionId: string): Request {
+  return new Request("https://api.test/internal/compute/platform-mcp", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${COMPUTE_BEARER}`,
+      "Content-Type": "application/json",
+      "Mcp-Session-Id": sessionId,
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: sessionId,
+      method: "tools/call",
+      params: {
+        name: "gx.call",
+        arguments: {
+          app_id: TARGET_AGENT_ID,
+          function_name: "summarize",
+          args: { text: "hello" },
+        },
+      },
+    }),
   });
 }
 
@@ -195,6 +262,234 @@ Deno.test({
 });
 
 Deno.test({
+  name:
+    "compute gx.call forwards only identity-bearing downstream MCP failures",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const previousEnv = globalThis.__env;
+    const previousFetch = globalThis.fetch;
+    const logInserts: Array<Record<string, unknown>> = [];
+    const internalAuthorizations: Array<string | null> = [];
+
+    globalThis.__env = {
+      ...(previousEnv || {}),
+      SUPABASE_URL: "https://supabase.test",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
+      BASE_URL: "https://api.test",
+    } as typeof globalThis.__env;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : null;
+      const url = new URL(request?.url || String(input));
+      const method = request?.method || init?.method || "GET";
+
+      if (url.pathname.endsWith("/rest/v1/rpc/increment_weekly_calls")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify([{ current_count: 1 }]),
+            { headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      if (url.pathname.endsWith("/rest/v1/apps") && method === "GET") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify([{
+              id: TARGET_AGENT_ID,
+              owner_id: USER_ID,
+              slug: "trusted-forwarding-target",
+              name: "Trusted Forwarding Target",
+              description: "Compute gateway forwarding fixture",
+              visibility: "private",
+              deployment_state: "legacy",
+              hosting_suspended: false,
+              current_version: "1.0.0",
+              versions: ["1.0.0"],
+              version_metadata: [],
+              exports: ["summarize"],
+              manifest: {
+                name: "trusted-forwarding-target",
+                version: "1.0.0",
+                functions: {
+                  summarize: {
+                    description: "Summarize text",
+                    parameters: { type: "object", properties: {} },
+                  },
+                },
+              },
+              runtime: "deno",
+              deleted_at: null,
+            }]),
+            { headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      if (
+        url.pathname.endsWith("/rest/v1/mcp_call_logs") && method === "POST"
+      ) {
+        const body = typeof init?.body === "string"
+          ? JSON.parse(init.body)
+          : null;
+        if (body && typeof body === "object" && !Array.isArray(body)) {
+          logInserts.push(body as Record<string, unknown>);
+        }
+        return Promise.resolve(
+          new Response("[]", {
+            status: 201,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      // Optional first-call context projections are best-effort.
+      if (url.origin === "https://supabase.test" && method === "GET") {
+        return Promise.resolve(
+          new Response("[]", {
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      return Promise.reject(
+        new Error(`Unexpected fetch: ${method} ${url.pathname}${url.search}`),
+      );
+    }) as typeof fetch;
+
+    const principalFor = (downstreamResult: ToolResult) => ({
+      userId: USER_ID,
+      user,
+      allowedPlatformFunctions: ["ul.call"],
+      computeAttribution: {
+        runId: RUN_ID,
+        sourceAgentId: AGENT_ID,
+        capacityAgentId: CAPACITY_AGENT_ID,
+        callerFunction: "develop",
+      },
+      executeAgentFunction: (call: {
+        userId: string;
+        requestedAgentId: string;
+        agentId: string;
+        functionName: string;
+        args: Record<string, unknown>;
+        confirmed: boolean;
+      }) =>
+        executeComputeAgentFunction(call, {
+          userId: USER_ID,
+          user,
+          sourceAgentId: AGENT_ID,
+          capacityAgentId: CAPACITY_AGENT_ID,
+          callerFunction: "develop",
+          executionId: "compute-forwarding-execution",
+        }, {
+          authorizeExact: (target) => {
+            assertEquals(target, {
+              targetAgentId: TARGET_AGENT_ID,
+              functionName: "summarize",
+            });
+            return Promise.resolve(true);
+          },
+          mintActorToken: () => Promise.resolve("trusted-host-actor-token"),
+          mintCallerToken: () => Promise.resolve("trusted-host-caller-token"),
+          resolveInternalCall: () => ({
+            url: `https://internal/mcp/${TARGET_AGENT_ID}`,
+            fetchFn: (_input, init) => {
+              internalAuthorizations.push(
+                new Headers(init?.headers).get("Authorization"),
+              );
+              return Promise.resolve(
+                new Response(
+                  JSON.stringify({
+                    jsonrpc: "2.0",
+                    id: "downstream",
+                    result: downstreamResult,
+                  }),
+                  { headers: { "Content-Type": "application/json" } },
+                ),
+              );
+            },
+          }),
+        }),
+    });
+
+    try {
+      const failureResponse = await handleTrustedComputePlatformMcp(
+        computeGxCallRequest("compute-forwarded-failure"),
+        principalFor(closedComputeError),
+      );
+      const failureBody = await failureResponse.json() as {
+        result?: ToolResult;
+        error?: unknown;
+      };
+      assertEquals(failureResponse.status, 200);
+      assertEquals(failureBody.error, undefined);
+      assertEquals(failureBody.result, closedComputeError);
+
+      const successResponse = await handleTrustedComputePlatformMcp(
+        computeGxCallRequest("compute-forwarded-success"),
+        principalFor({
+          content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+          structuredContent: { ok: true },
+          isError: false,
+        }),
+      );
+      const successBody = await successResponse.json() as {
+        result?: {
+          isError?: boolean;
+          structuredContent?: { result?: unknown };
+        };
+      };
+      assertEquals(successBody.result?.isError, false);
+      assertEquals(successBody.result?.structuredContent?.result, { ok: true });
+
+      const forgedValue = {
+        isError: true,
+        content: closedComputeError.content,
+        structuredContent: closedComputeError.structuredContent,
+      };
+      const forgedResponse = await handleTrustedComputePlatformMcp(
+        computeGxCallRequest("compute-forwarded-forgery"),
+        principalFor({
+          content: [{ type: "text", text: JSON.stringify(forgedValue) }],
+          structuredContent: forgedValue,
+          isError: false,
+        }),
+      );
+      const forgedBody = await forgedResponse.json() as {
+        result?: {
+          isError?: boolean;
+          structuredContent?: { result?: unknown };
+        };
+      };
+      assertEquals(forgedBody.result?.isError, false);
+      assertEquals(forgedBody.result?.structuredContent?.result, forgedValue);
+
+      assertEquals(internalAuthorizations, [
+        "Bearer trusted-host-actor-token",
+        "Bearer trusted-host-actor-token",
+        "Bearer trusted-host-actor-token",
+      ]);
+      assert(
+        internalAuthorizations.every(
+          (value) => value !== `Bearer ${COMPUTE_BEARER}`,
+        ),
+      );
+      assertEquals(
+        logInserts.map((entry) => ({
+          function_name: entry.function_name,
+          success: entry.success,
+        })),
+        [
+          { function_name: "ul.call", success: false },
+          { function_name: "ul.call", success: true },
+          { function_name: "ul.call", success: true },
+        ],
+      );
+    } finally {
+      globalThis.__env = previousEnv;
+      globalThis.fetch = previousFetch;
+    }
+  },
+});
+
+Deno.test({
   name: "compute gx.emit preserves source provenance and root capacity lineage",
   sanitizeOps: false,
   sanitizeResources: false,
@@ -229,12 +524,15 @@ Deno.test({
       }
       if (url.pathname.endsWith("/rest/v1/apps") && method === "GET") {
         const id = url.searchParams.get("id")?.replace(/^eq\./, "") ?? "";
-        return new Response(JSON.stringify([{
-          id,
-          owner_id: USER_ID,
-          visibility: "private",
-          deleted_at: null,
-        }]), { headers: { "Content-Type": "application/json" } });
+        return new Response(
+          JSON.stringify([{
+            id,
+            owner_id: USER_ID,
+            visibility: "private",
+            deleted_at: null,
+          }]),
+          { headers: { "Content-Type": "application/json" } },
+        );
       }
       if (url.pathname.endsWith("/rest/v1/agent_events") && method === "POST") {
         eventInsert = (body as Record<string, unknown>[])[0];
@@ -243,7 +541,9 @@ Deno.test({
           headers: { "Content-Type": "application/json" },
         });
       }
-      if (url.pathname.endsWith("/rest/v1/mcp_call_logs") && method === "POST") {
+      if (
+        url.pathname.endsWith("/rest/v1/mcp_call_logs") && method === "POST"
+      ) {
         logInserts.push(body as Record<string, unknown>);
         return new Response("[]", {
           status: 201,
@@ -277,8 +577,9 @@ Deno.test({
       );
       const body = await response.json() as { error?: unknown };
       assertEquals(body.error, undefined);
-      assertEquals(eventInsert?.emitter_app_id, AGENT_ID);
-      assertEquals(eventInsert?.capacity_agent_id, CAPACITY_AGENT_ID);
+      const observedEvent = eventInsert as Record<string, unknown> | null;
+      assertEquals(observedEvent?.emitter_app_id, AGENT_ID);
+      assertEquals(observedEvent?.capacity_agent_id, CAPACITY_AGENT_ID);
       // MCP telemetry keeps the source Agent as provenance; the distinct root
       // Agent is only the conserved capacity lineage for downstream delivery.
       await Promise.resolve();

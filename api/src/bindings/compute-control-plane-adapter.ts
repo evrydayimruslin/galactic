@@ -1,4 +1,5 @@
 import type {
+  ComputePublicErrorAction,
   ComputeRequest,
   ComputeResult,
   ComputeRun,
@@ -50,10 +51,21 @@ export interface ComputeControlPlaneAdapter {
  */
 export class PublicComputeControlPlaneError extends Error {
   readonly code: string;
+  readonly hint: string | undefined;
+  readonly action: ComputePublicErrorAction | undefined;
 
-  constructor(code: string, message: string) {
+  constructor(
+    code: string,
+    message: string,
+    guidance: {
+      hint?: string;
+      action?: ComputePublicErrorAction;
+    } = {},
+  ) {
     super(message);
     this.name = "PublicComputeControlPlaneError";
     this.code = code;
+    this.hint = guidance.hint;
+    this.action = guidance.action;
   }
 }

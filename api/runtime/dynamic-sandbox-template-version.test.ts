@@ -18,7 +18,7 @@ import type { RuntimeConfig } from "./sandbox.ts";
 
 // Bump this in lockstep with GALACTIC_SANDBOX_TEMPLATE_VERSION whenever the
 // generated setup.js / wrapper.js template changes.
-const PINNED_TEMPLATE_VERSION = "2026-08-03.effect-witness.v28";
+const PINNED_TEMPLATE_VERSION = "2026-08-04.compute-error-proof.v30";
 
 // Stable separator between the two captured modules for the snapshot hash.
 const SEP = "\n----MODULE-BOUNDARY----\n";
@@ -295,7 +295,7 @@ Deno.test("sandbox template: snapshot pinned -- a template change must bump the 
     // PINNED_TEMPLATE_VERSION here, then (2) update TEMPLATE_HASH below. This
     // forces both the reuse key and qualification runtime revision to rotate.
     const TEMPLATE_HASH =
-      "d1b0938349dfdf8f54fe6eb8f86834a6e9fb311047d0c05f376a5a8003bc600a";
+      "937948abd8c8bcdb7423f665455c554206e41518b0c67a977cedd5c76df637f2";
     assertEquals(
       PINNED_TEMPLATE_VERSION,
       GALACTIC_SANDBOX_TEMPLATE_VERSION,

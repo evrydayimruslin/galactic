@@ -8,8 +8,16 @@ import type {
   ComputeRun,
 } from "../../../shared/contracts/compute.ts";
 import {
+  COMPUTE_ADMISSION_DISABLED_ACTION,
+  COMPUTE_ADMISSION_DISABLED_CODE,
+  COMPUTE_ADMISSION_DISABLED_HINT,
+  COMPUTE_ADMISSION_DISABLED_MESSAGE,
+  normalizeComputePublicError,
+} from "../../../shared/contracts/compute.ts";
+import {
   captureComputeBindingRpc,
   type ComputeBindingProps,
+  createComputeAdmissionDisabledProof,
   createComputeBindingOperations,
   deriveComputeIdempotencyKey,
   markComputeBindingCapacity,
@@ -30,6 +38,7 @@ const PROPS: ComputeBindingProps = {
   billingMode: "wallet",
   capacityAgentId: "00000000-0000-4000-8000-000000000002",
   capacityReceiptId: null,
+  admissionDisabledProofKey: "a".repeat(64),
 };
 
 function publicRun(status: ComputeRun["status"] = "completed"): ComputeRun {
@@ -241,6 +250,7 @@ Deno.test("compute binding: malformed, expired, and cross-attributed props fail 
   const invalidProps: ComputeBindingProps[] = [
     { ...PROPS, callerFunction: "" },
     { ...PROPS, executionId: "not-a-uuid" },
+    { ...PROPS, admissionDisabledProofKey: "not-a-proof-key" },
     { ...PROPS, executionDeadlineAtMs: Date.now() - 1 },
     {
       ...PROPS,
@@ -324,6 +334,112 @@ Deno.test("compute binding: RPC envelope preserves public codes and redacts priv
     },
   });
   assertEquals(JSON.stringify(privateResult).includes("private-value"), false);
+});
+
+Deno.test("compute binding: admission-disabled guidance crosses as one exact closed envelope", async () => {
+  const result = await captureComputeBindingRpc(() =>
+    Promise.reject(new PublicComputeControlPlaneError(
+      COMPUTE_ADMISSION_DISABLED_CODE,
+      COMPUTE_ADMISSION_DISABLED_MESSAGE,
+      {
+        hint: COMPUTE_ADMISSION_DISABLED_HINT,
+        action: COMPUTE_ADMISSION_DISABLED_ACTION,
+      },
+    ))
+  );
+  assertEquals(result, {
+    ok: false,
+    error: {
+      code: COMPUTE_ADMISSION_DISABLED_CODE,
+      message: COMPUTE_ADMISSION_DISABLED_MESSAGE,
+      hint: COMPUTE_ADMISSION_DISABLED_HINT,
+      action: COMPUTE_ADMISSION_DISABLED_ACTION,
+    },
+  });
+});
+
+Deno.test("compute binding: OFF proof is exact, per-call, and never added to generic errors", async () => {
+  const proofKey = "b".repeat(64);
+  const disabledError = () =>
+    Promise.reject(new PublicComputeControlPlaneError(
+      COMPUTE_ADMISSION_DISABLED_CODE,
+      COMPUTE_ADMISSION_DISABLED_MESSAGE,
+      {
+        hint: COMPUTE_ADMISSION_DISABLED_HINT,
+        action: COMPUTE_ADMISSION_DISABLED_ACTION,
+      },
+    ));
+  const first = await captureComputeBindingRpc(disabledError, {
+    admissionDisabledProofKey: proofKey,
+    admissionCallIndex: 1,
+  });
+  const second = await captureComputeBindingRpc(disabledError, {
+    admissionDisabledProofKey: proofKey,
+    admissionCallIndex: 2,
+  });
+  const firstProof = first.ok ? null : first.error.proof;
+  const secondProof = second.ok ? null : second.error.proof;
+  assertEquals(
+    firstProof,
+    await createComputeAdmissionDisabledProof(proofKey, 1),
+  );
+  assertEquals(
+    secondProof,
+    await createComputeAdmissionDisabledProof(proofKey, 2),
+  );
+  assert(typeof firstProof === "string" && firstProof.length === 43);
+  assert(firstProof !== secondProof);
+  assertEquals(JSON.stringify(first).includes(proofKey), false);
+
+  const generic = await captureComputeBindingRpc(() =>
+    Promise.reject(new PublicComputeControlPlaneError(
+      "COMPUTE_PERMISSION_DENIED",
+      "Compute permission was denied.",
+    )), {
+    admissionDisabledProofKey: proofKey,
+    admissionCallIndex: 1,
+  });
+  assertEquals(generic.ok ? undefined : generic.error.proof, undefined);
+});
+
+Deno.test("compute binding: admission guidance is rejected unless every literal is exact", async () => {
+  for (
+    const guidance of [
+      {},
+      {
+        hint: "operator stop row 123 is active",
+        action: COMPUTE_ADMISSION_DISABLED_ACTION,
+      },
+      {
+        hint: COMPUTE_ADMISSION_DISABLED_HINT,
+        action: "setup_home_node",
+      },
+    ]
+  ) {
+    const result = await captureComputeBindingRpc(() =>
+      Promise.reject(new PublicComputeControlPlaneError(
+        COMPUTE_ADMISSION_DISABLED_CODE,
+        COMPUTE_ADMISSION_DISABLED_MESSAGE,
+        guidance as ConstructorParameters<
+          typeof PublicComputeControlPlaneError
+        >[2],
+      ))
+    );
+    assertEquals(result, {
+      ok: false,
+      error: {
+        code: "COMPUTE_CONTROL_PLANE_UNAVAILABLE",
+        message: "Galactic Compute control plane is unavailable.",
+      },
+    });
+  }
+  assertEquals(normalizeComputePublicError({
+    code: COMPUTE_ADMISSION_DISABLED_CODE,
+    message: COMPUTE_ADMISSION_DISABLED_MESSAGE,
+    hint: COMPUTE_ADMISSION_DISABLED_HINT,
+    action: COMPUTE_ADMISSION_DISABLED_ACTION,
+    internal_operation_id: "must-not-cross",
+  }), null);
 });
 
 Deno.test("compute binding: invalid public errors are downgraded to the generic envelope", async () => {

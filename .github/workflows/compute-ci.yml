@@ -81,6 +81,7 @@ jobs:
             --no-config \
             --allow-env --allow-read --allow-write --allow-net \
             --lock=deno.lock --frozen \
+            tests/api-tool-error.test.ts \
             tests/compute-job-mode.test.ts
           popd >/dev/null
 

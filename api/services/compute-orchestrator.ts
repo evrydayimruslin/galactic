@@ -2,6 +2,12 @@ import type {
   ComputeResult as PublicComputeResult,
   ComputeRun as PublicComputeRun,
 } from "../../shared/contracts/compute.ts";
+import {
+  COMPUTE_ADMISSION_DISABLED_ACTION,
+  COMPUTE_ADMISSION_DISABLED_CODE,
+  COMPUTE_ADMISSION_DISABLED_HINT,
+  COMPUTE_ADMISSION_DISABLED_MESSAGE,
+} from "../../shared/contracts/compute.ts";
 import type { App } from "../../shared/types/index.ts";
 import type { Env } from "../lib/env.ts";
 import { getEnv } from "../lib/env.ts";
@@ -12,7 +18,10 @@ import type {
 } from "../src/bindings/compute-control-plane-adapter.ts";
 import { PublicComputeControlPlaneError } from "../src/bindings/compute-control-plane-adapter.ts";
 import { createAppsService } from "./apps.ts";
-import { requireComputeAdmissionConfig } from "./compute/config.ts";
+import {
+  computeAdmissionFlagState,
+  requireComputeAdmissionConfig,
+} from "./compute/config.ts";
 import {
   ComputeManifestError,
   resolveLiveComputeManifestAuthority,
@@ -58,6 +67,7 @@ const COMPUTE_ADMISSION_DIAGNOSTIC_CODES = new Set([
   "COMPUTE_DATABASE_ERROR",
   "COMPUTE_DATABASE_INVALID_RESPONSE",
   "COMPUTE_DATABASE_UNAVAILABLE",
+  "COMPUTE_EMERGENCY_STOP_ACTIVE",
   "COMPUTE_INVALID_ADMISSION",
   "COMPUTE_INVALID_AUTHORITIES",
   "COMPUTE_INVALID_AUTHORITY",
@@ -116,12 +126,26 @@ function publicError(code: string, message: string): PublicComputeControlPlaneEr
   return new PublicComputeControlPlaneError(code, message);
 }
 
+function admissionDisabledPublicError(): PublicComputeControlPlaneError {
+  return new PublicComputeControlPlaneError(
+    COMPUTE_ADMISSION_DISABLED_CODE,
+    COMPUTE_ADMISSION_DISABLED_MESSAGE,
+    {
+      hint: COMPUTE_ADMISSION_DISABLED_HINT,
+      action: COMPUTE_ADMISSION_DISABLED_ACTION,
+    },
+  );
+}
+
 function expectedPublicError(error: unknown): PublicComputeControlPlaneError | null {
   if (error instanceof PublicComputeControlPlaneError) return error;
   if (error instanceof ComputePublicRequestError || error instanceof ComputeManifestError) {
     return publicError(error.code, error.message);
   }
   if (error instanceof ComputeControlPlaneError) {
+    if (error.code === "COMPUTE_EMERGENCY_STOP_ACTIVE") {
+      return admissionDisabledPublicError();
+    }
     const safe = new Set([
       "COMPUTE_POLICY_NOT_ENABLED",
       "COMPUTE_POLICY_LIMIT_EXCEEDED",
@@ -285,6 +309,12 @@ export function createComputeControlPlaneAdapter(
       let stage: ComputeAdmissionStage = "runtime_config";
       let admissionCompleted = false;
       try {
+        // Only the canonical OFF value is safe to explain publicly. Missing,
+        // malformed, or partially deployed configuration stays an opaque
+        // control-plane failure at the binding boundary.
+        if (computeAdmissionFlagState(deps.env) === "disabled") {
+          throw admissionDisabledPublicError();
+        }
         const config = requireComputeAdmissionConfig(deps.env);
         stage = "runtime_identity";
         const runtime = await deps.env.COMPUTE_PLANE!.runtimeIdentity();

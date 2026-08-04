@@ -5,7 +5,6 @@
  */
 
 import type { Config } from "./config.ts";
-import { colors } from "./colors.ts";
 
 interface JsonRpcRequest {
   jsonrpc: "2.0";
@@ -27,6 +26,87 @@ interface JsonRpcResponse {
     message: string;
     data?: unknown;
   };
+}
+
+// Keep these package-local: the CLI ships as an independent npm package and
+// cannot import ../shared. A repo test pins them to the canonical contract.
+const COMPUTE_ADMISSION_DISABLED = "COMPUTE_ADMISSION_DISABLED" as const;
+const COMPUTE_ADMISSION_DISABLED_MESSAGE =
+  "Galactic Compute is not accepting new jobs right now." as const;
+const COMPUTE_ADMISSION_DISABLED_HINT =
+  "Try again later. This request did not start a Compute job." as const;
+const RETRY_LATER = "retry_later" as const;
+const API_TOOL_ERROR_DETAIL_KEYS = new Set(["code", "hint", "action"]);
+
+export interface ApiToolErrorDetails {
+  code: typeof COMPUTE_ADMISSION_DISABLED;
+  hint: string;
+  action: typeof RETRY_LATER;
+}
+
+/**
+ * A deliberately small, authenticated platform-error projection.
+ *
+ * MCP tool results are untrusted input at this boundary. Only the reviewed
+ * admission-disabled envelope is promoted to a structured CLI error; every
+ * other tool failure retains the CLI's generic Error behavior.
+ */
+export class ApiToolError extends Error {
+  readonly code: ApiToolErrorDetails["code"];
+  readonly hint: string;
+  readonly action: ApiToolErrorDetails["action"];
+
+  constructor(message: string, details: ApiToolErrorDetails) {
+    super(message);
+    this.name = "ApiToolError";
+    this.code = details.code;
+    this.hint = details.hint;
+    this.action = details.action;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Decode only the closed public error envelope the CLI knows how to render. */
+export function decodeApiToolErrorDetails(
+  structuredContent: unknown,
+): ApiToolErrorDetails | null {
+  if (!isRecord(structuredContent)) return null;
+  if (structuredContent.error !== COMPUTE_ADMISSION_DISABLED_MESSAGE) {
+    return null;
+  }
+  const details = structuredContent.error_details;
+  if (!isRecord(details)) return null;
+
+  const keys = Object.keys(details);
+  if (
+    keys.length !== API_TOOL_ERROR_DETAIL_KEYS.size ||
+    keys.some((key) => !API_TOOL_ERROR_DETAIL_KEYS.has(key))
+  ) {
+    return null;
+  }
+  if (
+    details.code !== COMPUTE_ADMISSION_DISABLED ||
+    details.action !== RETRY_LATER ||
+    details.hint !== COMPUTE_ADMISSION_DISABLED_HINT
+  ) {
+    return null;
+  }
+
+  return {
+    code: details.code,
+    hint: details.hint,
+    action: details.action,
+  };
+}
+
+function toolError(result: NonNullable<JsonRpcResponse["result"]>): Error {
+  const message = result.content?.[0]?.text || "Unknown error";
+  const details = decodeApiToolErrorDetails(result.structuredContent);
+  if (!details) return new Error(message);
+  return new ApiToolError(COMPUTE_ADMISSION_DISABLED_MESSAGE, details);
 }
 
 export class ApiClient {
@@ -121,9 +201,7 @@ export class ApiClient {
 
     // Check if the tool returned an error
     if (rpcResponse.result.isError) {
-      const errorText = rpcResponse.result.content?.[0]?.text ||
-        "Unknown error";
-      throw new Error(errorText);
+      throw toolError(rpcResponse.result);
     }
 
     // Return structured content if available, otherwise parse text
@@ -300,9 +378,7 @@ export class ApiClient {
     }
 
     if (rpcResponse.result.isError) {
-      const errorText = rpcResponse.result.content?.[0]?.text ||
-        "Unknown error";
-      throw new Error(errorText);
+      throw toolError(rpcResponse.result);
     }
 
     if (rpcResponse.result.structuredContent !== undefined) {

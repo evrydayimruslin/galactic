@@ -4,6 +4,23 @@ const IMAGE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 const CANARY_ENTRY_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
+type ComputeAdmissionFlagState = "enabled" | "disabled" | "invalid";
+
+/**
+ * Classify the admission flag without normalizing operator input. Only the two
+ * canonical bindings are actionable: every other value remains fail-closed.
+ */
+export function computeAdmissionFlagState(
+  env:
+    | Pick<Partial<Env>, "COMPUTE_ENABLED">
+    | null
+    | undefined,
+): ComputeAdmissionFlagState {
+  if (env?.COMPUTE_ENABLED === "1") return "enabled";
+  if (env?.COMPUTE_ENABLED === "0") return "disabled";
+  return "invalid";
+}
+
 export interface ComputeRuntimeConfig {
   enabled: boolean;
   environmentDigest: string | null;
@@ -29,7 +46,7 @@ export interface ComputeRuntimeConfig {
 export function resolveComputeRuntimeConfig(
   env: Partial<Env> | null | undefined,
 ): ComputeRuntimeConfig {
-  const enabled = env?.COMPUTE_ENABLED === "1";
+  const enabled = computeAdmissionFlagState(env) === "enabled";
   const rawDigest = typeof env?.COMPUTE_ENVIRONMENT_DIGEST === "string"
     ? env.COMPUTE_ENVIRONMENT_DIGEST.trim().toLowerCase()
     : "";
@@ -93,7 +110,9 @@ export function requireComputeAdmissionConfig(
   const config = resolveComputeRuntimeConfig(env);
   if (!config.ready || !config.environmentDigest) {
     throw new Error(
-      `Galactic Compute admission is unavailable (${config.missing.join(",")}).`,
+      `Galactic Compute admission is unavailable (${
+        config.missing.join(",")
+      }).`,
     );
   }
   return config as ComputeRuntimeConfig & {

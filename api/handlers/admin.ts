@@ -26,6 +26,7 @@
 //   GET   /api/admin/capture/conversation/:id — Inspect one captured conversation
 //   GET   /api/admin/capture/export     — Export captured threads/messages/events/artifacts
 //   GET   /api/admin/flash-training/export — Export Flash fine-tuning dataset rows
+//   GET   /api/admin/compute/emergency-stop — Read sanitized Compute stop status
 //   POST  /api/admin/compute/emergency-stop — Fence/destroy/settle all Compute runs
 //   POST  /api/admin/compute/emergency-stop/:id/release — Release completed stop latch
 
@@ -77,6 +78,7 @@ import { getCapacityTelemetryReconciliationSummary } from "../services/capacity-
 import {
   handleAdminComputeEmergencyStop,
   handleAdminComputeEmergencyStopRelease,
+  handleAdminComputeEmergencyStopStatus,
 } from "./admin-compute-emergency-stop.ts";
 import {
   authenticateComputeEmergencyStopOperator,
@@ -270,6 +272,7 @@ function withAdminSensitiveRouteRateLimit(
     | "admin:app_category"
     | "admin:app_featured"
     | "admin:payout_process"
+    | "admin:compute_emergency_stop_status"
     | "admin:compute_emergency_stop",
   handler: () => Promise<Response> | Response,
 ): Promise<Response> {
@@ -280,10 +283,45 @@ function withAdminSensitiveRouteRateLimit(
   );
 }
 
+function privateNoStore(response: Response): Response {
+  response.headers.set("Cache-Control", "private, no-store");
+  response.headers.set("Pragma", "no-cache");
+  response.headers.set("Vary", "Authorization");
+  response.headers.set("X-Content-Type-Options", "nosniff");
+  return response;
+}
+
 export async function handleAdmin(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method;
+
+  // GET /api/admin/compute/emergency-stop — sanitized rollout preflight.
+  // Authenticate before rate-limit persistence or emergency-stop persistence.
+  if (path === "/api/admin/compute/emergency-stop" && method === "GET") {
+    const authorization = await authenticateComputeEmergencyStopOperator(
+      request,
+    );
+    if (authorization.status === "unavailable") {
+      return privateNoStore(error(
+        "Compute emergency-stop operator authentication unavailable",
+        503,
+      ));
+    }
+    if (authorization.status !== "authorized") {
+      return privateNoStore(error(
+        "Unauthorized: invalid Compute emergency-stop credential",
+        401,
+      ));
+    }
+    return privateNoStore(
+      await withAdminSensitiveRouteRateLimit(
+        request,
+        "admin:compute_emergency_stop_status",
+        () => handleAdminComputeEmergencyStopStatus(),
+      ),
+    );
+  }
 
   // POST /api/admin/compute/emergency-stop — audited, resumable global stop.
   // Admission must already be disabled; this route fences accepted work,

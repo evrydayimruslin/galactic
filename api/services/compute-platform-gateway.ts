@@ -1,4 +1,8 @@
 import type { UserContext } from "../runtime/sandbox.ts";
+import type {
+  MCPContent,
+  MCPToolCallResponse,
+} from "../../shared/contracts/mcp.ts";
 import {
   authorizePlatformMcpTool,
   canonicalPlatformMcpToolName,
@@ -44,6 +48,62 @@ export interface TrustedComputeAgentFunctionCall {
 export type TrustedComputeAgentFunctionExecutor = (
   call: TrustedComputeAgentFunctionCall,
 ) => Promise<unknown>;
+
+interface TrustedDownstreamToolFailureResult {
+  content: MCPContent[];
+  structuredContent?: unknown;
+  isError: true;
+}
+
+/**
+ * Server-only identity carrier for an MCP tool failure returned by an internal
+ * Agent dispatch. The class and its constructor stay private to this module;
+ * callers can only create/read it through the narrow helpers below. Tenant
+ * return data crosses a JSON boundary and can never manufacture this identity.
+ */
+class TrustedDownstreamToolFailure extends Error {
+  readonly #toolResult: TrustedDownstreamToolFailureResult;
+
+  constructor(toolResult: TrustedDownstreamToolFailureResult) {
+    const text = toolResult.content.find((entry) =>
+      entry?.type === "text" && typeof entry.text === "string"
+    )?.text;
+    super(text || "Downstream Agent function failed.");
+    this.name = "TrustedDownstreamToolFailure";
+    this.#toolResult = toolResult;
+  }
+
+  result(): TrustedDownstreamToolFailureResult {
+    return this.#toolResult;
+  }
+}
+
+/** Create the private identity only from a protocol-level MCP error result. */
+export function createTrustedDownstreamToolFailure(
+  value: unknown,
+): Error {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Downstream MCP error result is malformed.");
+  }
+  const result = value as Partial<MCPToolCallResponse>;
+  if (result.isError !== true || !Array.isArray(result.content)) {
+    throw new Error("Downstream MCP error result is malformed.");
+  }
+  return new TrustedDownstreamToolFailure({
+    content: result.content,
+    ...(Object.hasOwn(result, "structuredContent")
+      ? { structuredContent: result.structuredContent }
+      : {}),
+    isError: true,
+  });
+}
+
+/** Read a trusted failure without exposing the private carrier class. */
+export function trustedDownstreamToolFailureResult(
+  value: unknown,
+): TrustedDownstreamToolFailureResult | null {
+  return value instanceof TrustedDownstreamToolFailure ? value.result() : null;
+}
 
 export interface ComputePlatformAuthorizationDecision
   extends PlatformMcpAuthorizationDecision {

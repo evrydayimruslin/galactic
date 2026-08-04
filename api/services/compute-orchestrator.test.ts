@@ -3,6 +3,12 @@ import {
   assertEquals,
   assertRejects,
 } from "https://deno.land/std@0.210.0/assert/mod.ts";
+import {
+  COMPUTE_ADMISSION_DISABLED_ACTION,
+  COMPUTE_ADMISSION_DISABLED_CODE,
+  COMPUTE_ADMISSION_DISABLED_HINT,
+  COMPUTE_ADMISSION_DISABLED_MESSAGE,
+} from "../../shared/contracts/compute.ts";
 import type { Env } from "../lib/env.ts";
 import type { ComputeAdmissionInput } from "../src/bindings/compute-control-plane-adapter.ts";
 import { PublicComputeControlPlaneError } from "../src/bindings/compute-control-plane-adapter.ts";
@@ -401,6 +407,52 @@ Deno.test("sync Compute delays its recovery delivery so direct RPC gets first cl
 
 Deno.test("Compute canary rollout is exact to owner and Agent", async () => {
   const fixture = common();
+  const calls = {
+    findAgent: 0,
+    getPolicy: 0,
+    listPolicyRules: 0,
+    listSecretBindings: 0,
+    admitRun: 0,
+    enqueue: 0,
+    execute: 0,
+  };
+  const originals = {
+    findAgent: fixture.deps.findAgent,
+    getPolicy: fixture.deps.getPolicy,
+    listPolicyRules: fixture.deps.listPolicyRules,
+    listSecretBindings: fixture.deps.listSecretBindings,
+    admitRun: fixture.deps.admitRun,
+    enqueue: fixture.deps.enqueue,
+    execute: fixture.deps.execute,
+  };
+  fixture.deps.findAgent = () => {
+    calls.findAgent++;
+    return originals.findAgent();
+  };
+  fixture.deps.getPolicy = () => {
+    calls.getPolicy++;
+    return originals.getPolicy();
+  };
+  fixture.deps.listPolicyRules = () => {
+    calls.listPolicyRules++;
+    return originals.listPolicyRules();
+  };
+  fixture.deps.listSecretBindings = () => {
+    calls.listSecretBindings++;
+    return originals.listSecretBindings();
+  };
+  fixture.deps.admitRun = (value: Record<string, unknown>) => {
+    calls.admitRun++;
+    return originals.admitRun(value);
+  };
+  fixture.deps.enqueue = (message: unknown) => {
+    calls.enqueue++;
+    return originals.enqueue(message);
+  };
+  fixture.deps.execute = () => {
+    calls.execute++;
+    return originals.execute();
+  };
   fixture.deps.env = {
     ...fixture.deps.env,
     COMPUTE_ROLLOUT_MODE: "canary",
@@ -414,6 +466,129 @@ Deno.test("Compute canary rollout is exact to owner and Agent", async () => {
     PublicComputeControlPlaneError,
   );
   assertEquals(error.code, "COMPUTE_ROLLOUT_DENIED");
+  assertEquals(calls, {
+    findAgent: 0,
+    getPolicy: 0,
+    listPolicyRules: 0,
+    listSecretBindings: 0,
+    admitRun: 0,
+    enqueue: 0,
+    execute: 0,
+  });
+  assertEquals(fixture.state.admitted.length, 0);
+  assertEquals(fixture.state.queued.length, 0);
+});
+
+Deno.test("canonical Compute OFF returns the fixed public retry response before runtime work", async () => {
+  const fixture = common();
+  let runtimeIdentityCalls = 0;
+  fixture.deps.env = {
+    ...fixture.deps.env,
+    COMPUTE_ENABLED: "0",
+    COMPUTE_PLANE: {
+      executeRun: () => Promise.resolve(null),
+      cancelRun: () => Promise.resolve({ destroyed: true as const }),
+      runtimeIdentity: () => {
+        runtimeIdentityCalls++;
+        return Promise.resolve({
+          profile: "developer-v1" as const,
+          environmentDigest: `sha256:${"b".repeat(64)}`,
+        });
+      },
+    },
+  };
+
+  const error = await assertRejects(
+    () => createComputeControlPlaneAdapter(fixture.deps).admitComputeRun(
+      admission("async"),
+    ),
+    PublicComputeControlPlaneError,
+  );
+  assertEquals(error.code, COMPUTE_ADMISSION_DISABLED_CODE);
+  assertEquals(error.message, COMPUTE_ADMISSION_DISABLED_MESSAGE);
+  assertEquals(error.hint, COMPUTE_ADMISSION_DISABLED_HINT);
+  assertEquals(error.action, COMPUTE_ADMISSION_DISABLED_ACTION);
+  assertEquals(runtimeIdentityCalls, 0);
+  assertEquals(fixture.state.admitted.length, 0);
+});
+
+Deno.test("malformed Compute flags stay private control-plane failures", async () => {
+  const messages = await captureConsoleErrors(async () => {
+    for (const value of [undefined, "", " 0 ", "false", "2"]) {
+      const fixture = common();
+      fixture.deps.env = {
+        ...fixture.deps.env,
+        COMPUTE_ENABLED: value,
+      };
+      const error = await assertRejects(
+        () => createComputeControlPlaneAdapter(fixture.deps).admitComputeRun(
+          admission("async"),
+        ),
+        Error,
+      );
+      assertEquals(error instanceof PublicComputeControlPlaneError, false);
+      assertEquals(fixture.state.admitted.length, 0);
+    }
+  });
+  assertEquals(messages.length, 5);
+  assert(messages.every((message) =>
+    JSON.parse(message).stage === "runtime_config"
+  ));
+});
+
+Deno.test("emergency stop admission maps to the same public OFF response without latch detail", async () => {
+  const fixture = common({
+    admitRun: () => Promise.reject(new ComputeControlPlaneError({
+      code: "COMPUTE_EMERGENCY_STOP_ACTIVE",
+      status: 409,
+      message: "operator incident secret must not cross",
+      details: { operation_id: "private-stop-operation" },
+    })),
+  });
+
+  const error = await assertRejects(
+    () => createComputeControlPlaneAdapter(fixture.deps).admitComputeRun(
+      admission("async"),
+    ),
+    PublicComputeControlPlaneError,
+  );
+  assertEquals({
+    code: error.code,
+    message: error.message,
+    hint: error.hint,
+    action: error.action,
+  }, {
+    code: COMPUTE_ADMISSION_DISABLED_CODE,
+    message: COMPUTE_ADMISSION_DISABLED_MESSAGE,
+    hint: COMPUTE_ADMISSION_DISABLED_HINT,
+    action: COMPUTE_ADMISSION_DISABLED_ACTION,
+  });
+  assertEquals(error.message.includes("operator"), false);
+  assertEquals(error.message.includes("stop"), false);
+  assertEquals(fixture.state.queued.length, 0);
+});
+
+Deno.test("owner policy denial still precedes the emergency-stop database fence", async () => {
+  let admitCalls = 0;
+  const fixture = common({
+    getPolicy: () => Promise.resolve(null),
+    admitRun: () => {
+      admitCalls++;
+      return Promise.reject(new ComputeControlPlaneError({
+        code: "COMPUTE_EMERGENCY_STOP_ACTIVE",
+        status: 409,
+        message: "not reachable",
+      }));
+    },
+  });
+  const error = await assertRejects(
+    () => createComputeControlPlaneAdapter(fixture.deps).admitComputeRun(
+      admission("async"),
+    ),
+    PublicComputeControlPlaneError,
+  );
+  assertEquals(error.code, "COMPUTE_POLICY_NOT_ENABLED");
+  assertEquals(admitCalls, 0);
 });
 
 Deno.test("Compute admission rejects a deployed image identity mismatch before reservation", async () => {

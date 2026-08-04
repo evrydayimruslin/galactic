@@ -80,12 +80,22 @@ Deno.test("sensitive route rate limit: new upload, payment, and admin routes exp
       reason: "limit_exceeded",
     },
   );
+  const computeStatusResponse = buildSensitiveRouteRateLimitResponse(
+    "admin:compute_emergency_stop_status",
+    {
+      allowed: false,
+      remaining: 0,
+      resetAt: new Date(Date.now() + 30_000),
+      reason: "limit_exceeded",
+    },
+  );
 
   assertEquals(uploadResponse.headers.get("X-RateLimit-Limit"), "20");
   assertEquals(wireResponse.headers.get("X-RateLimit-Limit"), "10");
   assertEquals(adminResponse.headers.get("X-RateLimit-Limit"), "10");
   assertEquals(adminResponse.headers.get("X-RateLimit-Remaining"), "9");
   assertEquals(payoutResponse.headers.get("X-RateLimit-Limit"), "10");
+  assertEquals(computeStatusResponse.headers.get("X-RateLimit-Limit"), "60");
 });
 
 Deno.test("sensitive route rate limit: enforce blocks after configured limit", async () => {

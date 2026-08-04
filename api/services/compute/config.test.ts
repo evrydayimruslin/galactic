@@ -4,6 +4,7 @@ import {
 } from "https://deno.land/std@0.210.0/assert/mod.ts";
 
 import {
+  computeAdmissionFlagState,
   requireComputeAdmissionConfig,
   resolveComputeRuntimeConfig,
 } from "./config.ts";
@@ -18,10 +19,11 @@ function readyEnv() {
     COMPUTE_PLANE: {
       executeRun: () => Promise.resolve(null),
       cancelRun: () => Promise.resolve({ destroyed: true as const }),
-      runtimeIdentity: () => Promise.resolve({
-        profile: "developer-v1" as const,
-        environmentDigest: `sha256:${"a".repeat(64)}`,
-      }),
+      runtimeIdentity: () =>
+        Promise.resolve({
+          profile: "developer-v1" as const,
+          environmentDigest: `sha256:${"a".repeat(64)}`,
+        }),
     },
     COMPUTE_QUEUE: { send: () => Promise.resolve() },
     COMPUTE_ARTIFACTS: {
@@ -88,4 +90,15 @@ Deno.test("Compute admission flag and immutable digest fail closed", () => {
     Error,
     "feature_flag,environment_digest",
   );
+});
+
+Deno.test("Compute admission flag classification accepts only canonical bindings", () => {
+  assertEquals(computeAdmissionFlagState({ COMPUTE_ENABLED: "1" }), "enabled");
+  assertEquals(computeAdmissionFlagState({ COMPUTE_ENABLED: "0" }), "disabled");
+  for (const COMPUTE_ENABLED of ["", "true", "false", " 0", "1 ", "01"]) {
+    assertEquals(computeAdmissionFlagState({ COMPUTE_ENABLED }), "invalid");
+  }
+  assertEquals(computeAdmissionFlagState({}), "invalid");
+  assertEquals(computeAdmissionFlagState(null), "invalid");
+  assertEquals(computeAdmissionFlagState(undefined), "invalid");
 });

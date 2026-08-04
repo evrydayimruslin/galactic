@@ -35,8 +35,10 @@ import {
   type ComputePlatformGatewayPrincipal,
   createBearerFreeComputePlatformRequest,
   createComputePlatformFunctionAllowlist,
+  createTrustedDownstreamToolFailure,
   filterComputePlatformTools,
   type TrustedComputeAgentFunctionExecutor,
+  trustedDownstreamToolFailureResult,
 } from "../services/compute-platform-gateway.ts";
 import {
   freeModeNotice,
@@ -4022,6 +4024,9 @@ async function executeCall(
         rpcResponse.error.message || JSON.stringify(rpcResponse.error),
         rpcResponse.error.data,
       );
+    }
+    if (rpcResponse.result?.isError === true) {
+      throw createTrustedDownstreamToolFailure(rpcResponse.result);
     }
     unwrappedResult = unwrapToolCallResult(rpcResponse.result);
   }
@@ -8401,6 +8406,10 @@ async function handleToolsCall(
     }
     if (err instanceof RoutinePlatformError) {
       return jsonRpcErrorResponse(id, err.code, err.message, err.data);
+    }
+    const trustedDownstreamFailure = trustedDownstreamToolFailureResult(err);
+    if (trustedDownstreamFailure) {
+      return jsonRpcResponse(id, trustedDownstreamFailure);
     }
     return jsonRpcResponse(id, formatToolError(err));
   }
