@@ -95,6 +95,14 @@ export function FunnelPairingPage({
           ? (
             <FunnelPairingView
               navigate={navigate}
+              onRun={() => {
+                void launchApi.funnelRun(code)
+                  .then(() => launchApi.funnelPairing(code))
+                  .then(
+                    (response) => setProjection(response.pairing),
+                    () => setStale(true),
+                  );
+              }}
               projection={projection}
               stale={stale}
             />
@@ -135,10 +143,12 @@ export function funnelStageRows(
 /** Pure view, exported for markup tests. */
 export function FunnelPairingView({
   navigate,
+  onRun,
   projection,
   stale = false,
 }: {
   navigate?: LaunchNavigate;
+  onRun?: () => void;
   projection: LaunchFunnelPairingProjection;
   stale?: boolean;
 }): ReactElement {
@@ -197,6 +207,44 @@ export function FunnelPairingView({
           </li>
         ))}
       </ol>
+
+      {projection.heldCard
+        ? (
+          <div
+            aria-label="Held by your policy"
+            className="neb-funnel-held-card"
+            role="group"
+          >
+            <p className="neb-funnel-held-eyebrow">Held by your policy</p>
+            <p className="neb-funnel-held-sentence">
+              {projection.heldCard.seedSentence
+                ? `"It must ask me before ${projection.heldCard.seedSentence}."`
+                : "A guarded action is waiting for your approval."}
+            </p>
+            <p className="neb-funnel-held-detail">
+              <code>{projection.heldCard.functionName}</code> stopped at the
+              gate before touching the world. Approving lets it finish;
+              denying and editing are always free.
+            </p>
+            <div className="neb-funnel-held-actions">
+              <span className="neb-funnel-held-primary">
+                Approve — claim this build to resume it
+              </span>
+              <span>Deny · Edit — sign in, always free</span>
+            </div>
+          </div>
+        )
+        : projection.uploadedAt && !projection.claimed
+        ? (
+          <button
+            className="neb-funnel-cta"
+            onClick={() => onRun?.()}
+            type="button"
+          >
+            Run it once
+          </button>
+        )
+        : null}
 
       {projection.claimed
         ? (

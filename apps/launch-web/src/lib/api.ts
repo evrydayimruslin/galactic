@@ -114,6 +114,7 @@ import type {
   LaunchSubscriptionCheckoutResponse,
   LaunchSubscriptionRedirectResponse,
   LaunchFunnelPairingResponse,
+  LaunchFunnelRunResponse,
   LaunchSubscriptionResponse,
   LaunchTrustCard,
   LaunchWalletDetailKind,
@@ -1097,6 +1098,14 @@ export class LaunchApiClient {
   funnelPairing(code: string): Promise<LaunchFunnelPairingResponse> {
     return this.fetchJson(
       `/api/launch/funnel/pairings/${encodeURIComponent(code)}`,
+    );
+  }
+
+  /** WO-F5: "Run it once" — files the held trial job + envelope. */
+  funnelRun(code: string): Promise<LaunchFunnelRunResponse> {
+    return this.fetchJson(
+      `/api/launch/funnel/pairings/${encodeURIComponent(code)}/run`,
+      { method: "POST" },
     );
   }
 
