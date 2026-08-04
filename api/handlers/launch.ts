@@ -64,6 +64,7 @@ import {
   mintFunnelSession,
   readFunnelPairing,
   reapExpiredFunnelSessions,
+  resumeFunnelSession,
 } from "../services/funnel-sessions.ts";
 import { checkRateLimit } from "../services/ratelimit.ts";
 import { getAuthRateLimitClientIp } from "../services/auth-rate-limit.ts";
@@ -1164,6 +1165,16 @@ export async function handleLaunch(
     if (path === "/api/launch/funnel/handoffs") {
       return await handleLaunchFunnelMint(request, method);
     }
+    const funnelResumeMatch = path.match(
+      /^\/api\/launch\/funnel\/pairings\/([a-z0-9]{16,64})\/resume$/,
+    );
+    if (funnelResumeMatch) {
+      return await handleLaunchFunnelResume(
+        request,
+        method,
+        funnelResumeMatch[1],
+      );
+    }
     const funnelClaimMatch = path.match(
       /^\/api\/launch\/funnel\/pairings\/([a-z0-9]{16,64})\/claim$/,
     );
@@ -2256,6 +2267,27 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
             "200": { description: "Pairing lifecycle projection" },
             "404": { description: "Unknown pairing code" },
             "429": { description: "Read rate limit reached for this network" },
+          },
+        },
+      },
+      "/api/launch/funnel/pairings/{code}/resume": {
+        post: {
+          operationId: "resumeLaunchFunnelPairing",
+          summary: "Re-mint an expired funnel build credential",
+          description:
+            "Anonymous, bearer-of-pairing-code. Mints a fresh reveal-once 60-minute credential for the same provisional owner and swaps the funnel to the new handoff session. Refuses claimed or window-elapsed funnels. Same per-IP ceiling as minting.",
+          parameters: [{
+            name: "code",
+            in: "path",
+            required: true,
+            schema: { type: "string", pattern: "^[a-z0-9]{16,64}$" },
+          }],
+          responses: {
+            "201": { description: "Fresh reveal-once funnel credential" },
+            "404": { description: "Unknown pairing code" },
+            "409": { description: "Already claimed" },
+            "410": { description: "Return window elapsed" },
+            "429": { description: "Rate limit reached for this network" },
           },
         },
       },
@@ -7100,6 +7132,86 @@ async function handleLaunchFunnelMint(
     }
     if (cause instanceof BuilderHandoffSessionError) {
       return error("The funnel handoff could not be created", 502);
+    }
+    throw cause;
+  }
+}
+
+/**
+ * WO-F2 resume: bearer-of-pairing-code re-mints an expired build credential
+ * for the same provisional owner. Same reveal-once contract and the same
+ * per-IP ceiling as the original mint.
+ */
+async function handleLaunchFunnelResume(
+  request: Request,
+  method: string,
+  pairingCode: string,
+): Promise<Response> {
+  if (method !== "POST") {
+    return error("Method not allowed for funnel resumes", 405);
+  }
+  const clientIp = getAuthRateLimitClientIp(request) ?? "anonymous";
+  const rate = await checkRateLimit(
+    `funnel-ip:${clientIp}`,
+    "funnel:resume",
+    FUNNEL_MINT_LIMIT_PER_IP,
+    FUNNEL_MINT_WINDOW_MINUTES,
+  );
+  if (!rate.allowed) {
+    return error(
+      "Too many funnel credentials from this network. Try again in an hour.",
+      429,
+    );
+  }
+  try {
+    const minted = await resumeFunnelSession({ pairingCode });
+    const generatedAt = new Date().toISOString();
+    return privateLaunchJson(
+      {
+        success: true,
+        pairing: {
+          code: minted.funnel.pairingCode,
+          url: `${publicBaseUrl(request)}/b/${minted.funnel.pairingCode}`,
+          expiresAt: minted.funnel.expiresAt,
+        },
+        handoff: {
+          id: minted.session.id,
+          status: minted.session.status,
+          reservedAgentId: minted.session.targetAppId,
+          createdAt: minted.session.createdAt,
+          expiresAt: minted.session.expiresAt,
+        },
+        credential: {
+          id: minted.credential.id,
+          tokenPrefix: minted.credential.tokenPrefix,
+          plaintextToken: minted.credential.plaintextToken,
+          scopes: minted.credential.scopes,
+          appIds: minted.credential.appIds,
+          createdAt: minted.credential.createdAt,
+          expiresAt: minted.credential.expiresAt,
+        },
+        platformMcpUrl: `${publicBaseUrl(request)}/mcp/platform`,
+        message:
+          "Fresh funnel build credential minted for the same pairing. Revealed only in this response; expires in 60 minutes.",
+        generatedAt,
+      } satisfies LaunchFunnelMintResponse,
+      201,
+    );
+  } catch (cause) {
+    if (cause instanceof FunnelSessionError) {
+      switch (cause.code) {
+        case "not_found":
+          return error("Unknown pairing code", 404);
+        case "expired":
+          return error(cause.message, 410);
+        case "already_claimed":
+          return error(cause.message, 409);
+        default:
+          return error(cause.message, 503);
+      }
+    }
+    if (cause instanceof BuilderHandoffSessionError) {
+      return error("The funnel credential could not be re-minted", 502);
     }
     throw cause;
   }

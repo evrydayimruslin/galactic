@@ -145,6 +145,7 @@ export const LAUNCH_API_ROUTES = [
   "POST /api/launch/funnel/handoffs",
   "GET /api/launch/funnel/pairings/:code",
   "POST /api/launch/funnel/pairings/:code/claim",
+  "POST /api/launch/funnel/pairings/:code/resume",
   "GET /api/launch/candidates",
   "GET /api/launch/candidates/:candidateId",
   "POST /api/launch/candidates/:candidateId/deploy",
