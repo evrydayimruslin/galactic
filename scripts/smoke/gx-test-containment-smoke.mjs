@@ -11,6 +11,9 @@
 //     node scripts/smoke/gx-test-containment-smoke.mjs \
 //       [--target staging|production] \
 //       [--url https://ultralight-api-staging.rgn4jz429m.workers.dev] \
+//       [--rollout-settle-ms 30000] \
+//       [--code-update-reset-retries 2] \
+//       [--code-update-reset-delay-ms 15000] \
 //       [--output /path/to/gx-test-containment.json]
 
 import { randomUUID } from 'node:crypto';
@@ -22,6 +25,11 @@ import { parseArgs } from '../analysis/_shared.mjs';
 export const STAGING_API_BASE = 'https://ultralight-api-staging.rgn4jz429m.workers.dev';
 export const PRODUCTION_API_BASE = 'https://api.connectgalactic.com';
 const REQUEST_TIMEOUT_MS = 90_000;
+export const DURABLE_OBJECT_CODE_UPDATE_RESET =
+  'Durable Object reset because its code was updated.';
+const MAX_ROLLOUT_SETTLE_MS = 60_000;
+const MAX_CODE_UPDATE_RESET_RETRIES = 3;
+const MAX_CODE_UPDATE_RESET_DELAY_MS = 60_000;
 const REQUIRED_BLOCKED_EFFECTS = Object.freeze([
   'agent_call',
   'credentialed_http',
@@ -697,6 +705,67 @@ export async function runContainmentSmoke({
   };
 }
 
+function boundedInteger(value, name, { min, max, fallback }) {
+  if (value == null || String(value).trim() === '') return fallback;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
+    throw new Error(`${name} must be an integer from ${min} to ${max}`);
+  }
+  return parsed;
+}
+
+export function isDurableObjectCodeUpdateResetReport(report) {
+  if (report?.passed !== false || !Array.isArray(report.checks)) return false;
+  const failedChecks = report.checks.filter((item) => item?.status === 'failed');
+  return failedChecks.length > 0 &&
+    failedChecks.every((item) =>
+      String(item?.detail || '').includes(DURABLE_OBJECT_CODE_UPDATE_RESET)
+    );
+}
+
+const delay = (milliseconds) =>
+  new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
+
+/**
+ * Cloudflare can reset a Durable Object while a newly deployed version is
+ * still propagating. Give the rollout a bounded settling window, then retry
+ * only reports whose every failed check carries Cloudflare's exact code-update
+ * reset. Missing effect latches and every other containment failure remain
+ * immediate hard failures.
+ */
+export async function runContainmentSmokeWithRolloutReadiness({
+  rolloutSettleMs = 0,
+  codeUpdateResetRetries = 0,
+  codeUpdateResetDelayMs = 0,
+  runImpl = runContainmentSmoke,
+  delayImpl = delay,
+  onRetry = () => {},
+  ...smokeInput
+}) {
+  if (rolloutSettleMs > 0) await delayImpl(rolloutSettleMs);
+
+  let attempt = 1;
+  while (true) {
+    const report = await runImpl(smokeInput);
+    if (
+      report.passed ||
+      attempt > codeUpdateResetRetries ||
+      !isDurableObjectCodeUpdateResetReport(report)
+    ) {
+      return { report, attempts: attempt };
+    }
+    onRetry({
+      attempt,
+      nextAttempt: attempt + 1,
+      delayMs: codeUpdateResetDelayMs,
+    });
+    if (codeUpdateResetDelayMs > 0) {
+      await delayImpl(codeUpdateResetDelayMs);
+    }
+    attempt += 1;
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.has('--token')) {
@@ -715,7 +784,42 @@ async function main() {
     process.env.ULTRALIGHT_TOKEN,
     'ULTRALIGHT_TOKEN',
   );
-  const report = await runContainmentSmoke({ apiBase, target, token });
+  const rolloutSettleMs = boundedInteger(
+    args.get('--rollout-settle-ms'),
+    '--rollout-settle-ms',
+    { min: 0, max: MAX_ROLLOUT_SETTLE_MS, fallback: 0 },
+  );
+  const codeUpdateResetRetries = boundedInteger(
+    args.get('--code-update-reset-retries'),
+    '--code-update-reset-retries',
+    { min: 0, max: MAX_CODE_UPDATE_RESET_RETRIES, fallback: 0 },
+  );
+  const codeUpdateResetDelayMs = boundedInteger(
+    args.get('--code-update-reset-delay-ms'),
+    '--code-update-reset-delay-ms',
+    { min: 0, max: MAX_CODE_UPDATE_RESET_DELAY_MS, fallback: 0 },
+  );
+  if (rolloutSettleMs > 0) {
+    console.log(
+      `waiting ${rolloutSettleMs}ms for gx.test Worker rollout readiness`,
+    );
+  }
+  const { report, attempts } = await runContainmentSmokeWithRolloutReadiness({
+    apiBase,
+    target,
+    token,
+    rolloutSettleMs,
+    codeUpdateResetRetries,
+    codeUpdateResetDelayMs,
+    onRetry: ({ nextAttempt, delayMs }) => {
+      console.error(
+        `Cloudflare reset a gx.test Durable Object during code rollout; retrying canonical containment smoke (attempt ${nextAttempt}) after ${delayMs}ms`,
+      );
+    },
+  });
+  if (attempts > 1) {
+    console.log(`gx.test containment smoke completed after ${attempts} attempts`);
+  }
   for (const item of report.checks) {
     const output = `${item.status.toUpperCase()} [${item.name}]`;
     if (item.status === 'passed') console.log(output);

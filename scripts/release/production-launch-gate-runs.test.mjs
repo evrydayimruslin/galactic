@@ -52,6 +52,21 @@ test("ordinary production releases do not require a Compute deployment", async (
   assert.match(gate, /name:\s*['"]Launch Web Deploy['"]/u);
 });
 
+test("Compute CI remains a separately dispatched workflow", async () => {
+  const workflow = await readFile(
+    new URL("../../.github/workflows/compute-ci.yml", import.meta.url),
+    "utf8",
+  );
+  const triggerBlock = workflow.slice(
+    workflow.indexOf("on:"),
+    workflow.indexOf("permissions:"),
+  );
+
+  assert.match(triggerBlock, /workflow_dispatch:\s*\{\}/u);
+  assert.doesNotMatch(triggerBlock, /pull_request:/u);
+  assert.doesNotMatch(triggerBlock, /push:/u);
+});
+
 test("returns null when only manual or wrong-ref production runs exist", () => {
   const spec = {
     name: "Launch Web Deploy",

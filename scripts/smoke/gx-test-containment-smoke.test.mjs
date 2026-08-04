@@ -5,8 +5,11 @@ import {
   callGxTest,
   containmentApiBase,
   containmentProbeFiles,
+  DURABLE_OBJECT_CODE_UPDATE_RESET,
   formatGxTestHttpFailure,
+  isDurableObjectCodeUpdateResetReport,
   PRODUCTION_API_BASE,
+  runContainmentSmokeWithRolloutReadiness,
   safeDiagnostic,
   stagingApiBase,
 } from './gx-test-containment-smoke.mjs';
@@ -247,4 +250,98 @@ test('assessment fails if a caught effect attests or ambient cache is usable', (
     ).detail,
     /cache_usable=true/u,
   );
+});
+
+test('rollout readiness recognizes only Cloudflare code-update reset reports', () => {
+  const resetReport = {
+    passed: false,
+    checks: [
+      {
+        status: 'failed',
+        detail: `error_type=Error; error=${DURABLE_OBJECT_CODE_UPDATE_RESET}`,
+      },
+      {
+        status: 'passed',
+        detail: '',
+      },
+    ],
+  };
+  assert.equal(isDurableObjectCodeUpdateResetReport(resetReport), true);
+  assert.equal(
+    isDurableObjectCodeUpdateResetReport({
+      passed: false,
+      checks: [{
+        status: 'failed',
+        detail: 'missing_effects=outbound_http; error=blocked effects',
+      }],
+    }),
+    false,
+  );
+  assert.equal(
+    isDurableObjectCodeUpdateResetReport({
+      passed: true,
+      checks: [{ status: 'passed', detail: '' }],
+    }),
+    false,
+  );
+});
+
+test('rollout readiness settles once and retries only an exact code-update reset', async () => {
+  const delays = [];
+  const retries = [];
+  const reports = [
+    {
+      passed: false,
+      checks: [{
+        status: 'failed',
+        detail: `error=${DURABLE_OBJECT_CODE_UPDATE_RESET}`,
+      }],
+    },
+    { passed: true, checks: [{ status: 'passed', detail: '' }] },
+  ];
+  const calls = [];
+  const result = await runContainmentSmokeWithRolloutReadiness({
+    apiBase: 'https://staging.example.test',
+    target: 'staging',
+    token: TOKEN,
+    rolloutSettleMs: 30_000,
+    codeUpdateResetRetries: 2,
+    codeUpdateResetDelayMs: 15_000,
+    runImpl: async (input) => {
+      calls.push(input);
+      return reports.shift();
+    },
+    delayImpl: async (milliseconds) => delays.push(milliseconds),
+    onRetry: (retry) => retries.push(retry),
+  });
+
+  assert.equal(result.report.passed, true);
+  assert.equal(result.attempts, 2);
+  assert.deepEqual(delays, [30_000, 15_000]);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(retries, [{ attempt: 1, nextAttempt: 2, delayMs: 15_000 }]);
+});
+
+test('rollout readiness never retries a containment latch failure', async () => {
+  let calls = 0;
+  const report = {
+    passed: false,
+    checks: [{
+      status: 'failed',
+      detail: 'missing_effects=outbound_http; success=false',
+    }],
+  };
+  const result = await runContainmentSmokeWithRolloutReadiness({
+    codeUpdateResetRetries: 3,
+    codeUpdateResetDelayMs: 15_000,
+    runImpl: async () => {
+      calls += 1;
+      return report;
+    },
+    delayImpl: async () => assert.fail('unexpected delay'),
+  });
+
+  assert.equal(result.report, report);
+  assert.equal(result.attempts, 1);
+  assert.equal(calls, 1);
 });

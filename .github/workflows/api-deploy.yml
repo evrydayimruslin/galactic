@@ -504,6 +504,9 @@ jobs:
           set -euo pipefail
           node ../scripts/smoke/gx-test-containment-smoke.mjs \
             --url https://ultralight-api-staging.rgn4jz429m.workers.dev \
+            --rollout-settle-ms 30000 \
+            --code-update-reset-retries 2 \
+            --code-update-reset-delay-ms 15000 \
             --output "$RUNNER_TEMP/gx-test-session-compatibility.json"
 
       - name: Deploy staging worker
@@ -996,6 +999,9 @@ jobs:
           node ../scripts/smoke/gx-test-containment-smoke.mjs \
             --target production \
             --url https://api.connectgalactic.com \
+            --rollout-settle-ms 30000 \
+            --code-update-reset-retries 2 \
+            --code-update-reset-delay-ms 15000 \
             --output "$RUNNER_TEMP/gx-test-session-compatibility.json"
 
       - name: Deploy production worker
