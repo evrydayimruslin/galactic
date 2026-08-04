@@ -372,6 +372,12 @@
       ]
     },
     {
+      "file": "services/capabilities/policy.ts",
+      "types": [
+        "PolicyCapabilityDependencies"
+      ]
+    },
+    {
       "file": "services/capability-suggestion-telemetry.ts",
       "types": [
         "CapabilityGapShortcomingInput",

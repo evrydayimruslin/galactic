@@ -20,6 +20,7 @@ import { recordFlag } from "./flag.ts";
 import { inspectAppDatabase } from "./db-inspect.ts";
 import { attentionCapability } from "./attention.ts";
 import { conceptsCapability } from "./concepts.ts";
+import { policyCapability } from "./policy.ts";
 import { notificationsCapability } from "./notifications.ts";
 
 const CAPABILITIES: Capability[] = [
@@ -1066,6 +1067,67 @@ const CAPABILITIES: Capability[] = [
       required: ["agent_id"],
     },
     handler: (args, ctx) => conceptsCapability(args, ctx),
+  },
+  {
+    id: "policy",
+    branch: "agent_user",
+    tier: 1,
+    auth: { ownerOnly: true },
+    surfaces: ["mcp", "cli"],
+    advertisedName: "gx.policy",
+    cli: { command: "policy" },
+    aliases: [],
+    title: "The Agent's policy plane (read, attach starter, propose)",
+    description:
+      "action=read returns the per-function policy overlay merged over the " +
+      "Agent's declarations (consequence group, off/ask/free posture, " +
+      "attribution) plus pending drafts. attach_template binds the one " +
+      "pre-compiled starter template ask-before-consequential-v1: every " +
+      "declared function in the guarded consequence groups (spend, " +
+      "external_side_effect) is set to 'ask' so autonomous runs hold for " +
+      "approval; pass seed to record the owner's boundary sentence " +
+      "verbatim. propose stores a natural-language boundary as an " +
+      "uncompiled draft. Ratification is owner-only forever: this tool " +
+      "never approves, activates, or edits live policy — immutable policy " +
+      "versions mint only through the owner's readback in the Studio. " +
+      "Requires agent_id (an Agent you own; build-session credentials " +
+      "reach exactly their own Agent).",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["read", "attach_template", "propose"],
+          description: 'Default "read".',
+        },
+        agent_id: {
+          type: "string",
+          description: "Owned private Agent UUID or slug. Required.",
+        },
+        template: {
+          type: "string",
+          description:
+            'attach_template: template id (default "ask-before-consequential-v1").',
+        },
+        seed: {
+          type: "string",
+          description:
+            'attach_template: the boundary sentence, e.g. "sending anything to a human".',
+        },
+        sentence: {
+          type: "string",
+          description: "propose: the natural-language boundary to draft.",
+        },
+      },
+      required: ["agent_id"],
+    },
+    handler: (args, ctx) => policyCapability(args, ctx),
   },
   {
     id: "attention",
