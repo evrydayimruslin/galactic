@@ -1,9 +1,10 @@
-name: Compute Admission
+name: Compute Admission (Legacy - Blocked)
 
-# Compute Deploy owns release admission policy and always certifies an immutable
-# admission-OFF API version. A release may preserve that version or explicitly
-# enable global admission. This manual fail-safe only promotes the exact
-# certified OFF version; it never rebuilds or uploads source.
+# Historical certified-OFF API versions are not rollback authority: an older
+# version can predate the current Durable Object graph. This workflow remains
+# visible only to fail closed for bookmarked dispatch links. Use Compute Canary
+# Rollout / revert_off, which creates or captures a compatible OFF anchor in the
+# same dispatch that may mutate admission.
 on:
   workflow_dispatch:
     inputs:
@@ -47,6 +48,16 @@ jobs:
       RELEASE_RUN_ID_INPUT: ${{ inputs.compute_release_run_id }}
 
     steps:
+      - name: Refuse superseded historical-OFF rollback path
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          printf '%s\n' \
+            'Compute Admission is blocked. Dispatch Compute Canary Rollout with stage revert_off.' \
+            | tee "$EVIDENCE_DIR/superseded.txt" >&2
+          exit 1
+
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0

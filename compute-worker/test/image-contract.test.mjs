@@ -217,12 +217,16 @@ describe("developer-v1 image contract", () => {
     const stagingConfig = repositoryFile("compute-worker/wrangler.staging.toml");
     const buildScript = repositoryFile("compute-worker/scripts/build-image.sh");
     const workflow = repositoryFile(".github/workflows/compute-ci.yml");
+    const inputHasher = repositoryFile(
+      "compute-worker/scripts/hash-image-inputs.sh",
+    );
     const dockerignore = repositoryFile(".dockerignore");
     for (const config of [productionConfig, stagingConfig]) {
       expect(config).toContain('image_build_context = ".."');
     }
     expect(buildScript).toContain("--file images/standard/Dockerfile");
-    expect(workflow.match(/- '\.dockerignore'/g)).toHaveLength(2);
+    expect(workflow).toContain("workflow_dispatch: {}");
+    expect(inputHasher).toContain(".dockerignore");
     expect(workflow).toContain("--file images/standard/Dockerfile");
     expect(dockerignore.trimStart()).toMatch(/^#/);
     expect(dockerignore).toContain("\n**\n");
@@ -408,10 +412,20 @@ describe("Compute release supply-chain contract", () => {
 
   it("keeps Cloudflare deploy credentials off untrusted build/install steps", () => {
     const workflow = repositoryFile(".github/workflows/compute-deploy.yml");
+    const rollout = repositoryFile(
+      ".github/workflows/compute-canary-rollout.yml",
+    );
     const jobHeader = workflow.slice(0, workflow.indexOf("    steps:"));
+    const rolloutJobHeader = rollout.slice(0, rollout.indexOf("    steps:"));
     const install = workflow.slice(
       workflow.indexOf("- name: Install dependencies"),
       workflow.indexOf("- name: Verify Compute and API integration"),
+    );
+    const rolloutInstall = rollout.slice(
+      rollout.indexOf("- name: Install pinned release dependencies"),
+      rollout.indexOf(
+        "- name: Enforce production hygiene and verify Compute release evidence",
+      ),
     );
     const imageBuild = workflow.slice(
       workflow.indexOf("- name: Build and smoke exact image"),
@@ -425,7 +439,11 @@ describe("Compute release supply-chain contract", () => {
     );
     expect(jobHeader).not.toContain("CLOUDFLARE_API_TOKEN");
     expect(jobHeader).not.toContain("CLOUDFLARE_ACCOUNT_ID");
+    expect(rolloutJobHeader).not.toContain("CLOUDFLARE_API_TOKEN");
+    expect(rolloutJobHeader).not.toContain("CLOUDFLARE_ACCOUNT_ID");
     expect(install).not.toContain("CLOUDFLARE_API_TOKEN");
+    expect(rolloutInstall).not.toContain("CLOUDFLARE_API_TOKEN");
+    expect(rolloutInstall).not.toContain("CLOUDFLARE_ACCOUNT_ID");
     expect(imageBuild).not.toContain("CLOUDFLARE_API_TOKEN");
     expect(sbom).not.toContain("CLOUDFLARE_API_TOKEN");
     expect(sbom).not.toContain("CLOUDFLARE_ACCOUNT_ID");
@@ -460,6 +478,7 @@ describe("Compute release supply-chain contract", () => {
       ".github/workflows/compute-ci.yml",
       ".github/workflows/compute-deploy.yml",
       ".github/workflows/compute-admission.yml",
+      ".github/workflows/compute-canary-rollout.yml",
       ".github/workflows/api-deploy.yml",
     ]) {
       const workflow = repositoryFile(path);
@@ -471,7 +490,7 @@ describe("Compute release supply-chain contract", () => {
     }
   });
 
-  it("keeps emergency admission disable manual, digest-bound, and source-immutable", () => {
+  it("blocks the historical-OFF admission workflow before repository or Cloudflare access", () => {
     const workflow = repositoryFile(
       ".github/workflows/compute-admission.yml",
     );
@@ -482,27 +501,20 @@ describe("Compute release supply-chain contract", () => {
     expect(triggers).toContain("workflow_dispatch:");
     expect(triggers).not.toContain("push:");
     expect(triggers).not.toContain("pull_request:");
-    expect(workflow).toContain("DISABLE GALACTIC COMPUTE");
-    expect(workflow).toContain("environment: ${{ inputs.target }}");
-    expect(workflow).not.toContain("required_reviewers");
-    expect(workflow).not.toContain("COMPUTE_ENABLED:1");
-    expect(workflow).not.toContain("inputs.action");
-    expect(workflow).toContain("RELEASE_ENVIRONMENT_DIGEST");
-    expect(workflow).toContain("CERTIFIED_OFF_API_VERSION_ID");
-    expect(workflow).toContain("CERTIFIED_COMPUTE_VERSION_ID");
-    expect(workflow).toContain("compute_release_run_id:");
-    expect(workflow).toContain("gh run download");
-    expect(workflow).toContain(
-      'versions deploy "$CERTIFIED_OFF_API_VERSION_ID@100%"',
+    expect(workflow).toContain("Compute Admission (Legacy - Blocked)");
+    const refusalAt = workflow.indexOf(
+      "Refuse superseded historical-OFF rollback path",
     );
-    expect(workflow).toContain(
-      "Promote certified OFF version after any ambiguous attempted change",
-    );
-    expect(workflow).not.toContain("api-compute-admission-disable.toml");
-    expect(workflow).toContain("persist-credentials: false");
-    expect(workflow).toContain("Upload admission audit evidence");
-    expect(workflow).toContain("source_rebuild_allowed: false");
-    expect(workflow).toContain("actual_smoke_sha256");
+    const checkoutAt = workflow.indexOf("actions/checkout@");
+    const cloudflareAt = workflow.indexOf("CLOUDFLARE_API_TOKEN");
+    expect(refusalAt).toBeGreaterThan(-1);
+    expect(refusalAt).toBeLessThan(checkoutAt);
+    expect(refusalAt).toBeLessThan(cloudflareAt);
+    const refusal = workflow.slice(refusalAt, checkoutAt);
+    expect(refusal).toContain("exit 1");
+    expect(refusal).toContain("Compute Canary Rollout");
+    expect(refusal).not.toContain("wrangler");
+    expect(refusal).not.toContain("gh run download");
   });
 
   it("certifies tagged API and Compute versions before admission", () => {

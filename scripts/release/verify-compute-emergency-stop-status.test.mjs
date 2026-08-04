@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  verifyComputeEmergencyStopReleaseResponse,
   verifyComputeEmergencyStopStatus,
 } from "./verify-compute-emergency-stop-status.mjs";
 
@@ -221,3 +222,113 @@ test("fails closed on unsupported expectations", () => {
     /expected operation id is malformed/u,
   );
 });
+
+test("accepts only the exact released operation response", () => {
+  for (const replayed of [false, true]) {
+    assert.deepEqual(
+      verifyComputeEmergencyStopReleaseResponse({
+        response: {
+          success: true,
+          operation_id: OPERATION_ID,
+          status: "released",
+          replayed,
+        },
+        expectedOperationId: OPERATION_ID,
+      }),
+      {
+        operationId: OPERATION_ID,
+        status: "released",
+        replayed,
+      },
+    );
+  }
+});
+
+test("release response fails closed on operation mismatch or malformed UUIDs", () => {
+  assert.throws(
+    () =>
+      verifyComputeEmergencyStopReleaseResponse({
+        response: {
+          success: true,
+          operation_id: OTHER_OPERATION_ID,
+          status: "released",
+          replayed: false,
+        },
+        expectedOperationId: OPERATION_ID,
+      }),
+    /expected operation/u,
+  );
+  assert.throws(
+    () =>
+      verifyComputeEmergencyStopReleaseResponse({
+        response: {
+          success: true,
+          operation_id: "not-a-uuid",
+          status: "released",
+          replayed: false,
+        },
+        expectedOperationId: OPERATION_ID,
+      }),
+    /operation id is malformed/u,
+  );
+  assert.throws(
+    () =>
+      verifyComputeEmergencyStopReleaseResponse({
+        response: {
+          success: true,
+          operation_id: OPERATION_ID,
+          status: "released",
+          replayed: false,
+        },
+        expectedOperationId: "not-a-uuid",
+      }),
+    /expected operation id is malformed/u,
+  );
+});
+
+for (
+  const [name, response] of [
+    ["array", []],
+    ["missing field", {
+      success: true,
+      operation_id: OPERATION_ID,
+      status: "released",
+    }],
+    ["false success", {
+      success: false,
+      operation_id: OPERATION_ID,
+      status: "released",
+      replayed: false,
+    }],
+    ["wrong status", {
+      success: true,
+      operation_id: OPERATION_ID,
+      status: "completed",
+      replayed: false,
+    }],
+    ["nonboolean replayed", {
+      success: true,
+      operation_id: OPERATION_ID,
+      status: "released",
+      replayed: "false",
+    }],
+    ["extra private field", {
+      success: true,
+      operation_id: OPERATION_ID,
+      status: "released",
+      replayed: false,
+      release_reason: "private",
+    }],
+  ]
+) {
+  test(`release response fails closed on ${name}`, () => {
+    assert.throws(
+      () =>
+        verifyComputeEmergencyStopReleaseResponse({
+          response,
+          expectedOperationId: OPERATION_ID,
+        }),
+      /Compute emergency-stop release response is invalid/u,
+    );
+  });
+}

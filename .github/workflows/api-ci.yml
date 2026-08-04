@@ -26,8 +26,16 @@ on:
       - 'scripts/release/verify-api-compute-bootstrap-history.test.mjs'
       - 'scripts/release/verify-api-compute-deploy-state.mjs'
       - 'scripts/release/verify-api-compute-deploy-state.test.mjs'
+      - 'scripts/release/verify-api-compute-off-bridge.mjs'
+      - 'scripts/release/verify-api-compute-off-bridge.test.mjs'
+      - 'scripts/release/verify-api-compute-rollout-state.mjs'
+      - 'scripts/release/verify-api-compute-rollout-state.test.mjs'
       - 'scripts/release/verify-compute-emergency-stop-status.mjs'
       - 'scripts/release/verify-compute-emergency-stop-status.test.mjs'
+      - 'scripts/release/verify-compute-rollout-predecessor.mjs'
+      - 'scripts/release/verify-compute-rollout-predecessor.test.mjs'
+      - 'scripts/release/verify-compute-rollout-release-evidence.mjs'
+      - 'scripts/release/verify-compute-rollout-release-evidence.test.mjs'
       - 'scripts/release/verify-production-compute-release-evidence.mjs'
       - 'scripts/release/verify-production-compute-release-evidence.test.mjs'
       - 'scripts/release/verify-attention-shadow-evidence.mjs'
@@ -38,6 +46,8 @@ on:
       - 'scripts/smoke/owner-attention-probe.test.mjs'
       - 'scripts/smoke/compute-admitted-smoke.mjs'
       - 'scripts/smoke/compute-admitted-smoke.test.mjs'
+      - 'scripts/smoke/resolve-compute-canary-identity.mjs'
+      - 'scripts/smoke/resolve-compute-canary-identity.test.mjs'
       - 'scripts/smoke/interface-deploy-smoke.mjs'
       - 'scripts/smoke/interface-deploy-promotion.mjs'
       - 'scripts/smoke/interface-deploy-promotion.test.mjs'
@@ -57,6 +67,7 @@ on:
       - '.github/workflows/compute-ci.yml'
       - '.github/workflows/compute-deploy.yml'
       - '.github/workflows/compute-admission.yml'
+      - '.github/workflows/compute-canary-rollout.yml'
       - '.github/workflows/g1-launch-smoke.yml'
       - '.github/workflows/launch-gate-production.yml'
   push:
@@ -83,8 +94,16 @@ on:
       - 'scripts/release/verify-api-compute-bootstrap-history.test.mjs'
       - 'scripts/release/verify-api-compute-deploy-state.mjs'
       - 'scripts/release/verify-api-compute-deploy-state.test.mjs'
+      - 'scripts/release/verify-api-compute-off-bridge.mjs'
+      - 'scripts/release/verify-api-compute-off-bridge.test.mjs'
+      - 'scripts/release/verify-api-compute-rollout-state.mjs'
+      - 'scripts/release/verify-api-compute-rollout-state.test.mjs'
       - 'scripts/release/verify-compute-emergency-stop-status.mjs'
       - 'scripts/release/verify-compute-emergency-stop-status.test.mjs'
+      - 'scripts/release/verify-compute-rollout-predecessor.mjs'
+      - 'scripts/release/verify-compute-rollout-predecessor.test.mjs'
+      - 'scripts/release/verify-compute-rollout-release-evidence.mjs'
+      - 'scripts/release/verify-compute-rollout-release-evidence.test.mjs'
       - 'scripts/release/verify-production-compute-release-evidence.mjs'
       - 'scripts/release/verify-production-compute-release-evidence.test.mjs'
       - 'scripts/release/verify-attention-shadow-evidence.mjs'
@@ -95,6 +114,8 @@ on:
       - 'scripts/smoke/owner-attention-probe.test.mjs'
       - 'scripts/smoke/compute-admitted-smoke.mjs'
       - 'scripts/smoke/compute-admitted-smoke.test.mjs'
+      - 'scripts/smoke/resolve-compute-canary-identity.mjs'
+      - 'scripts/smoke/resolve-compute-canary-identity.test.mjs'
       - 'scripts/smoke/interface-deploy-smoke.mjs'
       - 'scripts/smoke/interface-deploy-promotion.mjs'
       - 'scripts/smoke/interface-deploy-promotion.test.mjs'
@@ -114,6 +135,7 @@ on:
       - '.github/workflows/compute-ci.yml'
       - '.github/workflows/compute-deploy.yml'
       - '.github/workflows/compute-admission.yml'
+      - '.github/workflows/compute-canary-rollout.yml'
       - '.github/workflows/g1-launch-smoke.yml'
       - '.github/workflows/launch-gate-production.yml'
   workflow_dispatch:
@@ -176,11 +198,16 @@ jobs:
             scripts/release/verify-production-api-release-state.test.mjs \
             scripts/release/verify-api-compute-bootstrap-history.test.mjs \
             scripts/release/verify-api-compute-deploy-state.test.mjs \
+            scripts/release/verify-api-compute-off-bridge.test.mjs \
+            scripts/release/verify-api-compute-rollout-state.test.mjs \
             scripts/release/verify-compute-emergency-stop-status.test.mjs \
+            scripts/release/verify-compute-rollout-predecessor.test.mjs \
+            scripts/release/verify-compute-rollout-release-evidence.test.mjs \
             scripts/release/verify-attention-shadow-evidence.test.mjs \
             scripts/release/verify-production-compute-release-evidence.test.mjs \
             scripts/release/write-api-compute-disabled-config.test.mjs \
             scripts/smoke/compute-admitted-smoke.test.mjs \
+            scripts/smoke/resolve-compute-canary-identity.test.mjs \
             scripts/smoke/gx-test-containment-smoke.test.mjs \
             scripts/smoke/interface-deploy-promotion.test.mjs \
             scripts/smoke/owner-attention-probe.test.mjs \

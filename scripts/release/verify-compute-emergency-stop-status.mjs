@@ -22,9 +22,21 @@ const RESPONSE_KEYS = [
   "terminalized_count",
   "updated_at",
 ];
+const RELEASE_RESPONSE_KEYS = [
+  "operation_id",
+  "replayed",
+  "status",
+  "success",
+];
 
 function fail(message) {
   throw new Error(`Compute emergency-stop status is invalid: ${message}`);
+}
+
+function failRelease(message) {
+  throw new Error(
+    `Compute emergency-stop release response is invalid: ${message}`,
+  );
 }
 
 function timestamp(value, field) {
@@ -161,6 +173,54 @@ export function verifyComputeEmergencyStopStatus({
   };
 }
 
+export function verifyComputeEmergencyStopReleaseResponse({
+  response,
+  expectedOperationId,
+}) {
+  if (
+    typeof expectedOperationId !== "string" ||
+    !UUID.test(expectedOperationId)
+  ) {
+    failRelease("expected operation id is malformed");
+  }
+  if (!response || typeof response !== "object" || Array.isArray(response)) {
+    failRelease("response is not an object");
+  }
+  const keys = Object.keys(response).sort();
+  if (
+    keys.length !== RELEASE_RESPONSE_KEYS.length ||
+    keys.some((key, index) => key !== RELEASE_RESPONSE_KEYS[index])
+  ) {
+    failRelease("response fields do not match the sanitized schema");
+  }
+  if (
+    typeof response.operation_id !== "string" ||
+    !UUID.test(response.operation_id)
+  ) {
+    failRelease("operation id is malformed");
+  }
+  if (response.operation_id !== expectedOperationId) {
+    failRelease(
+      `expected operation ${expectedOperationId}, received ${response.operation_id}`,
+    );
+  }
+  if (response.success !== true) {
+    failRelease("success is not true");
+  }
+  if (response.status !== "released") {
+    failRelease("status is not released");
+  }
+  if (typeof response.replayed !== "boolean") {
+    failRelease("replayed is not a boolean");
+  }
+
+  return {
+    operationId: response.operation_id,
+    status: "released",
+    replayed: response.replayed,
+  };
+}
+
 function readJson(path) {
   try {
     return JSON.parse(readFileSync(resolve(path), "utf8"));
@@ -170,6 +230,23 @@ function readJson(path) {
 }
 
 function main(argv) {
+  if (argv[0] === "release") {
+    if (argv.length !== 3) {
+      throw new Error(
+        "Usage: verify-compute-emergency-stop-status.mjs " +
+          "release <release-response-json> <expected-operation-id>",
+      );
+    }
+    const result = verifyComputeEmergencyStopReleaseResponse({
+      response: readJson(argv[1]),
+      expectedOperationId: argv[2],
+    });
+    console.log(
+      `${result.status}/${result.operationId}/` +
+        (result.replayed ? "replayed" : "applied"),
+    );
+    return;
+  }
   if (argv.length < 3 || argv.length > 4) {
     throw new Error(
       "Usage: verify-compute-emergency-stop-status.mjs " +

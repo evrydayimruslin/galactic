@@ -162,6 +162,21 @@ test("extracts one version ID from Wrangler's session and upload records", () =>
   expectWranglerUpload(UPLOAD_ID);
 });
 
+test("accepts an explicitly empty Wrangler environment for production", () => {
+  const records = wranglerUploadRecords();
+  records[0].command_line_args[5] = "";
+  records[1].worker_name = "ultralight-api";
+  records[1].wrangler_environment = "";
+  assert.equal(
+    verifyWranglerVersionUploadOutput({
+      content: wranglerUploadContent(records),
+      expectedWorker: "ultralight-api",
+      expectedEnvironment: "",
+    }),
+    UPLOAD_ID,
+  );
+});
+
 function expectWranglerUpload(expected) {
   assert.equal(verifyWranglerVersionUploadOutput({
     content: wranglerUploadContent(),
@@ -191,6 +206,27 @@ for (
       "the wrong command",
       (records) => {
         records[0].command_line_args = ["deploy"];
+      },
+      /session record does not describe versions upload/u,
+    ],
+    [
+      "a missing explicit environment argument",
+      (records) => {
+        records[0].command_line_args.splice(4, 2);
+      },
+      /session record does not describe versions upload/u,
+    ],
+    [
+      "duplicate explicit environment arguments",
+      (records) => {
+        records[0].command_line_args.push("--env", "staging");
+      },
+      /session record does not describe versions upload/u,
+    ],
+    [
+      "the wrong session environment",
+      (records) => {
+        records[0].command_line_args[5] = "production";
       },
       /session record does not describe versions upload/u,
     ],

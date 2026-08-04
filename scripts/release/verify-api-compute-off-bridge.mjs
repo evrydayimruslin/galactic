@@ -44,8 +44,7 @@ export function verifyWranglerVersionUploadOutput({
     typeof content !== "string" ||
     typeof expectedWorker !== "string" ||
     expectedWorker.length === 0 ||
-    typeof expectedEnvironment !== "string" ||
-    expectedEnvironment.length === 0
+    typeof expectedEnvironment !== "string"
   ) {
     fail("Wrangler version-upload output arguments are malformed");
   }
@@ -72,15 +71,24 @@ export function verifyWranglerVersionUploadOutput({
     );
   }
   const [session, upload] = records;
+  const commandLineArgs = session.command_line_args;
+  const environmentArgumentIndexes = Array.isArray(commandLineArgs)
+    ? commandLineArgs.flatMap((value, index) =>
+      value === "--env" ? [index] : []
+    )
+    : [];
   if (
     session.type !== "wrangler-session" ||
     session.version !== 1 ||
     typeof session.wrangler_version !== "string" ||
     session.wrangler_version.length === 0 ||
-    !Array.isArray(session.command_line_args) ||
-    !session.command_line_args.every((value) => typeof value === "string") ||
-    session.command_line_args[0] !== "versions" ||
-    session.command_line_args[1] !== "upload" ||
+    !Array.isArray(commandLineArgs) ||
+    !commandLineArgs.every((value) => typeof value === "string") ||
+    commandLineArgs[0] !== "versions" ||
+    commandLineArgs[1] !== "upload" ||
+    environmentArgumentIndexes.length !== 1 ||
+    commandLineArgs[environmentArgumentIndexes[0] + 1] !==
+      expectedEnvironment ||
     typeof session.timestamp !== "string" ||
     !Number.isFinite(Date.parse(session.timestamp))
   ) {
