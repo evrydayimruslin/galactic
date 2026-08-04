@@ -305,10 +305,8 @@
         "AdvanceBuilderHandoffSessionInput",
         "AuthenticateBuilderHandoffSessionInput",
         "BuilderHandoffAdvanceEvent",
-        "BuilderHandoffCredential",
         "BuilderHandoffSessionErrorCode",
         "BuilderHandoffSessionProjection",
-        "BuilderHandoffSessionServiceOptions",
         "BuilderHandoffTerminalStatus",
         "CreateBuilderHandoffSessionInput",
         "TerminateBuilderHandoffSessionInput"
@@ -1015,6 +1013,21 @@
       "file": "services/function-inference-overrides.ts",
       "types": [
         "FunctionInferencePolicySummary"
+      ]
+    },
+    {
+      "exports": [
+        "FUNNEL_DESCRIPTION_MAX_LENGTH",
+        "FUNNEL_SURFACES"
+      ],
+      "file": "services/funnel-sessions.ts",
+      "types": [
+        "FunnelPairingProjection",
+        "FunnelSessionErrorCode",
+        "FunnelSessionRow",
+        "FunnelSurface",
+        "MintedFunnelSession",
+        "MintFunnelSessionInput"
       ]
     },
     {

@@ -57,6 +57,17 @@ import {
   terminateBuilderHandoffSession,
 } from "../services/builder-handoff-sessions.ts";
 import {
+  claimFunnelSession,
+  FUNNEL_MINT_LIMIT_PER_IP,
+  FUNNEL_MINT_WINDOW_MINUTES,
+  FunnelSessionError,
+  mintFunnelSession,
+  readFunnelPairing,
+  reapExpiredFunnelSessions,
+} from "../services/funnel-sessions.ts";
+import { checkRateLimit } from "../services/ratelimit.ts";
+import { getAuthRateLimitClientIp } from "../services/auth-rate-limit.ts";
+import {
   BuilderHandoffDeploymentError,
   deployBuilderHandoffCandidate,
   getBuilderHandoffCandidateInvitation,
@@ -146,6 +157,9 @@ import {
   type LaunchFunctionSummary,
   type LaunchGlobalAttentionResponse,
   type LaunchHandoffCreateRequest,
+  type LaunchFunnelClaimResponse,
+  type LaunchFunnelMintResponse,
+  type LaunchFunnelPairingResponse,
   type LaunchHandoffCreateResponse,
   type LaunchHandoffIntent,
   type LaunchInferenceOperation,
@@ -1144,6 +1158,26 @@ export async function handleLaunch(
         request,
         method,
         handoffSessionMatch[1],
+      );
+    }
+
+    if (path === "/api/launch/funnel/handoffs") {
+      return await handleLaunchFunnelMint(request, method);
+    }
+    const funnelClaimMatch = path.match(
+      /^\/api\/launch\/funnel\/pairings\/([a-z0-9]{16,64})\/claim$/,
+    );
+    if (funnelClaimMatch) {
+      return await handleLaunchFunnelClaim(request, method, funnelClaimMatch[1]);
+    }
+    const funnelPairingMatch = path.match(
+      /^\/api\/launch\/funnel\/pairings\/([a-z0-9]{16,64})$/,
+    );
+    if (funnelPairingMatch) {
+      return await handleLaunchFunnelPairing(
+        request,
+        method,
+        funnelPairingMatch[1],
       );
     }
 
@@ -2179,6 +2213,72 @@ function buildLaunchOpenApiSpec(request: Request): Record<string, unknown> {
               }),
             },
             "401": { description: "Authentication required" },
+          },
+        },
+      },
+      "/api/launch/funnel/handoffs": {
+        post: {
+          operationId: "createLaunchFunnelHandoff",
+          summary: "Mint an anonymous, claimable coding-agent handoff",
+          description:
+            "No session required. Creates a flagged provisional owner and a reveal-once builder credential with the standard 60-minute expiry, plus an unlisted pairing code whose watch page and claimability last 7 days. IP-rate-limited. The credential can do exactly what an authenticated agent-intent handoff can do — nothing wider.",
+          requestBody: {
+            required: true,
+            content: jsonContent({
+              type: "object",
+              required: ["description"],
+              properties: {
+                description: { type: "string", maxLength: 4000 },
+                surface: { type: "string", enum: ["cli", "web"] },
+              },
+            }),
+          },
+          responses: {
+            "201": { description: "Reveal-once funnel handoff with pairing" },
+            "400": { description: "Missing or oversized plan description" },
+            "429": { description: "Mint rate limit reached for this network" },
+          },
+        },
+      },
+      "/api/launch/funnel/pairings/{code}": {
+        get: {
+          operationId: "readLaunchFunnelPairing",
+          summary: "Read the stages-only funnel pairing projection",
+          description:
+            "Public, unlisted-link read: build lifecycle stages and the reserved Agent's public name only. Never credential material, source, or evidence. Expired unclaimed pairings read as unknown.",
+          parameters: [{
+            name: "code",
+            in: "path",
+            required: true,
+            schema: { type: "string", pattern: "^[a-z0-9]{16,64}$" },
+          }],
+          responses: {
+            "200": { description: "Pairing lifecycle projection" },
+            "404": { description: "Unknown pairing code" },
+            "429": { description: "Read rate limit reached for this network" },
+          },
+        },
+      },
+      "/api/launch/funnel/pairings/{code}/claim": {
+        post: {
+          operationId: "claimLaunchFunnelPairing",
+          summary: "Claim a funnel build into the signed-in account",
+          description:
+            "Account-session endpoint. Atomically re-parents the provisional owner's handoff sessions, credential tokens, and reserved Agent onto the caller. Idempotent for the same claimer; a conflict for anyone else; gone after the 7-day return window.",
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            name: "code",
+            in: "path",
+            required: true,
+            schema: { type: "string", pattern: "^[a-z0-9]{16,64}$" },
+          }],
+          responses: {
+            "200": { description: "Claim recorded (or already yours)" },
+            "401": { description: "Authentication required" },
+            "403": { description: "Account session required" },
+            "404": { description: "Unknown pairing code" },
+            "409": { description: "Already claimed by another account" },
+            "410": { description: "Return window elapsed" },
           },
         },
       },
@@ -6917,6 +7017,177 @@ export function parseLaunchHandoffCreateRequest(
     );
   }
   return { intent, description };
+}
+
+/**
+ * WO-F1: the funnel's front door. No session required — the mint creates a
+ * flagged provisional owner and rides the existing purpose-bound handoff
+ * machinery unwidened. IP-rate-limited; the reveal-once credential contract
+ * is identical to the authenticated handoff. Each mint also opportunistically
+ * reaps a bounded batch of expired unclaimed funnel worlds (self-cleaning
+ * under the same traffic that creates the mess; cron promotion can come
+ * later without changing semantics).
+ */
+async function handleLaunchFunnelMint(
+  request: Request,
+  method: string,
+): Promise<Response> {
+  if (method !== "POST") {
+    return error("Method not allowed for funnel handoffs", 405);
+  }
+  const clientIp = getAuthRateLimitClientIp(request) ?? "anonymous";
+  const rate = await checkRateLimit(
+    `funnel-ip:${clientIp}`,
+    "funnel:mint",
+    FUNNEL_MINT_LIMIT_PER_IP,
+    FUNNEL_MINT_WINDOW_MINUTES,
+  );
+  if (!rate.allowed) {
+    return error(
+      "Too many funnel sessions from this network. Try again in an hour.",
+      429,
+    );
+  }
+  try {
+    const body = await readJsonBody<Record<string, unknown>>(request);
+    const minted = await mintFunnelSession({
+      surface: body.surface === "web" ? "web" : "cli",
+      description: typeof body.description === "string"
+        ? body.description
+        : "",
+    });
+    try {
+      await reapExpiredFunnelSessions({}, 25);
+    } catch {
+      // Reaping is hygiene, never a mint failure.
+    }
+    const generatedAt = new Date().toISOString();
+    return privateLaunchJson(
+      {
+        success: true,
+        pairing: {
+          code: minted.funnel.pairingCode,
+          url: `${publicBaseUrl(request)}/b/${minted.funnel.pairingCode}`,
+          expiresAt: minted.funnel.expiresAt,
+        },
+        handoff: {
+          id: minted.session.id,
+          status: minted.session.status,
+          reservedAgentId: minted.session.targetAppId,
+          createdAt: minted.session.createdAt,
+          expiresAt: minted.session.expiresAt,
+        },
+        credential: {
+          id: minted.credential.id,
+          tokenPrefix: minted.credential.tokenPrefix,
+          plaintextToken: minted.credential.plaintextToken,
+          scopes: minted.credential.scopes,
+          appIds: minted.credential.appIds,
+          createdAt: minted.credential.createdAt,
+          expiresAt: minted.credential.expiresAt,
+        },
+        platformMcpUrl: `${publicBaseUrl(request)}/mcp/platform`,
+        message:
+          "Anonymous funnel handoff created. The credential is revealed only in this response and expires in 60 minutes; the pairing link keeps working for 7 days and is claimable by a signed-in account.",
+        generatedAt,
+      } satisfies LaunchFunnelMintResponse,
+      201,
+    );
+  } catch (cause) {
+    if (cause instanceof FunnelSessionError) {
+      if (cause.code === "invalid_request") return error(cause.message, 400);
+      return error(cause.message, 503);
+    }
+    if (cause instanceof BuilderHandoffSessionError) {
+      return error("The funnel handoff could not be created", 502);
+    }
+    throw cause;
+  }
+}
+
+/** Stages-only pairing read for the unlisted watch page. Public by design. */
+async function handleLaunchFunnelPairing(
+  request: Request,
+  method: string,
+  pairingCode: string,
+): Promise<Response> {
+  if (method !== "GET") {
+    return error("Method not allowed for funnel pairings", 405);
+  }
+  const clientIp = getAuthRateLimitClientIp(request) ?? "anonymous";
+  const rate = await checkRateLimit(
+    `funnel-read-ip:${clientIp}`,
+    "funnel:pairing_read",
+    240,
+    10,
+  );
+  if (!rate.allowed) {
+    return error("Too many pairing reads from this network.", 429);
+  }
+  try {
+    const pairing = await readFunnelPairing(pairingCode);
+    return privateLaunchJson(
+      {
+        success: true,
+        pairing,
+        generatedAt: new Date().toISOString(),
+      } satisfies LaunchFunnelPairingResponse,
+    );
+  } catch (cause) {
+    if (cause instanceof FunnelSessionError) {
+      if (cause.code === "not_found") {
+        return error("Unknown pairing code", 404);
+      }
+      return error(cause.message, 503);
+    }
+    throw cause;
+  }
+}
+
+/** Claim: signed-in account adopts the funnel world (atomic re-parent). */
+async function handleLaunchFunnelClaim(
+  request: Request,
+  method: string,
+  pairingCode: string,
+): Promise<Response> {
+  if (method !== "POST") {
+    return error("Method not allowed for funnel claims", 405);
+  }
+  const user = await requireLaunchUser(request);
+  requireAccountSessionForApiKeys(user);
+  try {
+    const funnel = await claimFunnelSession({
+      pairingCode,
+      claimedBy: user.id,
+    });
+    return privateLaunchJson(
+      {
+        success: true,
+        claimed: {
+          pairingCode: funnel.pairingCode,
+          claimedAt: funnel.claimedAt,
+          claimedBy: funnel.claimedBy,
+        },
+        generatedAt: new Date().toISOString(),
+      } satisfies LaunchFunnelClaimResponse,
+    );
+  } catch (cause) {
+    if (cause instanceof FunnelSessionError) {
+      switch (cause.code) {
+        case "not_found":
+          return error("Unknown pairing code", 404);
+        case "expired":
+          return error(cause.message, 410);
+        case "already_claimed":
+          return error(cause.message, 409);
+        case "claimer_not_member":
+          return error(cause.message, 403);
+        default:
+          return error(cause.message, 503);
+      }
+    }
+    throw cause;
+  }
 }
 
 async function handleLaunchHandoff(

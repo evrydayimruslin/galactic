@@ -44,7 +44,7 @@ no checkout, same card. Deny/Edit are free forever.
 
 | WO | Title | Depends on | Est. | Status |
 |----|-------|-----------|------|--------|
-| WO-F1 | Anonymous claimable handoff + pairing page + hero | — | 2 PRs | planned |
+| WO-F1 | Anonymous claimable handoff + pairing page + hero | — | 2 PRs | **PR A built** (API + migration: provisional owners, anonymous mint, stages-only pairing read, atomic claim RPC, reaper). Divergences from the original order, adopted: (1) pairing lives in a dedicated `funnel_sessions` table keyed by pairing code — not columns on `builder_handoff_sessions` — so the code survives `resume` re-mints (the funnel row swaps its `handoff_session_id`); (2) the reaper runs opportunistically at mint (bounded batch of 25, failure-silent) instead of a cron — same semantics, zero new scheduled infrastructure, promotable to cron later. PR B (pairing page + hero) next. |
 | WO-F2 | `galacticconnection new` | WO-F1 | 1–2 PRs | planned |
 | WO-F3 | Checkout at the card + claim consolidation | WO-F1 | 1–2 PRs | planned |
 | WO-F4 | Device authorization grant → `gx_` keys | — | 1 PR | planned |
