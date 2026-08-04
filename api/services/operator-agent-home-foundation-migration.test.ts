@@ -256,6 +256,10 @@ Deno.test("Fleet treats schedule-free Agents as working without bypassing setup"
   );
   assertStringIncludes(
     onDemandReadiness,
+    "agents.deployment_state,",
+  );
+  assertStringIncludes(
+    onDemandReadiness,
     "WHEN inputs.deployment_state NOT IN ('legacy', 'ready')",
   );
   assertStringIncludes(

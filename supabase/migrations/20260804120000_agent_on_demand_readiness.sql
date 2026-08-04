@@ -332,6 +332,7 @@ readiness_inputs AS (
     base.*,
     agents.slug,
     agents.created_at AS agent_created_at,
+    agents.deployment_state,
     (
       agents.current_version IS NOT NULL
       AND nullif(btrim(agents.current_version), '') IS NOT NULL
