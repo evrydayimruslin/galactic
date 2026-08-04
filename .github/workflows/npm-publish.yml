@@ -65,7 +65,7 @@ jobs:
         id: version
         run: |
           PKG_VERSION=$(node -p "require('./package.json').version")
-          if ! grep -Fq "const VERSION = '${PKG_VERSION}'" mod.ts; then
+          if ! grep -Fq "const VERSION = \"${PKG_VERSION}\"" mod.ts; then
             echo "cli/mod.ts VERSION does not match cli/package.json (${PKG_VERSION}) — bump both together." >&2
             exit 1
           fi
