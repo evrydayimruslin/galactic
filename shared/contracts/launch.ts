@@ -141,6 +141,9 @@ export const LAUNCH_API_ROUTES = [
   "DELETE /api/launch/api-keys/:id",
   "POST /api/launch/handoffs",
   "POST /api/launch/agents/:id/handoffs",
+  "POST /api/launch/funnel/handoffs",
+  "GET /api/launch/funnel/pairings/:code",
+  "POST /api/launch/funnel/pairings/:code/claim",
   "GET /api/launch/candidates",
   "GET /api/launch/candidates/:candidateId",
   "POST /api/launch/candidates/:candidateId/deploy",
@@ -475,6 +478,74 @@ export interface LaunchHandoffSession {
   description: string;
   createdAt: string;
   expiresAt: string;
+}
+
+/**
+ * WO-F1 funnel surfaces. The pairing projection is deliberately
+ * stages-only: an unlisted link must never widen into credential material,
+ * source, or evidence. All three responses are additive to the handoff
+ * contract; nothing existing is repurposed.
+ */
+export interface LaunchFunnelPairingProjection {
+  pairingCode: string;
+  surface: "cli" | "web";
+  status: string;
+  createdAt: string;
+  connectedAt: string | null;
+  stagedAt: string | null;
+  testedAt: string | null;
+  uploadedAt: string | null;
+  promotedAt: string | null;
+  handoffExpiresAt: string;
+  returnWindowExpiresAt: string;
+  claimed: boolean;
+  reservedAgentId: string | null;
+  agentName: string | null;
+  uploadedVersion: string | null;
+}
+
+export interface LaunchFunnelMintResponse {
+  success: true;
+  pairing: {
+    code: string;
+    url: string;
+    expiresAt: string;
+  };
+  handoff: {
+    id: string;
+    status: string;
+    reservedAgentId: string | null;
+    createdAt: string;
+    expiresAt: string;
+  };
+  credential: {
+    id: string;
+    tokenPrefix: string;
+    plaintextToken: string;
+    scopes: string[];
+    appIds: string[] | null;
+    createdAt: string;
+    expiresAt: string;
+  };
+  platformMcpUrl: string;
+  message: string;
+  generatedAt: string;
+}
+
+export interface LaunchFunnelPairingResponse {
+  success: true;
+  pairing: LaunchFunnelPairingProjection;
+  generatedAt: string;
+}
+
+export interface LaunchFunnelClaimResponse {
+  success: true;
+  claimed: {
+    pairingCode: string;
+    claimedAt: string | null;
+    claimedBy: string | null;
+  };
+  generatedAt: string;
 }
 
 export interface LaunchHandoffCreateResponse {
