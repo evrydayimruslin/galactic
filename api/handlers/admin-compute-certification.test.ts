@@ -154,13 +154,16 @@ function snapshot(): ComputeCertificationSnapshot {
   };
 }
 
-function emptyRawSnapshot() {
+function emptyRawSnapshot(
+  since = SINCE,
+  generatedAt = "2026-08-04T12:00:00+00:00",
+) {
   return {
     schema_version: 1,
-    generated_at: "2026-08-04T12:00:00+00:00",
+    generated_at: generatedAt,
     owner_id: OWNER_ID,
     agent_id: AGENT_ID,
-    since: "2026-08-04T11:00:00+00:00",
+    since,
     latch_state: "clear",
     requested_run_count: 1,
     selected_run_count: 0,
@@ -324,6 +327,7 @@ Deno.test("legacy admin auth fails closed when its credential collides with cert
 Deno.test("dedicated certification credential reaches only the bounded snapshot RPC", async () => {
   const previousEnv = globalThis.__env;
   const previousFetch = globalThis.fetch;
+  const recentSince = new Date(Date.now() - 60_000).toISOString();
   globalThis.__env = {
     ...(previousEnv ?? {}),
     SUPABASE_URL: "https://database.example",
@@ -346,13 +350,20 @@ Deno.test("dedicated certification credential reaches only the bounded snapshot 
     }
     if (url.pathname === "/rest/v1/rpc/get_compute_certification_snapshot") {
       rpcBody = await outbound.json() as Record<string, unknown>;
-      return Response.json(emptyRawSnapshot());
+      return Response.json(
+        emptyRawSnapshot(recentSince, new Date().toISOString()),
+      );
     }
     throw new Error(`Unexpected outbound request: ${url.pathname}`);
   }) as typeof fetch;
   try {
     for (const clientIp of ["203.0.113.10", "198.51.100.20"]) {
-      const routedRequest = request();
+      const routedRequest = request(CERTIFICATION_TOKEN, {
+        owner_id: OWNER_ID,
+        agent_id: AGENT_ID,
+        run_ids: [RUN_ID],
+        since: recentSince,
+      });
       routedRequest.headers.set("x-forwarded-for", clientIp);
       const response = await handleAdmin(routedRequest);
       assertEquals(response.status, 200);
@@ -364,7 +375,7 @@ Deno.test("dedicated certification credential reaches only the bounded snapshot 
       p_owner_id: OWNER_ID,
       p_agent_id: AGENT_ID,
       p_run_ids: [RUN_ID],
-      p_since: SINCE,
+      p_since: recentSince,
     });
     assertEquals(rateLimitBodies.length, 2);
     assertEquals(rateLimitBodies[0].p_user_id, rateLimitBodies[1].p_user_id);
