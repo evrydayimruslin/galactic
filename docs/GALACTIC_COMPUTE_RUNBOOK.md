@@ -814,6 +814,15 @@ active canary soak.
    zero. A separate bearer then reads exactly those eleven run IDs and proves
    persisted accounting, receipts, artifact integrity, latch, tokens, and
    health before the final live fence.
+
+After an admission-enabling policy-version promotion, Cloudflare's deployment
+inventory can show the new version as the sole 100-percent deployment before
+every public-edge request executes it. The post-promotion latch fence therefore
+allows a bounded 12-read/55-second convergence window only while the sanitized
+endpoint still reports the exact predecessor `disabled`/`clear` state. Any
+other response or latch state fails immediately; exhausting the window restores
+the dispatch's captured OFF version. Each accepted read is retained in the
+private rollout evidence.
 2. **`production_canary` from the immutable `v*` tag:** type
    `rollout-production-canary`, supply the production Compute Deploy run, and
    bind the successful staging-canary run as predecessor. The predecessor must

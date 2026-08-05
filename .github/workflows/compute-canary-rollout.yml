@@ -1394,13 +1394,14 @@ jobs:
           COMPUTE_EMERGENCY_STOP_TOKEN: ${{ secrets.COMPUTE_EMERGENCY_STOP_TOKEN }}
         run: |
           set -euo pipefail
+          umask 077
           status_file="$EVIDENCE_DIR/emergency-stop-after-promotion.json"
-          curl -fsS --retry 2 --connect-timeout 10 --max-time 30 \
-            -H "Authorization: Bearer $COMPUTE_EMERGENCY_STOP_TOKEN" \
-            -H "Accept: application/json" \
-            "$API_BASE/api/admin/compute/emergency-stop" > "$status_file"
-          unset COMPUTE_EMERGENCY_STOP_TOKEN
           if [ "$REQUESTED_STAGE" = "revert_off" ]; then
+            curl -fsS --retry 2 --connect-timeout 10 --max-time 30 \
+              -H "Authorization: Bearer $COMPUTE_EMERGENCY_STOP_TOKEN" \
+              -H "Accept: application/json" \
+              -H "Cache-Control: no-cache" \
+              "$API_BASE/api/admin/compute/emergency-stop" > "$status_file"
             latch_state="$(jq -er '.latch_state' "$status_file")"
             operation_id="$(jq -r '.operation_id // ""' "$status_file")"
             if [ "$latch_state" = "completed" ]; then
@@ -1411,9 +1412,37 @@ jobs:
                 "$status_file" disabled clear
             fi
           else
+            converged=false
+            for attempt in {1..12}; do
+              attempt_file="${status_file%.json}-attempt-$(printf '%02d' "$attempt").json"
+              curl -fsS --retry 2 --connect-timeout 10 --max-time 30 \
+                -H "Authorization: Bearer $COMPUTE_EMERGENCY_STOP_TOKEN" \
+                -H "Accept: application/json" \
+                -H "Cache-Control: no-cache" \
+                "$API_BASE/api/admin/compute/emergency-stop" > "$attempt_file"
+              cp "$attempt_file" "$status_file"
+              if node scripts/release/verify-compute-emergency-stop-status.mjs \
+                   "$attempt_file" enabled clear >/dev/null 2>&1; then
+                converged=true
+                break
+              fi
+              if ! node scripts/release/verify-compute-emergency-stop-status.mjs \
+                   "$attempt_file" disabled clear >/dev/null 2>&1; then
+                node scripts/release/verify-compute-emergency-stop-status.mjs \
+                  "$attempt_file" enabled clear
+              fi
+              if [ "$attempt" -lt 12 ]; then
+                sleep 5
+              fi
+            done
+            [ "$converged" = "true" ] || {
+              echo "The promoted API did not reach the public edge within the bounded window." >&2
+              exit 1
+            }
             node scripts/release/verify-compute-emergency-stop-status.mjs \
               "$status_file" enabled clear
           fi
+          unset COMPUTE_EMERGENCY_STOP_TOKEN
           echo "verified=true" >> "$GITHUB_OUTPUT"
 
       - name: Re-read latch after an already-OFF no-op
