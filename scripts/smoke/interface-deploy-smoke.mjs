@@ -43,10 +43,10 @@
 // one-time bootstrap of the fixed fixture (then set GALACTIC_SMOKE_APP_ID).
 
 import { randomUUID } from 'node:crypto';
-import { readFileSync, readdirSync } from 'node:fs';
-import { join, relative, dirname } from 'node:path';
+import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from '../analysis/_shared.mjs';
+import { collectInterfaceDeploySourceFiles } from './interface-deploy-source-files.mjs';
 import {
   computeRawSourceHash,
   fixtureRefreshPlan,
@@ -121,29 +121,10 @@ function check(step, cond, detail = '') {
   }
 }
 
-// Collect the agent's files the way an upload does: recurse, keep source +
-// .html. Deliberately independent of the CLI so this also asserts that the
-// interface entry file is present (the bug was a silent drop of .html).
-const allowed = new Set(['.ts', '.tsx', '.js', '.jsx', '.json', '.md', '.css', '.html']);
-const ignore = new Set(['node_modules', '.git', '.ultralight', 'dist', 'build']);
+// Collect the agent's files independently of the CLI so this smoke catches a
+// client-side source drop before promotion.
 const absDir = join(repoRoot, dir);
-const files = [];
-(function walk(p) {
-  for (const entry of readdirSync(p, { withFileTypes: true })) {
-    const full = join(p, entry.name);
-    if (entry.isDirectory()) {
-      if (!ignore.has(entry.name)) walk(full);
-    } else {
-      const ext = entry.name.slice(entry.name.lastIndexOf('.'));
-      if (allowed.has(ext)) {
-        files.push({
-          path: relative(absDir, full).split(/[\\/]/).join('/'),
-          content: readFileSync(full, 'utf8'),
-        });
-      }
-    }
-  }
-})(absDir);
+const files = collectInterfaceDeploySourceFiles(absDir);
 
 const interfaceRequired = !reviewedPromotion.enabled ||
   reviewedPromotion.fixture.requiresInterface;
