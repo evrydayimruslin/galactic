@@ -95,3 +95,24 @@ test("post-promotion latch verification waits only for the exact OFF predecessor
   assert.match(step, /"\$status_file" enabled clear/u);
   assert.doesNotMatch(step, /sleep (?:[6-9]|[1-9][0-9])/u);
 });
+
+test("every OFF transition waits only for the exact enabled predecessor", () => {
+  for (const name of [
+    "Verify the emergency-stop latch after promotion",
+    "Verify the emergency-stop latch after OFF compensation",
+    "Verify the emergency-stop latch after unpublished-evidence OFF restore",
+  ]) {
+    const [step] = namedStepBlocks(workflow).filter((candidate) =>
+      candidate.includes(`name: ${name}`)
+    );
+    assert.ok(step, `${name} step is missing`);
+    assert.match(step, /umask 077/u);
+    assert.match(step, /for attempt in \{1\.\.12\}/u);
+    assert.match(step, /\$\{status_file%\.json\}-attempt-/u);
+    assert.match(step, /"\$attempt_file" disabled clear/u);
+    assert.match(step, /"\$attempt_file" enabled clear/u);
+    assert.match(step, /Cache-Control: no-cache/u);
+    assert.match(step, /if \[ "\$attempt" -lt 12 \]; then\n\s+sleep 5/u);
+    assert.doesNotMatch(step, /sleep (?:[6-9]|[1-9][0-9])/u);
+  }
+});
