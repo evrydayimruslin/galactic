@@ -1202,14 +1202,16 @@ test("captures a failed terminal runtime before rejecting certification", async 
         marker_sha256: digest(Buffer.from(MARKER)),
         marker_length: Buffer.byteLength(MARKER),
       };
+      const terminalIdentity = computeIdentity(
+        isBrowser ? BROWSER_RUN_ID : ASYNC_RUN_ID,
+        isBrowser ? BROWSER_RECEIPT_ID : ASYNC_RECEIPT_ID,
+        isBrowser ? ["browser", "shell"] : ["shell"],
+        "completed",
+        false,
+      );
+      if (isBrowser) delete terminalIdentity.async;
       return invocation(functionName, {
-        ...computeIdentity(
-          isBrowser ? BROWSER_RUN_ID : ASYNC_RUN_ID,
-          isBrowser ? BROWSER_RECEIPT_ID : ASYNC_RECEIPT_ID,
-          isBrowser ? ["browser", "shell"] : ["shell"],
-          "completed",
-          false,
-        ),
+        ...terminalIdentity,
         started_at: STARTED_AT,
         finished_at: FINISHED_AT,
         exit_code: isBrowser ? 1 : 0,

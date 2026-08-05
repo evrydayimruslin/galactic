@@ -1101,7 +1101,6 @@ function failedScenarioRuntimeDiagnostic(
   if (
     identity.runId !== expected.runId ||
     identity.receiptId !== expected.receiptId ||
-    run.async !== false ||
     !OWNER_SETTLED_STATUSES.has(run.status) ||
     !(exitCode === null || Number.isSafeInteger(exitCode)) ||
     run.status !== owner.status ||
