@@ -39,6 +39,7 @@ hash_files \
   compute-worker/images/standard/bridge/package.json \
   compute-worker/images/standard/bridge/package-lock.json \
   compute-worker/images/standard/bridge/gx-mcp.mjs \
+  compute-worker/images/standard/configure-chrome-ca-policy.mjs \
   compute-worker/images/standard/gx.mjs \
   compute-worker/images/standard/entrypoint.sh \
   > "$output"

@@ -76,6 +76,43 @@ describe("developer-v1 image contract", () => {
     expect(smoke).toContain("/node_modules/playwright-core");
   });
 
+  it("installs the runtime interception CA through mandatory Chrome policy", () => {
+    const dockerfile = fixture("Dockerfile");
+    const entrypoint = fixture("entrypoint.sh");
+    const policyInstaller = fixture("configure-chrome-ca-policy.mjs");
+    const smoke = repositoryFile("compute-worker/scripts/smoke-image.sh");
+    const inputHasher = repositoryFile(
+      "compute-worker/scripts/hash-image-inputs.sh",
+    );
+
+    expect(entrypoint).toContain(
+      "/etc/opt/chrome_for_testing/policies/managed/galactic-cloudflare-ca.json",
+    );
+    expect(entrypoint).toContain(
+      "/etc/cloudflare/certs/cloudflare-containers-ca.crt",
+    );
+    expect(entrypoint).toContain("configure-chrome-ca-policy.mjs");
+    expect(policyInstaller).toContain("CACertificates");
+    expect(policyInstaller).toContain("new X509Certificate(der)");
+    expect(policyInstaller).toContain("certificate.ca");
+    expect(policyInstaller).toContain("renameSync(temporaryFile, policyFile)");
+    expect(policyInstaller).toContain("chmodSync(policyFile, 0o444)");
+    expect(dockerfile).toContain(
+      "COPY compute-worker/images/standard/configure-chrome-ca-policy.mjs",
+    );
+    expect(inputHasher).toContain(
+      "compute-worker/images/standard/configure-chrome-ca-policy.mjs",
+    );
+    expect(smoke).toContain("policy.CACertificates.length !== 1");
+    expect(smoke).toContain("galactic-cloudflare-ca.json)\" = 444");
+
+    for (const source of [dockerfile, entrypoint, policyInstaller, smoke]) {
+      expect(source).not.toContain("ignoreHTTPSErrors");
+      expect(source).not.toContain("--ignore-certificate-errors");
+      expect(source).not.toContain("--ignore-certificate-errors-spki-list");
+    }
+  });
+
   it("bakes the local Compute-capable CLI with a pinned, offline Deno runtime", () => {
     const dockerfile = fixture("Dockerfile");
     const smoke = repositoryFile("compute-worker/scripts/smoke-image.sh");

@@ -23,10 +23,18 @@ unset \
 # catch-all public HTTP(S) egress handler. Preserve the public root bundle while
 # adding Cloudflare's runtime CA used by the interception layer.
 GALACTIC_CA_BUNDLE=/tmp/galactic-ca-certificates.crt
+CLOUDFLARE_CA_CERTIFICATES=/etc/cloudflare/certs/cloudflare-containers-ca.crt
+CHROME_FOR_TESTING_CA_POLICY=/etc/opt/chrome_for_testing/policies/managed/galactic-cloudflare-ca.json
 cp /etc/ssl/certs/ca-certificates.crt "$GALACTIC_CA_BUNDLE"
-if [ -s /etc/cloudflare/certs/cloudflare-containers-ca.crt ]; then
-  cat /etc/cloudflare/certs/cloudflare-containers-ca.crt >> "$GALACTIC_CA_BUNDLE"
-  export NODE_EXTRA_CA_CERTS=/etc/cloudflare/certs/cloudflare-containers-ca.crt
+if [ -s "$CLOUDFLARE_CA_CERTIFICATES" ]; then
+  # Chrome does not consume the language-specific CA environment variables
+  # below. Install the same runtime CA through Chrome for Testing's supported
+  # mandatory enterprise policy before any browser process can start.
+  node /opt/galactic/bin/configure-chrome-ca-policy.mjs \
+    "$CLOUDFLARE_CA_CERTIFICATES" \
+    "$CHROME_FOR_TESTING_CA_POLICY"
+  cat "$CLOUDFLARE_CA_CERTIFICATES" >> "$GALACTIC_CA_BUNDLE"
+  export NODE_EXTRA_CA_CERTS="$CLOUDFLARE_CA_CERTIFICATES"
 fi
 export SSL_CERT_FILE="$GALACTIC_CA_BUNDLE"
 export CURL_CA_BUNDLE="$GALACTIC_CA_BUNDLE"

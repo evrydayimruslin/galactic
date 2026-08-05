@@ -40,11 +40,32 @@ docker run --rm \
   test "$(galacticconnection --version)" = "$EXPECTED_GALACTIC_CLI_VERSION"
   test ! -e /usr/local/bin/cloudflared
   node --check /opt/galactic/bin/gx.mjs
+  node --check /opt/galactic/bin/configure-chrome-ca-policy.mjs
   node --check /opt/galactic/bridge/gx-mcp.mjs
   test -f /opt/galactic/bridge/node_modules/@modelcontextprotocol/sdk/package.json
   test -L /node_modules/playwright
   test -L /node_modules/playwright-core
   playwright --version
+  awk '\''
+    /-----BEGIN CERTIFICATE-----/ { emitting = 1 }
+    emitting { print }
+    /-----END CERTIFICATE-----/ { exit }
+  '\'' /etc/ssl/certs/ca-certificates.crt > /tmp/galactic-smoke-ca.crt
+  /opt/galactic/bin/configure-chrome-ca-policy.mjs \
+    /tmp/galactic-smoke-ca.crt \
+    /tmp/galactic-chrome-policy/managed/galactic-cloudflare-ca.json
+  node -e '\''
+    const { readFileSync } = require("node:fs");
+    const policy = JSON.parse(readFileSync(
+      "/tmp/galactic-chrome-policy/managed/galactic-cloudflare-ca.json",
+      "utf8",
+    ));
+    if (!Array.isArray(policy.CACertificates) || policy.CACertificates.length !== 1) process.exit(1);
+  '\''
+  test "$(stat -c %a /tmp/galactic-chrome-policy/managed)" = 755
+  test "$(stat -c %a /tmp/galactic-chrome-policy/managed/galactic-cloudflare-ca.json)" = 444
+  test "$(stat -c %u /tmp/galactic-chrome-policy/managed/galactic-cloudflare-ca.json)" = 0
+  rm -rf /tmp/galactic-smoke-ca.crt /tmp/galactic-chrome-policy
   cd /workspace
   node --input-type=module -e '\''
     import { chromium } from "playwright";

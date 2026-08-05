@@ -397,12 +397,16 @@ RUN --mount=type=cache,target=/root/.npm \
     npm cache clean --force
 
 COPY compute-worker/images/standard/gx.mjs /opt/galactic/bin/gx.mjs
+COPY compute-worker/images/standard/configure-chrome-ca-policy.mjs /opt/galactic/bin/configure-chrome-ca-policy.mjs
 COPY compute-worker/images/standard/bridge /opt/galactic/bridge
 COPY compute-worker/images/standard/entrypoint.sh /opt/galactic/bin/entrypoint.sh
 
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --omit=dev --ignore-scripts --prefix /opt/galactic/bridge && \
-    chmod 0755 /opt/galactic/bin/gx.mjs /opt/galactic/bridge/gx-mcp.mjs /opt/galactic/bin/entrypoint.sh && \
+    chmod 0755 /opt/galactic/bin/gx.mjs \
+      /opt/galactic/bin/configure-chrome-ca-policy.mjs \
+      /opt/galactic/bridge/gx-mcp.mjs \
+      /opt/galactic/bin/entrypoint.sh && \
     ln -s /opt/galactic/bin/gx.mjs /usr/local/bin/gx && \
     mkdir -p /workspace /run/galactic/secrets /opt/galactic/packs && \
     chmod 0700 /run/galactic /run/galactic/secrets && \
