@@ -35,7 +35,7 @@ const COMPUTE_DEPLOYMENT_ID = '88888888-8888-4888-8888-888888888888';
 const COMPUTE_RUN_ID = '99999999-9999-4999-8999-999999999999';
 const NOW_MS = Date.parse('2030-01-01T00:00:00.000Z');
 const GENERATED_AT = '2020-01-02T12:00:00.000Z';
-const SOAK_ELIGIBLE_AT = '2020-01-02T13:00:00.000Z';
+const SOAK_ELIGIBLE_AT = '2020-01-03T12:00:00.000Z';
 const FIXED_ARTIFACT_SHA256 =
   '6ad9b8ea5280658dc4b229a2b6180d530c4d3824b541d218266ea6049e8b763b';
 
@@ -185,13 +185,15 @@ function predecessorVerification(stage, target, {
   const generatedAt = stage === 'production_canary'
     ? '2020-01-01T08:00:00.000Z'
     : '2020-01-01T10:00:00.000Z';
-  const soakEligibleAt = stage === 'production_canary' ? '2020-01-01T09:00:00.000Z' : null;
+  const soakEligibleAt = stage === 'production_canary' ? '2020-01-02T08:00:00.000Z' : null;
   return {
     schema_version: 1,
     kind: 'galactic_compute_rollout_predecessor_verification',
     verified: true,
-    verified_at: '2020-01-01T11:00:00.000Z',
-    minimum_age_seconds: stage === 'production_canary' ? 3_600 : 0,
+    verified_at: stage === 'production_canary'
+      ? '2020-01-02T11:00:00.000Z'
+      : '2020-01-01T11:00:00.000Z',
+    minimum_age_seconds: stage === 'production_canary' ? 86_400 : 0,
     predecessor: {
       stage,
       target: priorTarget,
@@ -202,6 +204,9 @@ function predecessorVerification(stage, target, {
         : '2020-01-01T10:01:00.000Z',
       generated_at: generatedAt,
       soak_eligible_at: soakEligibleAt,
+      workflow_completed_at: stage === 'production_canary'
+        ? '2020-01-01T08:02:00.000Z'
+        : '2020-01-01T10:02:00.000Z',
     },
     dispatch: priorDispatch,
     final_state: rolloutState({
@@ -209,6 +214,57 @@ function predecessorVerification(stage, target, {
       target: priorTarget,
       stateDispatch: priorDispatch,
     }),
+  };
+}
+
+function activeSoakVerification(prior, currentDispatch) {
+  const acceptedProbeRunIds = ['61000000001', '61000000002', '61000000003'];
+  const browserProbeRunIds = ['61000000002'];
+  return {
+    schema_version: 1,
+    kind: 'galactic_compute_canary_soak_verification',
+    verified: true,
+    verified_at: '2020-01-02T11:59:00.000Z',
+    target: 'production',
+    repository: currentDispatch.repository,
+    candidate_sha: currentDispatch.git_sha,
+    production_canary_workflow_run_id: prior.dispatch.workflow_run_id,
+    current_workflow_run_id: currentDispatch.workflow_run_id,
+    soak_started_at: prior.predecessor.workflow_completed_at,
+    soak_eligible_at: '2020-01-02T08:02:00.000Z',
+    minimum_soak_seconds: 86_400,
+    accepted_probe_run_ids: acceptedProbeRunIds,
+    probe_count: acceptedProbeRunIds.length,
+    browser_probe_run_ids: browserProbeRunIds,
+    browser_probe_count: browserProbeRunIds.length,
+    first_probe_at: '2020-01-01T08:10:00.000Z',
+    final_probe_at: '2020-01-02T11:55:00.000Z',
+    maximum_lifecycle_gap_seconds: 1_800,
+    maximum_browser_gap_seconds: 3_600,
+    live_state: {
+      api_version_id: prior.final_state.api.version_id,
+      api_deployment_id: prior.final_state.api.deployment_id,
+      compute_version_id: prior.final_state.compute.version_id,
+      compute_deployment_id: prior.final_state.compute.deployment_id,
+      environment_digest: prior.final_state.environment_digest,
+      policy: prior.final_state.policy,
+      canary_allowlist: prior.final_state.canary_allowlist,
+      certification_principal: prior.final_state.certification_principal,
+    },
+    dlq: {
+      compute: {
+        name: 'galactic-compute-dlq',
+        baseline_count: 0,
+        final_count: 0,
+      },
+      reconciliation: {
+        name: 'galactic-compute-reconciliation-dlq',
+        baseline_count: 0,
+        final_count: 0,
+      },
+    },
+    accounting_violations: 0,
+    reconciliation_violations: 0,
   };
 }
 
@@ -293,6 +349,7 @@ function createFixture(
     path: '.github/workflows/compute-canary-rollout.yml',
     head_sha: GIT_SHA,
     head_branch: 'main',
+    updated_at: '2020-01-02T12:02:00.000Z',
     repository: { id: Number(REPOSITORY_ID), full_name: REPOSITORY },
     head_repository: { id: Number(REPOSITORY_ID), full_name: REPOSITORY },
   };
@@ -335,6 +392,9 @@ function createFixture(
   const releaseVerification = computeReleaseVerification(target, finalState);
   const priorStage = priorStageFor(stage, target);
   const prior = priorStage ? predecessorVerification(priorStage, target) : null;
+  const activeSoak = stage === 'production_global'
+    ? activeSoakVerification(prior, currentDispatch)
+    : null;
 
   const rollout = {
     schema_version: 1,
@@ -364,6 +424,17 @@ function createFixture(
       evidence_file: 'final-state.json',
       sha256: writeJson(directory, 'final-state.json', finalState),
     },
+    active_soak: activeSoak
+      ? {
+        evidence_file: 'soak-verification.json',
+        sha256: writeJson(
+          directory,
+          'soak-verification.json',
+          activeSoak,
+        ),
+        production_canary_workflow_run_id: prior.dispatch.workflow_run_id,
+      }
+      : null,
     canary_identity: identity
       ? {
         evidence_file: 'canary-identity.json',
@@ -409,6 +480,7 @@ function createFixture(
     certification,
     releaseVerification,
     prior,
+    activeSoak,
   };
   persist(fixture);
   return fixture;
@@ -439,7 +511,7 @@ function verify(fixture, overrides = {}) {
     expectedStage: fixture.stage,
     expectedTarget: fixture.target,
     currentGitSha: GIT_SHA,
-    minimumAgeSeconds: '3600',
+    minimumAgeSeconds: '86400',
     nowMs: NOW_MS,
     ...overrides,
   });
@@ -899,6 +971,77 @@ test('rejects Compute release and predecessor lineage drift', () => {
   }
 });
 
+test('requires hash-bound active-soak proof for production_global', () => {
+  const cases = [
+    ['missing active soak', (fixture) => {
+      fixture.rollout.active_soak = null;
+    }],
+    ['wrong referenced canary run', (fixture) => {
+      fixture.rollout.active_soak.production_canary_workflow_run_id =
+        '30000000001';
+    }],
+    ['unverified soak', (fixture) => {
+      fixture.activeSoak.verified = false;
+    }],
+    ['wrong soak candidate SHA', (fixture) => {
+      fixture.activeSoak.candidate_sha = RELEASE_SHA;
+    }],
+    ['wrong global workflow run', (fixture) => {
+      fixture.activeSoak.current_workflow_run_id = '31000000001';
+    }],
+    ['lifecycle gap above limit', (fixture) => {
+      fixture.activeSoak.maximum_lifecycle_gap_seconds = 2_101;
+    }],
+    ['verification before soak eligibility', (fixture) => {
+      fixture.activeSoak.verified_at = '2020-01-02T07:59:59.000Z';
+    }],
+    ['uncovered initial lifecycle gap', (fixture) => {
+      fixture.activeSoak.first_probe_at = '2020-01-01T08:37:01.000Z';
+    }],
+    ['stale final lifecycle probe', (fixture) => {
+      fixture.activeSoak.final_probe_at = '2020-01-02T11:23:59.000Z';
+    }],
+    ['missing browser coverage', (fixture) => {
+      fixture.activeSoak.browser_probe_run_ids = [];
+      fixture.activeSoak.browser_probe_count = 0;
+    }],
+    ['live Compute drift', (fixture) => {
+      fixture.activeSoak.live_state.compute_version_id = API_ID;
+    }],
+    ['Compute DLQ growth', (fixture) => {
+      fixture.activeSoak.dlq.compute.final_count = 1;
+    }],
+    ['accounting violation', (fixture) => {
+      fixture.activeSoak.accounting_violations = 1;
+    }],
+    ['verification after rollout commit', (fixture) => {
+      fixture.activeSoak.verified_at = '2020-01-02T12:00:01.000Z';
+    }],
+  ];
+  for (const [name, mutate] of cases) {
+    const fixture = createFixture('production_global');
+    try {
+      mutate(fixture);
+      if (fixture.rollout.active_soak !== null) {
+        rebind(
+          fixture,
+          'active_soak',
+          'soak-verification.json',
+          fixture.activeSoak,
+        );
+      }
+      persist(fixture);
+      assert.throws(
+        () => verify(fixture),
+        /Compute rollout predecessor is invalid/u,
+        name,
+      );
+    } finally {
+      dispose(fixture);
+    }
+  }
+});
+
 test('enforces both minimum age and soak eligibility for production_canary', () => {
   const ageFixture = createFixture('production_canary');
   const soakFixture = createFixture('production_canary');
@@ -907,6 +1050,7 @@ test('enforces both minimum age and soak eligibility for production_canary', () 
     ageFixture.rollout.generated_at = new Date(tooRecent).toISOString();
     ageFixture.rollout.soak_eligible_at = new Date(tooRecent + 3_600_000).toISOString();
     ageFixture.artifactList.artifacts[0].created_at = new Date(tooRecent + 100).toISOString();
+    ageFixture.workflowRun.updated_at = new Date(tooRecent + 200).toISOString();
     persist(ageFixture);
     assert.throws(
       () => verify(ageFixture),
@@ -916,6 +1060,7 @@ test('enforces both minimum age and soak eligibility for production_canary', () 
     soakFixture.rollout.generated_at = new Date(NOW_MS - 7_200_000).toISOString();
     soakFixture.rollout.soak_eligible_at = new Date(NOW_MS + 1_000).toISOString();
     soakFixture.artifactList.artifacts[0].created_at = new Date(NOW_MS - 7_199_900).toISOString();
+    soakFixture.workflowRun.updated_at = new Date(NOW_MS - 7_199_800).toISOString();
     persist(soakFixture);
     assert.throws(
       () => verify(soakFixture),

@@ -24,6 +24,15 @@ export type ComputeCertificationAuthorization =
   | { status: "unauthorized" }
   | { status: "unavailable" };
 
+export type ComputeCertificationCredentialAuthorization =
+  | {
+    status: "authorized";
+    credentialReference: string;
+    rateLimitKey: string;
+  }
+  | { status: "unauthorized" }
+  | { status: "unavailable" };
+
 function bytes(value: string): Uint8Array {
   return new TextEncoder().encode(value);
 }
@@ -76,28 +85,28 @@ function certificationPrincipal(
 }
 
 /**
- * Authenticate the read-only deployed-certification lane.
+ * Authenticate the read-only deployed-certification credential.
  *
  * This credential is deliberately independent from the destructive global
- * emergency-stop credential. A scheduled probe can therefore inspect only a
- * bounded, sanitized persistence snapshot and cannot stop or release Compute.
+ * emergency-stop credential. A scheduled probe can use it for the bounded
+ * persistence snapshot or sanitized latch status, but cannot stop or release
+ * Compute. Principal-bound snapshot authentication is layered below.
  */
-export async function authenticateComputeCertification(
+export async function authenticateComputeCertificationCredential(
   request: Request,
   env: Partial<Env> = getEnv(),
-): Promise<ComputeCertificationAuthorization> {
+): Promise<ComputeCertificationCredentialAuthorization> {
   const expected = typeof env.COMPUTE_CERTIFICATION_TOKEN === "string"
     ? env.COMPUTE_CERTIFICATION_TOKEN
     : "";
   const supplied = bearerToken(request);
-  const principal = certificationPrincipal(env);
   const [expectedDigest, suppliedDigest] = await Promise.all([
     sha256(expected),
     sha256(supplied),
   ]);
 
   if (
-    !isComputeOperatorTokenUsable(expected) || !principal ||
+    !isComputeOperatorTokenUsable(expected) ||
     !isComputeCredentialIsolated(env, "COMPUTE_CERTIFICATION_TOKEN")
   ) return { status: "unavailable" };
   if (
@@ -113,6 +122,19 @@ export async function authenticateComputeCertification(
       digestHex(expectedDigest)
     }`,
     rateLimitKey: rateLimitUuid(expectedDigest),
-    principal,
   };
+}
+
+export async function authenticateComputeCertification(
+  request: Request,
+  env: Partial<Env> = getEnv(),
+): Promise<ComputeCertificationAuthorization> {
+  const authorization = await authenticateComputeCertificationCredential(
+    request,
+    env,
+  );
+  if (authorization.status !== "authorized") return authorization;
+  const principal = certificationPrincipal(env);
+  if (!principal) return { status: "unavailable" };
+  return { ...authorization, principal };
 }

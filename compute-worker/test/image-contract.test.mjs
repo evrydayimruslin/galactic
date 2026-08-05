@@ -82,7 +82,9 @@ describe("developer-v1 image contract", () => {
     const cliEntry = repositoryFile("cli/bin/ultralight.js");
     const cliPackage = JSON.parse(repositoryFile("cli/package.json"));
     const toolchainPackage = JSON.parse(fixture("toolchain/package.json"));
-    expect(cliPackage.version).toBe("2.4.0");
+    expect(cliPackage.version).toMatch(
+      /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u,
+    );
     expect(toolchainPackage.dependencies).not.toHaveProperty("galacticconnection");
     expect(dockerfile).toContain("ARG DENO_VERSION=2.9.3");
     expect(dockerfile).toContain(
@@ -95,6 +97,16 @@ describe("developer-v1 image contract", () => {
       "deno --version | awk 'NR == 1 { print $2 }'",
     );
     expect(dockerfile).toContain("COPY cli/package.json cli/package-lock.json");
+    expect(dockerfile).not.toContain("ARG GALACTIC_CLI_VERSION");
+    expect(dockerfile).toContain(
+      'require("/opt/galactic/cli/package.json").version',
+    );
+    expect(dockerfile).toContain(
+      'ai.galactic.tool.galactic-cli.source="cli/package.json"',
+    );
+    expect(dockerfile).toContain(
+      "/opt/galactic/image-metadata/galactic-cli-version.txt",
+    );
     for (const packagedFile of cliPackage.files.filter(
       (path) => !path.endsWith("/"),
     )) {
@@ -104,6 +116,12 @@ describe("developer-v1 image contract", () => {
     expect(cliEntry).toContain("--cached-only");
     expect(cliEntry).toContain("--no-config");
     expect(smoke).toContain("deno galactic galacticconnection");
+    expect(smoke).toContain("require(process.argv[1])");
+    expect(smoke).toContain("EXPECTED_GALACTIC_CLI_VERSION");
+    expect(smoke).toContain(
+      "/opt/galactic/image-metadata/galactic-cli-version.txt",
+    );
+    expect(smoke).not.toContain("2.4.0");
     expect(smoke).toContain(
       'galactic budget --help | grep "conserved budget for the active Galactic Compute lease"',
     );
@@ -226,6 +244,25 @@ describe("developer-v1 image contract", () => {
     }
     expect(buildScript).toContain("--file images/standard/Dockerfile");
     expect(workflow).toContain("workflow_dispatch: {}");
+    expect(workflow).toContain("pull_request:");
+    expect(workflow).toContain("push:");
+    expect(workflow).toContain("branches: [main]");
+    expect(workflow).toContain("- cli/**");
+    expect(workflow).toContain("- compute-worker/**");
+    const contractsJob = workflow.slice(
+      workflow.indexOf("  contracts:"),
+      workflow.indexOf("  image:"),
+    );
+    const imageJob = workflow.slice(workflow.indexOf("  image:"));
+    expect(contractsJob).toContain("npm run verify");
+    expect(contractsJob).toContain("Wrangler contract dry run (production)");
+    expect(contractsJob).not.toContain("docker build");
+    expect(contractsJob).not.toContain("image.spdx.json");
+    expect(imageJob).toContain("if: github.event_name == 'workflow_dispatch'");
+    expect(imageJob).toContain("needs: contracts");
+    expect(imageJob).toContain("docker build");
+    expect(imageJob).toContain("image.spdx.json");
+    expect(workflow).not.toContain("docker push");
     expect(inputHasher).toContain(".dockerignore");
     expect(workflow).toContain("--file images/standard/Dockerfile");
     expect(dockerignore.trimStart()).toMatch(/^#/);

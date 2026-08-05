@@ -86,6 +86,7 @@ import {
 } from "../services/compute-emergency-auth.ts";
 import {
   authenticateComputeCertification,
+  authenticateComputeCertificationCredential,
 } from "../services/compute-certification-auth.ts";
 import { isComputeCredentialIsolated } from "../services/compute-credential-isolation.ts";
 import {
@@ -344,16 +345,23 @@ export async function handleAdmin(request: Request): Promise<Response> {
   // GET /api/admin/compute/emergency-stop — sanitized rollout preflight.
   // Authenticate before rate-limit persistence or emergency-stop persistence.
   if (path === "/api/admin/compute/emergency-stop" && method === "GET") {
-    const authorization = await authenticateComputeEmergencyStopOperator(
-      request,
-    );
-    if (authorization.status === "unavailable") {
+    const [emergencyAuthorization, certificationAuthorization] = await Promise
+      .all([
+        authenticateComputeEmergencyStopOperator(request),
+        authenticateComputeCertificationCredential(request),
+      ]);
+    const authorized = emergencyAuthorization.status === "authorized" ||
+      certificationAuthorization.status === "authorized";
+    if (
+      !authorized && emergencyAuthorization.status === "unavailable" &&
+      certificationAuthorization.status === "unavailable"
+    ) {
       return privateNoStore(error(
         "Compute emergency-stop operator authentication unavailable",
         503,
       ));
     }
-    if (authorization.status !== "authorized") {
+    if (!authorized) {
       return privateNoStore(error(
         "Unauthorized: invalid Compute emergency-stop credential",
         401,
@@ -364,6 +372,9 @@ export async function handleAdmin(request: Request): Promise<Response> {
         request,
         "admin:compute_emergency_stop_status",
         () => handleAdminComputeEmergencyStopStatus(),
+        certificationAuthorization.status === "authorized"
+          ? certificationAuthorization.rateLimitKey
+          : undefined,
       ),
     );
   }

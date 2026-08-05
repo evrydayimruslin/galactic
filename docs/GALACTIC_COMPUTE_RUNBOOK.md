@@ -402,12 +402,14 @@ opening a public route:
    final-fence result promotes the same-dispatch OFF API version.
 9. Repeat the migration/API-OFF/fixed-fixture sequence in production from the
    immutable release tag, then dispatch `production_canary` with the successful
-   staging run as predecessor. After its certification succeeds and the
-   one-hour soak completes, dispatch `production_global` with that production
-   canary run as predecessor. The global dispatch revalidates the live canary,
-   the soak, all bound evidence, and the full production-global certification
-   before it leaves admission global; any ambiguity promotes the OFF version
-   captured by that dispatch.
+   staging run as predecessor. After its certification succeeds, keep the exact
+   canary API/Compute pair under active production probes for at least 24
+   elapsed hours. Dispatch `production_global` with that production canary run
+   as predecessor only after the active-soak verifier accepts every probe and
+   deployment inventory entry. The global dispatch revalidates the live
+   canary, the active soak, all bound evidence, and the full production-global
+   certification before it leaves admission global; any ambiguity promotes the
+   OFF version captured by that dispatch.
 
 Normal subsequent releases do not need the bootstrap omission. Deploy order is
 database migration, API control plane with admission off, Compute Worker/image,
@@ -505,16 +507,18 @@ SHA. Current validators
 still require the resulting version's script ETag and all non-policy execution
 metadata to match the live API before it can receive traffic.
 
-The independent **Compute CI** workflow is currently manual-only. Dispatch it
-when preparing a future image/Compute release; it runs the same locked image
-build, smoke, SBOM, checksum-pinned Grype gate, Worker tests, and
-production/staging dry runs. The restoration workflow intentionally does not
-dispatch it or treat today's working-tree image inputs as evidence about the
-already-live digest. In particular, a newer CLI package version in source does
-not imply that version exists in the certified image; reconcile such image
-contract drift in the next Compute image release, not in this vars-only
-restoration. Compute CI and Compute Deploy retain the unfiltered JSON finding
-set and fail before image push/deploy on any CRITICAL or fixable HIGH finding.
+The independent **Compute CI** workflow runs its lightweight Worker, CLI,
+API/Compute bridge, and production/staging dry-run contracts automatically for
+relevant pull requests and `main` pushes. A manual dispatch runs those contracts
+first and then adds the locked image build, smoke, SBOM, checksum-pinned Grype
+gate, and evidence packet; that heavy job never publishes or deploys an image.
+The restoration workflow intentionally does not dispatch the heavy job or treat
+today's working-tree image inputs as evidence about the already-live digest. In
+particular, a newer CLI package version in source does not imply that version
+exists in the certified image; reconcile such image contract drift in the next
+Compute image release, not in this vars-only restoration. Compute CI and
+Compute Deploy retain the unfiltered JSON finding set and fail before image
+push/deploy on any CRITICAL or fixable HIGH finding.
 Any temporary exception must identify one exact
 CVE/package, owner, rationale, and expiry; a blanket severity ignore is not an
 acceptable launch gate. Neither workflow discovers or invents the base-image
@@ -761,11 +765,13 @@ same API deployment lock as API Deploy, Compute Deploy, and emergency disable;
 
 Before the first dispatch, provision a distinct
 `COMPUTE_CERTIFICATION_TOKEN` secret in both protected GitHub environments and
-the matching API Worker. It authenticates only the bounded, read-only
-`POST /api/admin/compute/certification` snapshot. It is not the emergency-stop
-credential, and neither bearer is accepted by the other's route. The snapshot
-step receives no owner-session, Supabase, Cloudflare, or emergency-stop secret;
-the owner suite never receives the certification bearer.
+the matching API Worker. It authenticates the bounded, read-only
+`POST /api/admin/compute/certification` snapshot and the sanitized read-only
+`GET /api/admin/compute/emergency-stop` latch preflight used by probes. It is
+not accepted by either destructive emergency-stop or release POST. Conversely,
+the emergency-stop bearer is not accepted by the certification snapshot route.
+The snapshot step receives no owner-session, Supabase, Cloudflare, or
+emergency-stop secret; the owner suite never receives the certification bearer.
 The API must fail closed if this secret equals
 `COMPUTE_EMERGENCY_STOP_TOKEN`, `SUPABASE_SERVICE_ROLE_KEY`, or
 `COMPUTE_JOB_TOKEN_PEPPER`; compare them inside the Worker, not by co-locating
@@ -774,6 +780,19 @@ The fixed certification Agent's `run_compute_policy_probe` function must be at
 the managed `free` baseline and its certification routine must be paused before
 a normal dispatch. The suite refuses to mutate any other starting policy;
 cleanup-only is the recovery path that restores this fixed invariant.
+
+Provision a separate protected GitHub environment named
+`production-compute-probe` for `.github/workflows/compute-probe.yml`. Its
+Cloudflare credential is `COMPUTE_PROBE_CLOUDFLARE_TOKEN`, with only the read
+permissions needed to inspect Worker versions, deployments, bindings,
+Containers, queues, and DLQs. The probe environment must not expose the rollout
+`CLOUDFLARE_API_TOKEN`, `COMPUTE_EMERGENCY_STOP_TOKEN`, or any credential that
+can upload or promote an API version, change rollout vars, or release a stop
+latch. Keep the bounded owner-session and read-only certification credentials
+in separate steps under the same credential-domain rules as the rollout. An
+OFF production API is a successful probe no-op: record and retain the exact
+OFF/live-deployment evidence, admit no job, and do not count that run toward an
+active canary soak.
 
 1. **`staging_canary` from `main`:** type `rollout-staging-canary`, supply the
    successful staging `preserve_off` Compute Deploy run, and leave predecessor
@@ -791,17 +810,36 @@ cleanup-only is the recovery path that restores this fixed invariant.
    have the identical release SHA and combined certification evidence. The
    production canary derives and dogfoods the production owner/Agent pair with
    the `production-canary` profile in the same way.
-3. **One-hour soak:** do not hold a runner. The production-canary evidence
-   records `soak_eligible_at`; the next dispatch rejects a run before that
-   timestamp. Monitor admission denials, job errors, latency, reservation and
-   receipt conservation, queue/DLQ depth, reconciliation, and Container health.
-4. **`production_global` from the same immutable tag:** after the one-hour
-   minimum, type `rollout-production-global` and bind the successful production
-   canary. The workflow requires the exact canary API/Compute deployment to
-   remain unchanged, uploads a fresh no-traffic OFF rollback anchor in this
-   dispatch, uploads the global/empty-allowlist candidate, promotes that exact
-   UUID, re-resolves the same fixed owner/Agent identity, runs the complete
-   `production-global` suite and private snapshot, and fences everything again.
+3. **24-hour active production soak:** do not hold a runner. The dedicated
+   probe workflow runs a lifecycle canary every 15 minutes and a real browser
+   HTTPS/CA/screenshot probe hourly. The authoritative window begins only when
+   the production-canary workflow is successful and its artifact is published;
+   probes created during the finalize/upload interval are outside the window.
+   A production-global dispatch fails closed unless at least 24 elapsed hours
+   after that publication are covered, adjacent lifecycle probes are
+   no more than 35 minutes apart, every required hourly browser result exists,
+   every probe succeeded, and the final lifecycle probe is no more than 35
+   minutes old. Every probe must bind the same API version, Compute version and
+   digest, policy, and certification principal as the production-canary
+   evidence. The dispatch queue backlog and oldest age must remain zero, DLQ
+   depth may not increase from the accepted baseline, and settlement, receipt,
+   conservation, cleanup, and reconciliation violations must remain exactly
+   zero. The workflow retains each private, hashed probe artifact for 30 days.
+   Any production API or Compute deployment during the interval resets the soak
+   to that deployment; staging-only deploys do not. A gap, failure, drift,
+   missing artifact, incomplete run inventory, or ambiguous result starts a new
+   24-hour window.
+4. **`production_global` from the same immutable tag:** after the active soak
+   passes, type `rollout-production-global` and bind the successful production
+   canary. Before receiving any rollout-var mutation credential, the workflow
+   downloads the complete probe and API/Compute deployment inventories,
+   verifies the 24-hour contract, and binds its deterministic verification
+   summary to the rollout evidence. It then requires the exact canary
+   API/Compute deployment to remain unchanged, uploads a fresh no-traffic OFF
+   rollback anchor in this dispatch, uploads the global/empty-allowlist
+   candidate, promotes that exact UUID, re-resolves the same fixed owner/Agent
+   identity, runs the complete `production-global` suite and private snapshot,
+   and fences everything again.
 5. **Operational validation:** keep error, latency, budget conservation, DLQ,
    reconciliation, and cost signals green. Exercise low-privilege secret
    delivery/redaction separately; the release certification intentionally uses
@@ -923,9 +961,10 @@ curl --fail-with-body --request POST \
 ```
 
    Repeat an uncertain release with the same header and body. Only after the
-   release is audited should `staging_canary → production_canary →` the one-hour
-   soak `→ production_global` run again from the immutable release SHA. The
-   emergency-stop release route never changes `COMPUTE_ENABLED` itself.
+   release is audited should `staging_canary → production_canary →` a new
+   24-hour active production soak `→ production_global` run again from the
+   immutable release SHA. Reusing pre-incident probe evidence is forbidden.
+   The emergency-stop release route never changes `COMPUTE_ENABLED` itself.
 
 If only the image is bad, disable admission, roll the Compute Worker to the last
 known compatible image/version, allow or individually cancel accepted runs as
@@ -948,7 +987,14 @@ requires staged SDK/image transport migrations.
 - [ ] Compute CI evidence artifact, locked-input hashes, and SPDX SBOM
 - [ ] immutable Compute Deploy evidence artifact
 - [ ] staging-canary evidence artifact bound to the exact release SHA
-- [ ] production-canary evidence artifact and one-hour soak timestamp
+- [ ] production-canary evidence artifact and exact active canary baseline
+- [ ] 24 hours of 15-minute lifecycle probes with no gap over 35 minutes
+- [ ] hourly browser HTTPS/CA/screenshot evidence and a fresh final probe
+- [ ] zero failed probes, API/Compute/digest/policy/principal drift, DLQ growth,
+      accounting violations, settlement violations, or reconciliation failures
+- [ ] complete API/Compute deployment inventory proving no soak-resetting deploy
+- [ ] deterministic active-soak verification bound before mutation credentials
+- [ ] private hashed probe evidence retained for 30 days
 - [ ] production-global predecessor proof and final live fence
 - [ ] same-dispatch OFF rollback anchor (`captured` or verified `uploaded`)
 - [ ] exact Container name/image/version reports `active` or `ready`

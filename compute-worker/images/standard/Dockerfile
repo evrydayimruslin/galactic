@@ -181,7 +181,6 @@ ARG CHROME_FOR_TESTING_VERSION=152.0.7977.8
 ARG CLAUDE_CODE_VERSION=2.1.215
 ARG CODEX_VERSION=0.144.6
 ARG DENO_VERSION=2.9.3
-ARG GALACTIC_CLI_VERSION=2.4.0
 ARG GH_VERSION=2.96.0
 ARG GIT_LFS_VERSION=3.7.1
 ARG GALACTIC_RCLONE_VERSION=1.74.4
@@ -190,16 +189,16 @@ ARG PYTHON_VERSION=3.13.14
 ARG NPM_VERSION=12.0.1
 ARG BRACE_EXPANSION_VERSION=5.0.8
 
-# Keep the exact release inputs visible in OCI metadata. The Node package graph
-# itself is installed from toolchain/package-lock.json below; these labels also
-# let release evidence assert that the lock and intended direct versions agree.
+# Keep the exact externally pinned release inputs visible in OCI metadata. The
+# local Galactic CLI version is intentionally derived from cli/package.json
+# below and recorded inside the image instead of being duplicated here.
 LABEL org.opencontainers.image.base.name="${SANDBOX_BASE_IMAGE}" \
       ai.galactic.tool.playwright="playwright@${PLAYWRIGHT_VERSION}" \
       ai.galactic.tool.chrome="chrome-for-testing-beta@${CHROME_FOR_TESTING_VERSION}" \
       ai.galactic.tool.claude-code="@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
       ai.galactic.tool.codex="@openai/codex@${CODEX_VERSION}" \
       ai.galactic.tool.deno="deno@${DENO_VERSION}" \
-      ai.galactic.tool.galactic-cli="galacticconnection@${GALACTIC_CLI_VERSION}" \
+      ai.galactic.tool.galactic-cli.source="cli/package.json" \
       ai.galactic.tool.gh="gh@${GH_VERSION}" \
       ai.galactic.tool.git-lfs="git-lfs@${GIT_LFS_VERSION}-galactic.1" \
       ai.galactic.tool.rclone="rclone@${GALACTIC_RCLONE_VERSION}" \
@@ -383,12 +382,18 @@ COPY cli/lib /opt/galactic/cli/lib
 COPY cli/scripts /opt/galactic/cli/scripts
 COPY cli/mod.ts cli/api.ts cli/colors.ts cli/config.ts cli/logging.ts cli/job-context.ts cli/source-files.ts cli/deno.lock cli/skills.md /opt/galactic/cli/
 RUN --mount=type=cache,target=/root/.npm \
-    npm ci --omit=dev --ignore-scripts --prefix /opt/galactic/cli && \
-    test "$(node -p 'require("/opt/galactic/cli/package.json").version')" = "${GALACTIC_CLI_VERSION}" && \
+    set -eux; \
+    cli_version="$(node -p 'require("/opt/galactic/cli/package.json").version')"; \
+    node -e 'const version = require("/opt/galactic/cli/package.json").version; if (typeof version !== "string" || !/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) process.exit(1)'; \
+    npm ci --omit=dev --ignore-scripts --prefix /opt/galactic/cli; \
     deno cache --no-config --lock=/opt/galactic/cli/deno.lock --frozen /opt/galactic/cli/mod.ts && \
     chmod 0755 /opt/galactic/cli/bin/ultralight.js && \
     ln -sf /opt/galactic/cli/bin/ultralight.js /usr/local/bin/galactic && \
     ln -sf /opt/galactic/cli/bin/ultralight.js /usr/local/bin/galacticconnection && \
+    install -d -m 0755 /opt/galactic/image-metadata && \
+    printf '%s\n' "$cli_version" > /opt/galactic/image-metadata/galactic-cli-version.txt && \
+    test "$(galactic --version)" = "$cli_version" && \
+    test "$(galacticconnection --version)" = "$cli_version" && \
     npm cache clean --force
 
 COPY compute-worker/images/standard/gx.mjs /opt/galactic/bin/gx.mjs

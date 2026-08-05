@@ -79,8 +79,15 @@ export const COMPUTE_CERTIFICATION_PROFILES = Object.freeze({
     scenarios: COMPUTE_CERTIFICATION_SCENARIOS,
     policyPillar: true,
   }),
+  "probe-lifecycle": Object.freeze({
+    target: "production",
+    scenarios: Object.freeze(["async_echo"]),
+    policyPillar: false,
+  }),
+  // The hourly browser probe also includes the lifecycle scenario so every
+  // probe artifact independently proves an admitted, settled Compute body.
   probe: Object.freeze({
-    target: null,
+    target: "production",
     scenarios: Object.freeze(["async_echo", "browser_https"]),
     policyPillar: false,
   }),

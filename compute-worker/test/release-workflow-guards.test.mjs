@@ -999,7 +999,7 @@ describe("Compute canary rollout workflow static guards", () => {
     expect(predecessor).toContain("predecessor_stage=staging_canary");
     expect(predecessor).toContain("predecessor_stage=production_canary");
     expect(predecessor).toContain("predecessor_target=production");
-    expect(predecessor).toContain("minimum_age=3600");
+    expect(predecessor).toContain("minimum_age=86400");
     expect(predecessor).toContain(
       "inputs.predecessor_rollout_run_id != ''",
     );
@@ -1050,8 +1050,95 @@ describe("Compute canary rollout workflow static guards", () => {
       "production_canary has not satisfied minimum age and soak eligibility",
     );
     expect(workflow).toContain(
-      'date -u -d "$generated_at + 3600 seconds"',
+      'date -u -d "$generated_at + 86400 seconds"',
     );
+  });
+
+  it("verifies a complete 24-hour active soak before exposing mutation credentials", async () => {
+    const workflow = await text(
+      ".github/workflows/compute-canary-rollout.yml",
+    );
+    const soakVerifier = await text(
+      "scripts/release/verify-compute-canary-soak.mjs",
+    );
+    const soakContract = await import(
+      new URL(
+        "../../scripts/release/verify-compute-canary-soak.mjs",
+        import.meta.url,
+      )
+    );
+    const soakAt = workflow.indexOf(
+      "Verify the active production canary soak",
+    );
+    const predecessorAt = workflow.indexOf(
+      "Download and verify the predecessor stage",
+    );
+    const baselineAt = workflow.indexOf(
+      "Inspect and bind the exact live API/Compute pair",
+    );
+    const soak = rolloutStep(
+      workflow,
+      "Verify the active production canary soak",
+    );
+
+    expect(soakAt).toBeGreaterThan(0);
+    expect(soakAt).toBeGreaterThan(predecessorAt);
+    expect(soakAt).toBeLessThan(baselineAt);
+    expect(soak).toContain("inputs.stage == 'production_global'");
+    expect(soak).toContain(
+      "scripts/release/verify-compute-canary-soak.mjs",
+    );
+    expect(soak).toContain("86400");
+    expect(soak).toContain("2100");
+    expect(soak).toContain(".predecessor.workflow_completed_at");
+    expect(soak).toContain("compute-probe-production-");
+    expect(soak).toContain("soak-verification.json");
+    const fetchStart = soak.indexOf("fetch_workflow_page_set() {");
+    const fetchEnd = soak.indexOf("normalize_workflow_query() {");
+    const fetch = soak.slice(fetchStart, fetchEnd);
+    expect(fetchStart).toBeGreaterThan(0);
+    expect(fetchEnd).toBeGreaterThan(fetchStart);
+    expect(fetch).toContain(
+      'if [ "$workflow_file" = "compute-probe.yml" ]; then',
+    );
+    expect(fetch.match(/created=>=/gu)).toHaveLength(1);
+    expect(fetch).toContain(
+      "Fetch every retained deploy run so",
+    );
+    expect(fetch).toMatch(
+      /return[\s\S]*gh api --method GET --paginate "\$endpoint"[\s\S]*-f per_page=100 > "\$output"/u,
+    );
+    expect(soak).toContain('echo "verified=true" >> "$GITHUB_OUTPUT"');
+    expect(soak).not.toContain("secrets.");
+    expect(soak).not.toContain("secrets.CLOUDFLARE_API_TOKEN");
+    expect(soak).not.toContain("COMPUTE_EMERGENCY_STOP_TOKEN");
+    expect(soak).not.toContain("SUPABASE_ACCESS_TOKEN");
+    expect(soak).not.toContain("ULTRALIGHT_TOKEN");
+    expect(soak).not.toContain("GALACTIC_SMOKE_APP_ID");
+    expect(workflow).toContain("active_soak:");
+    expect(baselineAt).toBeGreaterThan(soakAt);
+    expect(soakContract.COMPUTE_CANARY_SOAK_MINIMUM_SECONDS).toBe(86_400);
+    expect(
+      soakContract.COMPUTE_CANARY_SOAK_MAX_LIFECYCLE_GAP_SECONDS,
+    ).toBe(2_100);
+    expect(soakContract.COMPUTE_CANARY_SOAK_MAX_BROWSER_GAP_SECONDS).toBe(
+      4_200,
+    );
+    expect(soakVerifier).toContain("requireBrowserInEveryCompleteUtcHour");
+    for (const failure of [
+      "a scheduled probe failed, was skipped, rerun, or is ambiguous",
+      "ran after the production canary soak started",
+      "probe API, Compute, digest, policy, or principal drifted",
+      "OFF no-op evidence cannot satisfy or occur inside an enabled soak",
+      "counters changed during the enabled soak",
+      "probe accounting violations",
+      "probe reconciliation violations",
+      "health accounting violations",
+      "health reconciliation violations",
+    ]) {
+      expect(soakVerifier).toContain(failure);
+    }
+    expect(soakVerifier).toContain("assertStableDlq");
   });
 
   it("limits mutation to exact API policy-version upload/deploy commands with explicit environments", async () => {
@@ -1668,5 +1755,241 @@ describe("Compute canary rollout workflow static guards", () => {
     expect(upload).toContain("path: compute-rollout-evidence");
     expect(upload).toContain("if-no-files-found: error");
     expect(upload).toContain("retention-days: 90");
+  });
+});
+
+describe("Compute production probe workflow static guards", () => {
+  it("uses jq null-input mode for every slurp-only assertion", async () => {
+    for (const path of [
+      ".github/workflows/compute-canary-rollout.yml",
+      ".github/workflows/compute-probe.yml",
+    ]) {
+      const lines = (await text(path)).split("\n");
+      for (const [index, line] of lines.entries()) {
+        if (!line.includes("</dev/null")) continue;
+        let commandIndex = index;
+        while (commandIndex >= 0 && !/^\s+jq\s/u.test(lines[commandIndex])) {
+          commandIndex -= 1;
+        }
+        expect(commandIndex, `${path}:${index + 1}`).toBeGreaterThanOrEqual(0);
+        expect(lines[commandIndex], `${path}:${index + 1}`).toMatch(
+          /^\s+jq -ne\s/u,
+        );
+      }
+    }
+  });
+
+  it("runs isolated lifecycle and browser probes on the active-soak cadence", async () => {
+    const workflow = await text(".github/workflows/compute-probe.yml");
+    const triggers = workflowSlice(workflow, "on:\n", "permissions:");
+    const permissions = workflowSlice(workflow, "permissions:\n", "jobs:\n");
+    const actionUses = [...workflow.matchAll(/\buses:\s+([^\s#]+)/gu)].map(
+      (match) => match[1],
+    );
+
+    expect(triggers).toContain("workflow_dispatch:");
+    expect(triggers).toContain("schedule:");
+    expect(triggers).toMatch(/cron:\s*['"]\*\/15 \* \* \* \*['"]/u);
+    expect(triggers).toMatch(/cron:\s*['"]7 \* \* \* \*['"]/u);
+    expect(workflow).toContain("environment: production-compute-probe");
+    expect(workflow).toContain("group: compute-production-probe");
+    expect(workflow).toContain("cancel-in-progress: false");
+    expect(permissions).toMatch(/^  contents: read$/mu);
+    expect(permissions).toMatch(/^  actions: read$/mu);
+    expect(permissions).not.toMatch(/write|id-token/iu);
+    expect(actionUses.length).toBeGreaterThan(0);
+    expect(actionUses.every((value) => /@[0-9a-f]{40}$/u.test(value))).toBe(true);
+    expect(workflow).toContain("probe-lifecycle");
+    expect(workflow).toContain("probe");
+    expect(workflow).toContain("browser_https");
+  });
+
+  it("authenticates the selected rollout before executing its source", async () => {
+    const workflow = await text(".github/workflows/compute-probe.yml");
+    const resolve = rolloutStep(
+      workflow,
+      "Resolve the active production canary",
+    );
+    const fetchAt = resolve.indexOf(
+      'gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id"',
+    );
+    const validateAt = resolve.indexOf('--arg run_id "$run_id"');
+    const tagAt = resolve.indexOf('git show-ref --verify --quiet "$tag_ref"');
+    const ancestryAt = resolve.indexOf(
+      'git merge-base --is-ancestor "$git_sha" "$GITHUB_SHA"',
+    );
+    const downloadAt = resolve.indexOf('gh run download "$run_id"');
+    const immutableCheckoutAt = workflow.indexOf(
+      "Check out the immutable canary source",
+    );
+
+    expect(fetchAt).toBeGreaterThan(0);
+    expect(validateAt).toBeGreaterThan(fetchAt);
+    expect(tagAt).toBeGreaterThan(validateAt);
+    expect(ancestryAt).toBeGreaterThan(tagAt);
+    expect(downloadAt).toBeGreaterThan(ancestryAt);
+    expect(immutableCheckoutAt).toBeGreaterThan(
+      workflow.indexOf("Resolve the active production canary"),
+    );
+    expect(resolve).toContain('.event == "workflow_dispatch"');
+    expect(resolve).toContain('.status == "completed"');
+    expect(resolve).toContain('.conclusion == "success"');
+    expect(resolve).toContain(
+      '.path == ".github/workflows/compute-canary-rollout.yml"',
+    );
+    expect(resolve).toContain('test("^[0-9a-f]{40}$")');
+    expect(resolve).toContain(
+      'test("^v[0-9A-Za-z][0-9A-Za-z._-]*$")',
+    );
+    expect(resolve).toContain('.repository.full_name == $repository');
+    expect(resolve).toContain('.head_repository.full_name == $repository');
+    expect(resolve).toContain('.head_repository.id == .repository.id');
+    expect(resolve).toContain('tag_ref="refs/tags/$head_branch"');
+    expect(resolve).toContain(
+      'resolved_tag_sha="$(git rev-parse "${tag_ref}^{commit}")"',
+    );
+    expect(resolve).toContain('[ "$resolved_tag_sha" = "$git_sha" ]');
+  });
+
+  it("uses only the dedicated read-only Cloudflare token and contains no rollout mutation path", async () => {
+    const workflow = await text(".github/workflows/compute-probe.yml");
+    const inspect = rolloutStep(
+      workflow,
+      "Inspect and bind the live production API/Compute pair",
+    );
+    const logicalLines = shellLogicalLines(workflow);
+    const mutationCommands = logicalLines.filter((line) =>
+      /\bnpx wrangler (?:versions (?:upload|deploy)|deploy\b|rollback\b|secret\b)/u
+        .test(line)
+    );
+
+    expect(workflow).toContain("secrets.COMPUTE_PROBE_CLOUDFLARE_TOKEN");
+    expect(workflow).not.toContain("secrets.CLOUDFLARE_API_TOKEN");
+    expect(workflow).not.toContain("COMPUTE_EMERGENCY_STOP_TOKEN");
+    expect(mutationCommands).toEqual([]);
+    expect(inspect).toContain(
+      "CLOUDFLARE_API_TOKEN: ${{ secrets.COMPUTE_PROBE_CLOUDFLARE_TOKEN }}",
+    );
+    expect(inspect).not.toContain(
+      "CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}",
+    );
+  });
+
+  it("binds each admitted probe to live state, queue health, receipts, and a final fence", async () => {
+    const workflow = await text(".github/workflows/compute-probe.yml");
+    const probeVerifier = await text(
+      "scripts/release/verify-compute-probe-evidence.mjs",
+    );
+    const resolveAt = workflow.indexOf("Resolve the active production canary");
+    const inspectAt = workflow.indexOf(
+      "Inspect and bind the live production API/Compute pair",
+    );
+    const suiteAt = workflow.indexOf("Run the deployed Compute probe suite");
+    const snapshotAt = workflow.indexOf(
+      "Read the least-privilege Compute certification snapshot",
+    );
+    const finalFenceAt = workflow.indexOf(
+      "Final exact live fence after probe",
+    );
+    const verifyAt = workflow.indexOf("Verify Compute probe evidence");
+    const manifestAt = workflow.indexOf(
+      "Write deterministic probe evidence manifest",
+    );
+    const uploadAt = workflow.indexOf("Upload private probe evidence");
+    const orderedSteps = [
+      resolveAt,
+      inspectAt,
+      suiteAt,
+      snapshotAt,
+      finalFenceAt,
+      verifyAt,
+      manifestAt,
+      uploadAt,
+    ];
+    const inspect = rolloutStep(
+      workflow,
+      "Inspect and bind the live production API/Compute pair",
+    );
+    const suite = rolloutStep(
+      workflow,
+      "Run the deployed Compute probe suite",
+    );
+    const snapshot = rolloutStep(
+      workflow,
+      "Read the least-privilege Compute certification snapshot",
+    );
+    const finalFence = rolloutStep(
+      workflow,
+      "Final exact live fence after probe",
+    );
+    const verify = rolloutStep(workflow, "Verify Compute probe evidence");
+
+    expect(orderedSteps.every((position) => position > 0)).toBe(true);
+    expect(orderedSteps).toEqual([...orderedSteps].sort((a, b) => a - b));
+    expect(inspect).toContain("verify-api-compute-rollout-state.mjs");
+    expect(workflow).toContain("queue-health.json");
+    expect(suite).toContain("compute-certification-suite.mjs");
+    expect(suite).toContain("probe-lifecycle");
+    expect(suite).toContain("probe");
+    expect(snapshot).toContain("COMPUTE_CERTIFICATION_TOKEN");
+    expect(snapshot).toContain("/api/admin/compute/certification");
+    expect(snapshot).not.toContain("COMPUTE_PROBE_CLOUDFLARE_TOKEN");
+    expect(finalFence).toContain("verify-api-compute-rollout-state.mjs");
+    expect(finalFence).toContain("final-live-state.json");
+    expect(verify).toContain("verify-compute-probe-evidence.mjs");
+    expect(verify).toContain("live-state.json");
+    expect(verify).toContain("queue-health.json");
+    expect(verify).toContain("compute-canary-probe.json");
+    expect(verify).toContain(
+      "galactic_compute_production_global_observation",
+    );
+    expect(verify).toContain("($initial[0] == $final[0])");
+    expect(probeVerifier).toContain("--expected-outcome");
+    expect(probeVerifier).toContain("--expected-mode");
+    expect(probeVerifier).toContain("galactic_compute_production_probe");
+    expect(probeVerifier).toContain("off_noop");
+    expect(probeVerifier).toContain("browser_artifacts");
+    expect(probeVerifier).toContain("reconciliation");
+    for (const field of [
+      "certification_principal",
+      "oldest_age_seconds",
+      "baseline_count",
+      "final_count",
+      "dlq_fenced_runs",
+    ]) {
+      expect(probeVerifier).toContain(field);
+    }
+  });
+
+  it("records OFF as a successful non-admitting no-op and retains hashed evidence for 30 days", async () => {
+    const workflow = await text(".github/workflows/compute-probe.yml");
+    const suite = rolloutStep(
+      workflow,
+      "Run the deployed Compute probe suite",
+    );
+    const manifest = rolloutStep(
+      workflow,
+      "Write deterministic probe evidence manifest",
+    );
+    const upload = rolloutStep(workflow, "Upload private probe evidence");
+    const verify = rolloutStep(workflow, "Verify Compute probe evidence");
+    const offBranch = verify.slice(
+      verify.indexOf("            off)"),
+      verify.indexOf("            global)"),
+    );
+
+    expect(workflow).toContain("off_noop");
+    expect(suite).toMatch(/if: .*\.outputs\.policy == 'canary'/u);
+    expect(offBranch).toMatch(
+      /off\)[\s\S]*--expected-mode lifecycle[\s\S]*--expected-outcome off_noop/u,
+    );
+    expect(offBranch).not.toContain("--predecessor-verification");
+    expect(manifest).toContain("find . -type f ! -name evidence.sha256 -print0");
+    expect(manifest).toContain("LC_ALL=C sort -z");
+    expect(manifest).toContain("xargs -0 sha256sum");
+    expect(upload).toContain("if: always()");
+    expect(upload).toContain("compute-probe-production-");
+    expect(upload).toContain("if-no-files-found: error");
+    expect(upload).toContain("retention-days: 30");
   });
 });

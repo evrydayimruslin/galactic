@@ -80,6 +80,7 @@ const DISPATCH_KEYS = [
 const REFERENCE_KEYS = ['evidence_file', 'sha256'];
 const ROLLOUT_KEYS = [
   'active_state',
+  'active_soak',
   'api_upload_source_sha',
   'canary_identity',
   'compute_release',
@@ -114,6 +115,7 @@ const PREDECESSOR_KEYS = [
   'soak_eligible_at',
   'stage',
   'target',
+  'workflow_completed_at',
 ];
 const CERTIFICATION_KEYS = [
   'agent_id',
@@ -139,6 +141,53 @@ const CERTIFICATION_ARTIFACT_DIGEST_KEYS = [
   'browser',
   'consumer',
   'deterministic_fixture',
+];
+const ACTIVE_SOAK_REFERENCE_KEYS = [
+  'evidence_file',
+  'production_canary_workflow_run_id',
+  'sha256',
+];
+const ACTIVE_SOAK_KEYS = [
+  'accepted_probe_run_ids',
+  'accounting_violations',
+  'browser_probe_count',
+  'browser_probe_run_ids',
+  'candidate_sha',
+  'current_workflow_run_id',
+  'dlq',
+  'final_probe_at',
+  'first_probe_at',
+  'kind',
+  'live_state',
+  'maximum_browser_gap_seconds',
+  'maximum_lifecycle_gap_seconds',
+  'minimum_soak_seconds',
+  'probe_count',
+  'production_canary_workflow_run_id',
+  'reconciliation_violations',
+  'repository',
+  'schema_version',
+  'soak_eligible_at',
+  'soak_started_at',
+  'target',
+  'verified',
+  'verified_at',
+];
+const ACTIVE_SOAK_LIVE_STATE_KEYS = [
+  'api_deployment_id',
+  'api_version_id',
+  'canary_allowlist',
+  'certification_principal',
+  'compute_deployment_id',
+  'compute_version_id',
+  'environment_digest',
+  'policy',
+];
+const ACTIVE_SOAK_DLQ_KEYS = ['compute', 'reconciliation'];
+const ACTIVE_SOAK_DLQ_ENTRY_KEYS = [
+  'baseline_count',
+  'final_count',
+  'name',
 ];
 
 function fail(message) {
@@ -656,6 +705,173 @@ function validateComputeReleaseVerification({ verification, target, finalState }
   return row;
 }
 
+function positiveRunIdArray(value, label) {
+  if (!Array.isArray(value)) fail(`${label} must be an array`);
+  const rows = value.map((entry, index) => {
+    if (typeof entry !== 'string' || !POSITIVE_INTEGER.test(entry)) {
+      fail(`${label} ${index} is not a positive workflow run id`);
+    }
+    return entry;
+  });
+  if (new Set(rows).size !== rows.length) {
+    fail(`${label} contains duplicate workflow run ids`);
+  }
+  return rows;
+}
+
+function validateActiveSoak({
+  verification,
+  reference,
+  predecessorVerification,
+  dispatch,
+  rolloutAt,
+}) {
+  const row = exactKeys(
+    verification,
+    ACTIVE_SOAK_KEYS,
+    'active soak verification',
+  );
+  const liveState = exactKeys(
+    row.live_state,
+    ACTIVE_SOAK_LIVE_STATE_KEYS,
+    'active soak live state',
+  );
+  const dlq = exactKeys(row.dlq, ACTIVE_SOAK_DLQ_KEYS, 'active soak DLQ');
+  const computeDlq = exactKeys(
+    dlq.compute,
+    ACTIVE_SOAK_DLQ_ENTRY_KEYS,
+    'active soak Compute DLQ',
+  );
+  const reconciliationDlq = exactKeys(
+    dlq.reconciliation,
+    ACTIVE_SOAK_DLQ_ENTRY_KEYS,
+    'active soak reconciliation DLQ',
+  );
+  const acceptedProbeRunIds = positiveRunIdArray(
+    row.accepted_probe_run_ids,
+    'active soak accepted probe run ids',
+  );
+  const browserProbeRunIds = positiveRunIdArray(
+    row.browser_probe_run_ids,
+    'active soak browser probe run ids',
+  );
+  const verifiedAt = timestamp(row.verified_at, 'active soak verified_at');
+  const soakStartedAt = timestamp(
+    row.soak_started_at,
+    'active soak started_at',
+  );
+  const soakEligibleAt = timestamp(
+    row.soak_eligible_at,
+    'active soak eligible_at',
+  );
+  const firstProbeAt = timestamp(
+    row.first_probe_at,
+    'active soak first_probe_at',
+  );
+  const finalProbeAt = timestamp(
+    row.final_probe_at,
+    'active soak final_probe_at',
+  );
+  const minimumSoakSeconds = nonnegativeIntegerValue(
+    row.minimum_soak_seconds,
+    'active soak minimum seconds',
+  );
+  const maximumLifecycleGapSeconds = nonnegativeIntegerValue(
+    row.maximum_lifecycle_gap_seconds,
+    'active soak maximum lifecycle gap',
+  );
+  const maximumBrowserGapSeconds = nonnegativeIntegerValue(
+    row.maximum_browser_gap_seconds,
+    'active soak maximum browser gap',
+  );
+  const probeCount = nonnegativeIntegerValue(
+    row.probe_count,
+    'active soak probe count',
+  );
+  const browserProbeCount = nonnegativeIntegerValue(
+    row.browser_probe_count,
+    'active soak browser probe count',
+  );
+  const accountingViolations = nonnegativeIntegerValue(
+    row.accounting_violations,
+    'active soak accounting violations',
+  );
+  const reconciliationViolations = nonnegativeIntegerValue(
+    row.reconciliation_violations,
+    'active soak reconciliation violations',
+  );
+  const productionCanaryRunId = positiveIntegerValue(
+    row.production_canary_workflow_run_id,
+    'active soak production canary run id',
+  );
+  const currentWorkflowRunId = positiveIntegerValue(
+    row.current_workflow_run_id,
+    'active soak current workflow run id',
+  );
+  const priorState = predecessorVerification.finalState;
+  const priorWorkflowCompletedAt = timestamp(
+    predecessorVerification.predecessor.workflow_completed_at,
+    'production canary workflow_completed_at',
+  );
+  const effectiveSoakEligibleAt = priorWorkflowCompletedAt + 86_400_000;
+  const browserIdsAreAccepted = browserProbeRunIds.every((runId) =>
+    acceptedProbeRunIds.includes(runId)
+  );
+  const validDlq = (entry, expectedName) =>
+    entry.name === expectedName &&
+    nonnegativeIntegerValue(
+      entry.baseline_count,
+      `${expectedName} baseline count`,
+    ) === nonnegativeIntegerValue(
+      entry.final_count,
+      `${expectedName} final count`,
+    );
+  if (
+    row.schema_version !== 1 ||
+    row.kind !== 'galactic_compute_canary_soak_verification' ||
+    row.verified !== true || row.target !== 'production' ||
+    row.repository !== dispatch.repository ||
+    row.candidate_sha !== dispatch.git_sha ||
+    productionCanaryRunId !== predecessorVerification.dispatch.workflow_run_id ||
+    productionCanaryRunId !== reference.production_canary_workflow_run_id ||
+    currentWorkflowRunId !== dispatch.workflow_run_id ||
+    row.soak_started_at !==
+      predecessorVerification.predecessor.workflow_completed_at ||
+    row.soak_eligible_at !== new Date(effectiveSoakEligibleAt).toISOString() ||
+    minimumSoakSeconds !== 86_400 ||
+    maximumLifecycleGapSeconds > 2_100 ||
+    maximumBrowserGapSeconds > 4_200 ||
+    probeCount !== acceptedProbeRunIds.length || probeCount === 0 ||
+    browserProbeCount !== browserProbeRunIds.length || browserProbeCount === 0 ||
+    !browserIdsAreAccepted || accountingViolations !== 0 ||
+    reconciliationViolations !== 0 ||
+    soakStartedAt !== priorWorkflowCompletedAt ||
+    soakEligibleAt !== effectiveSoakEligibleAt ||
+    verifiedAt < soakEligibleAt || verifiedAt - soakStartedAt < 86_400_000 ||
+    firstProbeAt < soakStartedAt ||
+    firstProbeAt - soakStartedAt > 2_100_000 ||
+    finalProbeAt < firstProbeAt || finalProbeAt > verifiedAt ||
+    verifiedAt - finalProbeAt > 2_100_000 || verifiedAt > rolloutAt ||
+    liveState.api_version_id !== priorState.api.version_id ||
+    liveState.api_deployment_id !== priorState.api.deployment_id ||
+    liveState.compute_version_id !== priorState.compute.version_id ||
+    liveState.compute_deployment_id !== priorState.compute.deployment_id ||
+    liveState.environment_digest !== priorState.environment_digest ||
+    liveState.policy !== priorState.policy ||
+    JSON.stringify(liveState.canary_allowlist) !==
+      JSON.stringify(priorState.canary_allowlist) ||
+    liveState.certification_principal !== priorState.certification_principal ||
+    !validDlq(computeDlq, 'galactic-compute-dlq') ||
+    !validDlq(
+      reconciliationDlq,
+      'galactic-compute-reconciliation-dlq',
+    )
+  ) {
+    fail('active soak does not prove the exact mature production canary');
+  }
+  return row;
+}
+
 function validateVerificationOutput(value, label) {
   const row = exactKeys(value, VERIFICATION_KEYS, label);
   const predecessor = exactKeys(
@@ -672,6 +888,10 @@ function validateVerificationOutput(value, label) {
   const artifactCreatedAt = timestamp(
     predecessor.artifact_created_at,
     `${label} predecessor artifact_created_at`,
+  );
+  const workflowCompletedAt = timestamp(
+    predecessor.workflow_completed_at,
+    `${label} predecessor workflow_completed_at`,
   );
   const verifiedAt = timestamp(row.verified_at, `${label} verified_at`);
   const minimumAgeSeconds = nonnegativeIntegerValue(
@@ -696,11 +916,11 @@ function validateVerificationOutput(value, label) {
     !POSITIVE_INTEGER.test(predecessor.artifact_id) ||
     predecessor.artifact_name !==
       `compute-canary-rollout-${predecessor.stage}-${predecessor.target}-${dispatch.workflow_run_id}-${dispatch.run_attempt}` ||
-    generatedAt > artifactCreatedAt ||
-    generatedAt > verifiedAt ||
+    generatedAt > artifactCreatedAt || artifactCreatedAt > workflowCompletedAt ||
+    workflowCompletedAt > verifiedAt ||
     (contract.soakRequired && soakEligibleAt === null) ||
     (predecessor.stage === 'production_canary' &&
-      (verifiedAt - artifactCreatedAt < minimumAgeSeconds * 1_000 ||
+      (verifiedAt - workflowCompletedAt < minimumAgeSeconds * 1_000 ||
         (minimumAgeSeconds > 0 && verifiedAt < soakEligibleAt)))
   ) {
     fail(`${label} does not prove a valid predecessor artifact`);
@@ -814,6 +1034,13 @@ export function verifyComputeRolloutPredecessor({
     expectedRunId,
     currentGitSha,
   });
+  const workflowCompletedAt = timestamp(
+    workflowRun.updated_at,
+    'workflow run updated_at',
+  );
+  if (workflowCompletedAt > nowMs) {
+    fail('workflow completion time is in the future');
+  }
   const artifactList = record(
     readJson(resolve(artifactListJsonPath), 'artifact-list JSON'),
     'artifact-list JSON',
@@ -843,7 +1070,8 @@ export function verifyComputeRolloutPredecessor({
     rollout.target !== expectedTarget ||
     !sameDispatch(rolloutDispatch, dispatch) ||
     generatedAt > nowMs ||
-    generatedAt > artifact.artifactCreatedAtMs
+    generatedAt > artifact.artifactCreatedAtMs ||
+    artifact.artifactCreatedAtMs > workflowCompletedAt
   ) {
     fail('rollout.json does not prove the expected committed dispatch');
   }
@@ -874,7 +1102,7 @@ export function verifyComputeRolloutPredecessor({
   }
   if (
     expectedStage === 'production_canary' &&
-    (nowMs - artifact.artifactCreatedAtMs < minimumAge * 1_000 ||
+    (nowMs - workflowCompletedAt < minimumAge * 1_000 ||
       (minimumAge > 0 && nowMs < soakEligibleAt))
   ) {
     fail('production_canary has not satisfied minimum age and soak eligibility');
@@ -971,13 +1199,14 @@ export function verifyComputeRolloutPredecessor({
     fail('compute release reference has the wrong workflow run id');
   }
 
+  let predecessorVerification = null;
   if (contract.predecessor !== null && rollout.predecessor !== null) {
     const predecessorReference = exactKeys(
       rollout.predecessor,
       ['evidence_file', 'sha256', 'stage', 'target', 'workflow_run_id'],
       'predecessor reference',
     );
-    const predecessorVerification = validatePredecessorTransition({
+    predecessorVerification = validatePredecessorTransition({
       verification: boundJson(
         evidenceDirectory,
         predecessorReference,
@@ -1013,6 +1242,38 @@ export function verifyComputeRolloutPredecessor({
     fail('staging_canary must not bind predecessor verification');
   }
 
+  if (expectedStage === 'production_global') {
+    if (rollout.active_soak === null || predecessorVerification === null) {
+      fail('production_global requires active production soak evidence');
+    }
+    const activeSoakReference = exactKeys(
+      rollout.active_soak,
+      ACTIVE_SOAK_REFERENCE_KEYS,
+      'active soak reference',
+    );
+    if (
+      activeSoakReference.production_canary_workflow_run_id !==
+        predecessorVerification.dispatch.workflow_run_id
+    ) {
+      fail('active soak reference names the wrong production canary run');
+    }
+    validateActiveSoak({
+      verification: boundJson(
+        evidenceDirectory,
+        activeSoakReference,
+        'soak-verification.json',
+        'active soak verification',
+        ACTIVE_SOAK_REFERENCE_KEYS,
+      ),
+      reference: activeSoakReference,
+      predecessorVerification,
+      dispatch,
+      rolloutAt: generatedAt,
+    });
+  } else if (rollout.active_soak !== null) {
+    fail(`${expectedStage} must not bind active production soak evidence`);
+  }
+
   return {
     schema_version: 1,
     kind: VERIFICATION_KIND,
@@ -1027,6 +1288,7 @@ export function verifyComputeRolloutPredecessor({
       artifact_created_at: artifact.artifactCreatedAt,
       generated_at: rollout.generated_at,
       soak_eligible_at: rollout.soak_eligible_at,
+      workflow_completed_at: workflowRun.updated_at,
     },
     dispatch,
     final_state: finalState,

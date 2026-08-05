@@ -1,27 +1,39 @@
 name: Compute CI
 
-# Compute validation is intentionally dispatched separately from ordinary
-# pull requests, main pushes, and product release tags.
+# Fast contracts protect every Compute change. The image, SBOM, and evidence
+# packet remain an explicit, non-publishing operation because they are much
+# heavier and require the reviewed immutable Sandbox base repository variable.
 on:
+  pull_request:
+    paths:
+      - .dockerignore
+      - .github/workflows/compute-ci.yml
+      - cli/**
+      - compute-worker/**
+      - scripts/release/verify-api-compute-off-bridge.mjs
+      - scripts/release/verify-api-compute-off-bridge.test.mjs
+  push:
+    branches: [main]
+    paths:
+      - .dockerignore
+      - .github/workflows/compute-ci.yml
+      - cli/**
+      - compute-worker/**
+      - scripts/release/verify-api-compute-off-bridge.mjs
+      - scripts/release/verify-api-compute-off-bridge.test.mjs
   workflow_dispatch: {}
 
 permissions:
   contents: read
 
 jobs:
-  verify:
-    name: Verify Worker and developer-v1 image
+  contracts:
+    name: Verify Compute contracts
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: compute-worker
-    env:
-      # Repository variable, not a secret. It must be a complete immutable ref:
-      # docker.io/cloudflare/sandbox:0.12.3-python@sha256:<64 lowercase hex>
-      SANDBOX_BASE_IMAGE: ${{ vars.COMPUTE_SANDBOX_BASE_IMAGE }}
-      IMAGE_TAG: galactic-compute-ci:${{ github.sha }}
-      EVIDENCE_DIR: ${{ github.workspace }}/compute-worker/evidence
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -33,22 +45,6 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: compute-worker/package-lock.json
-
-      - name: Initialize evidence packet
-        shell: bash
-        run: mkdir -p "$EVIDENCE_DIR"
-
-      - name: Require immutable Sandbox base
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected='^docker\.io/cloudflare/sandbox:0\.12\.3-python@sha256:[0-9a-f]{64}$'
-          if [[ ! "$SANDBOX_BASE_IMAGE" =~ $expected ]]; then
-            echo "Set repository variable COMPUTE_SANDBOX_BASE_IMAGE to the reviewed 0.12.3-python image with an @sha256 digest." >&2
-            exit 1
-          fi
-          printf '%s\n' "$SANDBOX_BASE_IMAGE" | tee "$EVIDENCE_DIR/base-image.txt"
-          docker pull "$SANDBOX_BASE_IMAGE"
 
       - name: Install Worker dependencies
         run: npm ci
@@ -84,6 +80,74 @@ jobs:
             tests/api-tool-error.test.ts \
             tests/compute-job-mode.test.ts
           popd >/dev/null
+
+      - name: Wrangler contract dry run (production)
+        run: >-
+          npx wrangler deploy --config wrangler.toml --dry-run
+          --containers-rollout=none
+          --outdir "$RUNNER_TEMP/compute-dry-run-production"
+
+      - name: Wrangler contract dry run (staging)
+        run: >-
+          npx wrangler deploy --config wrangler.staging.toml --dry-run
+          --containers-rollout=none
+          --outdir "$RUNNER_TEMP/compute-dry-run-staging"
+
+  image:
+    name: Build, smoke, and inventory developer-v1 image
+    if: github.event_name == 'workflow_dispatch'
+    needs: contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: compute-worker
+    env:
+      # Repository variable, not a secret. It must be a complete immutable ref:
+      # docker.io/cloudflare/sandbox:0.12.3-python@sha256:<64 lowercase hex>
+      SANDBOX_BASE_IMAGE: ${{ vars.COMPUTE_SANDBOX_BASE_IMAGE }}
+      IMAGE_TAG: galactic-compute-ci:${{ github.sha }}
+      EVIDENCE_DIR: ${{ github.workspace }}/compute-worker/evidence
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: compute-worker/package-lock.json
+
+      - name: Initialize evidence packet
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          node -e '
+            const { version } = require("../cli/package.json");
+            if (
+              typeof version !== "string" ||
+              !/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)
+            ) process.exit(1);
+            process.stdout.write(`${version}\n`);
+          ' > "$EVIDENCE_DIR/galactic-cli-version.txt"
+
+      - name: Require immutable Sandbox base
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected='^docker\.io/cloudflare/sandbox:0\.12\.3-python@sha256:[0-9a-f]{64}$'
+          if [[ ! "$SANDBOX_BASE_IMAGE" =~ $expected ]]; then
+            echo "Set repository variable COMPUTE_SANDBOX_BASE_IMAGE to the reviewed 0.12.3-python image with an @sha256 digest." >&2
+            exit 1
+          fi
+          printf '%s\n' "$SANDBOX_BASE_IMAGE" | tee "$EVIDENCE_DIR/base-image.txt"
+          docker pull "$SANDBOX_BASE_IMAGE"
+
+      - name: Install Worker dependencies
+        run: npm ci
 
       - name: Build immutable-input image
         shell: bash
@@ -254,10 +318,12 @@ jobs:
             --arg image_tag "$IMAGE_TAG" \
             --arg local_image_id "$expected_image_id" \
             --arg base_image "$SANDBOX_BASE_IMAGE" \
+            --arg galactic_cli_version "$(cat "$EVIDENCE_DIR/galactic-cli-version.txt")" \
             --arg syft_version "$syft_version" \
             --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             '{schema_version: 1, git_sha: $git_sha, image_tag: $image_tag,
               local_image_id: $local_image_id, base_image: $base_image,
+              galactic_cli_version: $galactic_cli_version,
               sbom_mode: "mounted_rootfs_ci_vulnerability_inventory",
               release_attestation: false, syft_version: $syft_version,
               generated_at: $generated_at}' \
@@ -269,6 +335,7 @@ jobs:
             "$EVIDENCE_DIR/sbom-corrections.json" \
             "$EVIDENCE_DIR/local-image-id.txt" \
             "$EVIDENCE_DIR/post-scan-image-id.txt" \
+            "$EVIDENCE_DIR/galactic-cli-version.txt" \
             "$EVIDENCE_DIR/provenance.json" \
             > "$EVIDENCE_DIR/sbom-files.sha256"
 

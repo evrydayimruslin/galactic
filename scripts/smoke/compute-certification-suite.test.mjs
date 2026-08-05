@@ -170,6 +170,40 @@ test("fails closed when profile and target do not match", () => {
   );
 });
 
+test("pins lifecycle and browser probe profiles to production", () => {
+  const base = {
+    GALACTIC_SMOKE_TARGET: "production",
+    COMPUTE_RELEASE_SHA: CANDIDATE_SHA,
+    COMPUTE_RELEASE_RUN_ID: WORKFLOW_RUN_ID,
+    GALACTIC_SMOKE_APP_ID: AGENT_ID,
+    GALACTIC_OWNER_ACCESS_TOKEN: OWNER_TOKEN,
+    COMPUTE_RELEASE_EVIDENCE_DIR: "/tmp/compute-certification",
+  };
+  assert.equal(
+    computeCertificationConfigFromEnv({
+      ...base,
+      COMPUTE_CERTIFICATION_PROFILE: "probe-lifecycle",
+    }).profile,
+    "probe-lifecycle",
+  );
+  assert.throws(
+    () => computeCertificationConfigFromEnv({
+      ...base,
+      COMPUTE_CERTIFICATION_PROFILE: "probe-lifecycle",
+      GALACTIC_SMOKE_TARGET: "staging",
+    }),
+    (error) => error.code === "INVALID_CONFIGURATION",
+  );
+  assert.throws(
+    () => computeCertificationConfigFromEnv({
+      ...base,
+      COMPUTE_CERTIFICATION_PROFILE: "probe",
+      GALACTIC_SMOKE_TARGET: "staging",
+    }),
+    (error) => error.code === "INVALID_CONFIGURATION",
+  );
+});
+
 test("requires the async marker digest instead of trusting verified=true", () => {
   assert.throws(
     () => validateComputeCertificationProof({

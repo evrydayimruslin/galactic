@@ -52,7 +52,7 @@ test("ordinary production releases do not require a Compute deployment", async (
   assert.match(gate, /name:\s*['"]Launch Web Deploy['"]/u);
 });
 
-test("Compute CI remains a separately dispatched workflow", async () => {
+test("Compute CI automates contracts while keeping image certification manual", async () => {
   const workflow = await readFile(
     new URL("../../.github/workflows/compute-ci.yml", import.meta.url),
     "utf8",
@@ -63,8 +63,18 @@ test("Compute CI remains a separately dispatched workflow", async () => {
   );
 
   assert.match(triggerBlock, /workflow_dispatch:\s*\{\}/u);
-  assert.doesNotMatch(triggerBlock, /pull_request:/u);
-  assert.doesNotMatch(triggerBlock, /push:/u);
+  assert.match(triggerBlock, /pull_request:/u);
+  assert.match(triggerBlock, /push:/u);
+
+  const contractsJob = workflow.slice(
+    workflow.indexOf("  contracts:"),
+    workflow.indexOf("  image:"),
+  );
+  const imageJob = workflow.slice(workflow.indexOf("  image:"));
+
+  assert.doesNotMatch(contractsJob, /github\.event_name\s*==\s*['"]workflow_dispatch['"]/u);
+  assert.match(imageJob, /if:\s*github\.event_name\s*==\s*['"]workflow_dispatch['"]/u);
+  assert.match(imageJob, /needs:\s*contracts/u);
 });
 
 test("returns null when only manual or wrong-ref production runs exist", () => {

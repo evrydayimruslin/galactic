@@ -410,7 +410,7 @@ jobs:
             production_global)
               predecessor_stage=production_canary
               predecessor_target=production
-              minimum_age=3600
+              minimum_age=86400
               ;;
             revert_off)
               predecessor_target="$REQUESTED_TARGET"
@@ -455,6 +455,234 @@ jobs:
             echo "target=$predecessor_target"
             echo "run_attempt=$run_attempt"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Verify the active production canary soak
+        id: active_soak
+        if: inputs.stage == 'production_global'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          predecessor="$EVIDENCE_DIR/predecessor-verification.json"
+          soak_root="$RUNNER_TEMP/compute-canary-soak"
+          download_root="$soak_root/probe-evidence"
+          mkdir -p "$download_root"
+
+          window_started_at="$(jq -er '.predecessor.workflow_completed_at' "$predecessor")"
+          production_canary_run_id="$(jq -er '.dispatch.workflow_run_id' "$predecessor")"
+          lookback_at="$(
+            date -u -d "$window_started_at - 1 day" +%Y-%m-%dT%H:%M:%SZ
+          )"
+
+          fetch_workflow_page_set() {
+            local workflow_file="$1"
+            local output="$2"
+            local endpoint="repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_file/runs"
+            if [ "$workflow_file" = "compute-probe.yml" ]; then
+              gh api --method GET --paginate "$endpoint" \
+                -f per_page=100 \
+                -f "created=>=$lookback_at" > "$output"
+              return
+            fi
+
+            # A protected-environment deployment can be created before the
+            # soak and approved much later. Fetch every retained deploy run so
+            # the local updated_at overlap fence cannot miss that transition.
+            gh api --method GET --paginate "$endpoint" \
+              -f per_page=100 > "$output"
+          }
+
+          normalize_workflow_query() {
+            local workflow_path="$1"
+            local raw_pages="$2"
+            local window_ended_at="$3"
+            local output="$4"
+            local selector
+            if [ "$workflow_path" = ".github/workflows/compute-probe.yml" ]; then
+              selector='select(.created_at >= $start and .created_at <= $end)'
+            else
+              selector='select(.created_at <= $end and .updated_at >= $start)'
+            fi
+            jq -s \
+              --arg path "$workflow_path" \
+              --arg start "$window_started_at" \
+              --arg end "$window_ended_at" \
+              --arg selector "$selector" '
+                [.[].workflow_runs[] |
+                  if $selector | contains("created_at >=")
+                  then select(.created_at >= $start and .created_at <= $end)
+                  else select(.created_at <= $end and .updated_at >= $start)
+                  end |
+                  {
+                    id: (.id | tostring),
+                    run_attempt: (.run_attempt | tostring),
+                    event,
+                    status,
+                    conclusion,
+                    head_branch,
+                    head_sha,
+                    created_at,
+                    run_started_at,
+                    updated_at
+                  }
+                ] |
+                sort_by(.created_at, (.id | tonumber)) |
+                {
+                  workflow_path: $path,
+                  total_count: length,
+                  workflow_runs: .
+                }
+              ' "$raw_pages" > "$output"
+          }
+
+          capture_run_inventory() {
+            local destination="$1"
+            local captured_at
+            captured_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            for workflow_file in api-deploy.yml compute-deploy.yml compute-probe.yml; do
+              fetch_workflow_page_set \
+                "$workflow_file" "$soak_root/$workflow_file-pages.json"
+              normalize_workflow_query \
+                ".github/workflows/$workflow_file" \
+                "$soak_root/$workflow_file-pages.json" \
+                "$captured_at" "$soak_root/$workflow_file-query.json"
+            done
+            jq -n \
+              --arg repository "$GITHUB_REPOSITORY" \
+              --arg window_started_at "$window_started_at" \
+              --arg captured_at "$captured_at" \
+              --slurpfile api "$soak_root/api-deploy.yml-query.json" \
+              --slurpfile compute "$soak_root/compute-deploy.yml-query.json" \
+              --slurpfile probe "$soak_root/compute-probe.yml-query.json" '
+                {
+                  schema_version: 1,
+                  kind: "galactic_compute_soak_run_inventory",
+                  repository: $repository,
+                  window_started_at: $window_started_at,
+                  window_ended_at: $captured_at,
+                  captured_at: $captured_at,
+                  queries: [$api[0], $compute[0], $probe[0]]
+                }
+              ' > "$destination"
+          }
+
+          fetch_repository_artifacts() {
+            local output="$1"
+            gh api --method GET --paginate \
+              "repos/$GITHUB_REPOSITORY/actions/artifacts" \
+              -f per_page=100 > "$output"
+          }
+
+          capture_run_inventory "$soak_root/preliminary-runs.json"
+          fetch_repository_artifacts "$soak_root/preliminary-artifact-pages.json"
+          jq -s \
+            --arg prefix "compute-probe-production-$production_canary_run_id-" \
+            --slurpfile runs "$soak_root/preliminary-runs.json" '
+              ($runs[0].queries[] |
+                select(.workflow_path == ".github/workflows/compute-probe.yml") |
+                .workflow_runs | map(.id)) as $probe_ids |
+              [.[].artifacts[] |
+                select(.expired == false) |
+                select(.name | startswith($prefix)) |
+                select((.workflow_run.id | tostring) as $id |
+                  $probe_ids | index($id))
+              ] |
+              sort_by(.created_at, .id)
+            ' "$soak_root/preliminary-artifact-pages.json" \
+            > "$soak_root/preliminary-artifacts.json"
+          jq -e \
+            --slurpfile runs "$soak_root/preliminary-runs.json" '
+              ($runs[0].queries[] |
+                select(.workflow_path == ".github/workflows/compute-probe.yml") |
+                .workflow_runs | length) as $expected |
+              length == $expected and
+              (map(.workflow_run.id) | unique | length) == $expected
+            ' "$soak_root/preliminary-artifacts.json" >/dev/null
+
+          jq -r '.[] | [.workflow_run.id, .name] | @tsv' \
+            "$soak_root/preliminary-artifacts.json" |
+            while IFS=$'\t' read -r probe_run_id artifact_name; do
+              destination="$download_root/$artifact_name"
+              mkdir -p "$destination"
+              gh run download "$probe_run_id" \
+                --repo "$GITHUB_REPOSITORY" \
+                --name "$artifact_name" \
+                --dir "$destination"
+            done
+
+          # Re-capture both inventories after every download. A probe that
+          # finishes during collection makes this dispatch fail closed and the
+          # operator can retry against the now-stable complete set.
+          capture_run_inventory "$EVIDENCE_DIR/soak-runs.json"
+          fetch_repository_artifacts "$soak_root/final-artifact-pages.json"
+          artifact_captured_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          jq -s \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg captured_at "$artifact_captured_at" \
+            --arg prefix "compute-probe-production-$production_canary_run_id-" \
+            --slurpfile runs "$EVIDENCE_DIR/soak-runs.json" '
+              ($runs[0].queries[] |
+                select(.workflow_path == ".github/workflows/compute-probe.yml") |
+                .workflow_runs) as $probe_runs |
+              (reduce $probe_runs[] as $run ({}; .[$run.id] = $run)) as $by_id |
+              [.[].artifacts[] |
+                select(.name | startswith($prefix)) |
+                (.workflow_run.id | tostring) as $run_id |
+                select($by_id[$run_id] != null) |
+                {
+                  id: (.id | tostring),
+                  name,
+                  workflow_run_id: $run_id,
+                  run_attempt: $by_id[$run_id].run_attempt,
+                  head_sha: .workflow_run.head_sha,
+                  size_in_bytes: (.size_in_bytes | tostring),
+                  expired,
+                  created_at,
+                  updated_at,
+                  expires_at
+                }
+              ] |
+              sort_by(.created_at, (.id | tonumber)) |
+              {
+                schema_version: 1,
+                kind: "galactic_compute_soak_artifact_inventory",
+                repository: $repository,
+                captured_at: $captured_at,
+                total_count: length,
+                artifacts: .
+              }
+            ' "$soak_root/final-artifact-pages.json" \
+            > "$EVIDENCE_DIR/soak-artifacts.json"
+
+          node scripts/release/verify-compute-canary-soak.mjs \
+            --predecessor "$predecessor" \
+            --runs "$EVIDENCE_DIR/soak-runs.json" \
+            --artifacts "$EVIDENCE_DIR/soak-artifacts.json" \
+            --evidence-dir "$download_root" \
+            --current-git-sha "$GITHUB_SHA" \
+            --current-workflow-run-id "$GITHUB_RUN_ID" \
+            > "$EVIDENCE_DIR/soak-verification.json"
+          jq -e \
+            --arg sha "$GITHUB_SHA" \
+            --arg canary_run "$production_canary_run_id" \
+            --arg current_run "$GITHUB_RUN_ID" '
+              .schema_version == 1 and
+              .kind == "galactic_compute_canary_soak_verification" and
+              .verified == true and
+              .target == "production" and
+              .candidate_sha == $sha and
+              .production_canary_workflow_run_id == $canary_run and
+              .current_workflow_run_id == $current_run and
+              .minimum_soak_seconds == 86400 and
+              .maximum_lifecycle_gap_seconds <= 2100 and
+              .maximum_browser_gap_seconds <= 4200 and
+              .probe_count > 0 and
+              .browser_probe_count > 0 and
+              .accounting_violations == 0 and
+              .reconciliation_violations == 0
+            ' "$EVIDENCE_DIR/soak-verification.json" >/dev/null
+          echo "verified=true" >> "$GITHUB_OUTPUT"
 
       - name: Inspect and bind the exact live API/Compute pair
         id: baseline
@@ -521,7 +749,7 @@ jobs:
               exit 1
               ;;
           esac
-          jq -e \
+          jq -ne \
             --slurpfile state "$baseline" \
             --slurpfile release "$EVIDENCE_DIR/compute-release-verification.json" '
               ($state[0].environment_digest == $release[0].environment_digest) and
@@ -532,7 +760,7 @@ jobs:
             exit 1
           }
           if [ "$REQUESTED_STAGE" = "production_global" ]; then
-            jq -e \
+            jq -ne \
               --slurpfile current "$baseline" \
               --slurpfile prior "$EVIDENCE_DIR/predecessor-final-state.json" '
                 def identity:
@@ -550,7 +778,7 @@ jobs:
               exit 1
             }
           elif [ "$REQUESTED_STAGE" = "production_canary" ]; then
-            jq -e \
+            jq -ne \
               --slurpfile current "$baseline" \
               --slurpfile prior "$EVIDENCE_DIR/predecessor-final-state.json" '
                 ($current[0].environment_digest == $prior[0].environment_digest) and
@@ -1283,7 +1511,7 @@ jobs:
               (.run_ids | length) == 11 and
               (.run_ids | unique | length) == 11
             ' "$run_set_file" >/dev/null
-          jq -e \
+          jq -ne \
             --slurpfile suite "$suite_file" \
             --slurpfile run_set "$run_set_file" \
             --slurpfile identity "$EVIDENCE_DIR/canary-identity.json" '
@@ -1463,6 +1691,10 @@ jobs:
           steps.final_fence.outputs.verified == 'true' &&
           steps.final_latch_fence.outputs.verified == 'true' &&
           (
+            inputs.stage != 'production_global' ||
+            steps.active_soak.outputs.verified == 'true'
+          ) &&
+          (
             inputs.stage == 'revert_off' ||
             steps.certification.outputs.verified == 'true'
           )
@@ -1474,7 +1706,7 @@ jobs:
           }
           generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           if [ "$REQUESTED_STAGE" = "production_canary" ]; then
-            soak_eligible_at="$(date -u -d "$generated_at + 3600 seconds" +%Y-%m-%dT%H:%M:%SZ)"
+            soak_eligible_at="$(date -u -d "$generated_at + 86400 seconds" +%Y-%m-%dT%H:%M:%SZ)"
           else
             soak_eligible_at=
           fi
@@ -1514,6 +1746,18 @@ jobs:
           else
             predecessor_json=null
           fi
+          if [ -f "$EVIDENCE_DIR/soak-verification.json" ]; then
+            active_soak_json="$(jq -n \
+              --arg sha256 "$(hash_file soak-verification.json)" \
+              --arg workflow_run_id "$PREDECESSOR_RUN_ID_INPUT" \
+              '{
+                evidence_file: "soak-verification.json",
+                sha256: $sha256,
+                production_canary_workflow_run_id: $workflow_run_id
+              }')"
+          else
+            active_soak_json=null
+          fi
 
           jq -n \
             --arg stage "$REQUESTED_STAGE" \
@@ -1531,6 +1775,7 @@ jobs:
             --arg active_sha "$active_sha" \
             --argjson canary_identity "$identity_json" \
             --argjson deployed_certification "$certification_json" \
+            --argjson active_soak "$active_soak_json" \
             --argjson predecessor "$predecessor_json" '
               {
                 schema_version: 1,
@@ -1564,6 +1809,7 @@ jobs:
                 },
                 canary_identity: $canary_identity,
                 deployed_certification: $deployed_certification,
+                active_soak: $active_soak,
                 predecessor: $predecessor
               }
             ' > "$EVIDENCE_DIR/rollout.json"
@@ -1578,7 +1824,8 @@ jobs:
             echo "- Active Compute version: $(jq -r '.compute.version_id' "$EVIDENCE_DIR/final-state.json")"
             echo "- Admission policy: $(jq -r '.policy' "$EVIDENCE_DIR/final-state.json")"
             if [ -n "$soak_eligible_at" ]; then
-              echo "- Earliest production-global dispatch: $soak_eligible_at"
+              echo "- Finalize-based soak lower bound: $soak_eligible_at"
+              echo "- The active gate starts its authoritative 24-hour clock at successful workflow completion."
             fi
             echo "- No image, Compute Worker, queue, bucket, schema, or secret was changed."
           } >> "$GITHUB_STEP_SUMMARY"
