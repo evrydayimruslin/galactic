@@ -274,6 +274,11 @@ function fixture() {
           total_count: entries.length,
           workflow_runs: entries.map((entry) => entry.run),
         },
+        {
+          workflow_path: '.github/workflows/compute-worker-refresh.yml',
+          total_count: 0,
+          workflow_runs: [],
+        },
       ],
     },
     artifacts: {
@@ -530,8 +535,8 @@ test('rejects failed, skipped, incomplete, manual, and rerun scheduled probes', 
   }
 });
 
-test('rejects production API or Compute deployment runs overlapping the soak', () => {
-  for (const queryIndex of [0, 1]) {
+test('rejects production API, Compute, or Worker-refresh runs overlapping the soak', () => {
+  for (const queryIndex of [0, 1, 3]) {
     const value = fixture();
     value.runs.queries[queryIndex].workflow_runs.push({
       id: String(90_000 + queryIndex),
@@ -553,8 +558,8 @@ test('rejects production API or Compute deployment runs overlapping the soak', (
   }
 });
 
-test('rejects a pre-soak production deploy approved and run during the soak', () => {
-  for (const queryIndex of [0, 1]) {
+test('rejects a pre-soak production deploy or refresh approved during the soak', () => {
+  for (const queryIndex of [0, 1, 3]) {
     const value = fixture();
     value.runs.queries[queryIndex].workflow_runs.push({
       id: String(90_100 + queryIndex),
@@ -576,9 +581,13 @@ test('rejects a pre-soak production deploy approved and run during the soak', ()
   }
 });
 
-test('ignores staging-only API and Compute deploy workflow runs', () => {
+test('ignores staging-only API, Compute deploy, and Worker-refresh runs', () => {
   const value = fixture();
-  for (const [queryIndex, event] of [[0, 'push'], [1, 'workflow_dispatch']]) {
+  for (const [queryIndex, event] of [
+    [0, 'push'],
+    [1, 'workflow_dispatch'],
+    [3, 'workflow_dispatch'],
+  ]) {
     value.runs.queries[queryIndex].workflow_runs.push({
       id: String(91_000 + queryIndex),
       run_attempt: '1',

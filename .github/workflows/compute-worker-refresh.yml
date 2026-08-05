@@ -1,0 +1,633 @@
+name: Compute Worker Refresh
+
+# Deploy reviewed Compute Worker code against a previously certified immutable
+# Container digest. This workflow never builds or updates a Container, changes
+# the API, enables admission, or mutates queues, buckets, schema, or secrets.
+# Its evidence is consumed by compute-canary-rollout.yml when Worker code has
+# advanced beyond the image-certifying Compute Deploy run.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Environment to refresh. Production requires an immutable v* tag.
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
+      confirmation:
+        description: Type refresh-staging-compute or refresh-production-compute.
+        required: true
+        type: string
+      compute_release_run_id:
+        description: Successful preserve_off Compute Deploy run certifying the live digest.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  refresh:
+    name: Refresh Compute Worker in ${{ inputs.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: ${{ inputs.target }}
+    concurrency:
+      group: api-${{ inputs.target }}-deploy
+      cancel-in-progress: false
+    env:
+      EVIDENCE_DIR: ${{ github.workspace }}/compute-worker-refresh-evidence
+      REQUESTED_TARGET: ${{ inputs.target }}
+      REFRESH_CONFIRMATION: ${{ inputs.confirmation }}
+      COMPUTE_RELEASE_RUN_ID_INPUT: ${{ inputs.compute_release_run_id }}
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            api/package-lock.json
+            compute-worker/package-lock.json
+
+      - name: Validate the protected Worker-only refresh request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$EVIDENCE_DIR"
+          chmod 700 "$EVIDENCE_DIR"
+
+          expected_confirmation="refresh-$REQUESTED_TARGET-compute"
+          [ "$REFRESH_CONFIRMATION" = "$expected_confirmation" ] || {
+            echo "confirmation must be exactly $expected_confirmation" >&2
+            exit 1
+          }
+          [[ "$COMPUTE_RELEASE_RUN_ID_INPUT" =~ ^[1-9][0-9]*$ ]] || {
+            echo "compute_release_run_id must be a positive run ID." >&2
+            exit 1
+          }
+          if [ "$REQUESTED_TARGET" = "staging" ]; then
+            [ "$GITHUB_REF" = "refs/heads/main" ] || {
+              echo "Staging Worker refreshes must run from main." >&2
+              exit 1
+            }
+            api_worker=ultralight-api-staging
+            compute_worker=galactic-compute-staging
+            api_wrangler_env=staging
+            compute_config=wrangler.staging.toml
+          else
+            case "$GITHUB_REF" in
+              refs/tags/v*) ;;
+              *)
+                echo "Production Worker refreshes require an immutable v* tag." >&2
+                exit 1
+                ;;
+            esac
+            [ "$(git rev-parse "$GITHUB_REF^{commit}")" = "$GITHUB_SHA" ] || {
+              echo "Production tag does not resolve to the workflow SHA." >&2
+              exit 1
+            }
+            api_worker=ultralight-api
+            compute_worker=galactic-compute
+            api_wrangler_env=
+            compute_config=wrangler.toml
+          fi
+          {
+            echo "API_WORKER=$api_worker"
+            echo "COMPUTE_WORKER=$compute_worker"
+            echo "API_WRANGLER_ENV=$api_wrangler_env"
+            echo "COMPUTE_CONFIG=$compute_config"
+            echo "CONTAINER_APPLICATION=$compute_worker-computestandard"
+            echo "REFRESH_VERSION_TAG=compute-$GITHUB_SHA-worker-refresh"
+          } >> "$GITHUB_ENV"
+
+          jq -n \
+            --arg target "$REQUESTED_TARGET" \
+            --arg confirmation "$REFRESH_CONFIRMATION" \
+            --arg source_run_id "$COMPUTE_RELEASE_RUN_ID_INPUT" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg workflow_run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg git_sha "$GITHUB_SHA" \
+            --arg git_ref "$GITHUB_REF" '
+              {
+                schema_version: 1,
+                kind: "galactic_compute_worker_refresh_request",
+                target: $target,
+                confirmation: $confirmation,
+                source_compute_release_run_id: $source_run_id,
+                dispatch: {
+                  repository: $repository,
+                  workflow_run_id: $workflow_run_id,
+                  run_attempt: $run_attempt,
+                  git_sha: $git_sha,
+                  git_ref: $git_ref
+                }
+              }
+            ' > "$EVIDENCE_DIR/request.json"
+
+      - name: Install pinned release dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix api ci
+          npm --prefix compute-worker ci
+          [ "$(node -p "require('./api/node_modules/wrangler/package.json').version")" = "4.112.0" ]
+          [ "$(node -p "require('./compute-worker/node_modules/wrangler/package.json').version")" = "4.112.0" ]
+
+      - name: Verify the source image release evidence
+        id: source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          run_json="$RUNNER_TEMP/compute-release-run.json"
+          artifact_dir="$RUNNER_TEMP/compute-release-evidence"
+          gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$COMPUTE_RELEASE_RUN_ID_INPUT" \
+            > "$run_json"
+          release_sha="$(jq -er '.head_sha' "$run_json")"
+          artifact_name="compute-$REQUESTED_TARGET-release-$release_sha"
+          mkdir -p "$artifact_dir"
+          gh run download "$COMPUTE_RELEASE_RUN_ID_INPUT" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$artifact_name" \
+            --dir "$artifact_dir"
+          node scripts/release/verify-compute-rollout-release-evidence.mjs \
+            "$artifact_dir" "$REQUESTED_TARGET" "$run_json" \
+            "$COMPUTE_RELEASE_RUN_ID_INPUT" \
+            > "$EVIDENCE_DIR/source-release-verification.json"
+
+          environment_digest="$(jq -er '.environment_digest' \
+            "$EVIDENCE_DIR/source-release-verification.json")"
+          deployed_image="$(jq -er '.deployed_image' \
+            "$EVIDENCE_DIR/source-release-verification.json")"
+          expected_image="registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/$COMPUTE_WORKER@$environment_digest"
+          [ "$deployed_image" = "$expected_image" ] || {
+            echo "Certified image does not belong to the selected Cloudflare account and Worker." >&2
+            exit 1
+          }
+          {
+            echo "ENVIRONMENT_DIGEST=$environment_digest"
+            echo "DEPLOYED_IMAGE=$deployed_image"
+            echo "SOURCE_COMPUTE_VERSION_ID=$(jq -er '.compute_version_id' "$EVIDENCE_DIR/source-release-verification.json")"
+            echo "SOURCE_COMPUTE_VERSION_TAG=$(jq -er '.compute_version_tag' "$EVIDENCE_DIR/source-release-verification.json")"
+          } >> "$GITHUB_ENV"
+
+      - name: Capture and fence the exact admission-OFF live pair
+        id: before
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          api_status="$RUNNER_TEMP/refresh-before-api-status.json"
+          api_version="$RUNNER_TEMP/refresh-before-api-version.json"
+          compute_status="$RUNNER_TEMP/refresh-before-compute-status.json"
+          compute_version="$RUNNER_TEMP/refresh-before-compute-version.json"
+          container_list="$RUNNER_TEMP/refresh-before-container-list.json"
+
+          pushd api >/dev/null
+          npx wrangler deployments status \
+            --config wrangler.toml --env "$API_WRANGLER_ENV" \
+            --name "$API_WORKER" --json > "$api_status"
+          api_version_id="$(jq -er '
+            if (.versions | length) == 1 and
+               ((.versions[0].percentage | tonumber) == 100)
+            then .versions[0].version_id
+            else error("API is not one stable version at 100 percent")
+            end
+          ' "$api_status")"
+          npx wrangler versions view "$api_version_id" \
+            --config wrangler.toml --env "$API_WRANGLER_ENV" \
+            --name "$API_WORKER" --json > "$api_version"
+          popd >/dev/null
+
+          pushd compute-worker >/dev/null
+          npx wrangler deployments status \
+            --config "$COMPUTE_CONFIG" --name "$COMPUTE_WORKER" --json \
+            > "$compute_status"
+          compute_version_id="$(jq -er '
+            if (.versions | length) == 1 and
+               ((.versions[0].percentage | tonumber) == 100)
+            then .versions[0].version_id
+            else error("Compute is not one stable version at 100 percent")
+            end
+          ' "$compute_status")"
+          npx wrangler versions view "$compute_version_id" \
+            --config "$COMPUTE_CONFIG" --name "$COMPUTE_WORKER" --json \
+            > "$compute_version"
+          npx wrangler containers list \
+            --config "$COMPUTE_CONFIG" --json > "$container_list"
+          popd >/dev/null
+
+          node scripts/release/verify-api-compute-rollout-state.mjs \
+            inspect "$REQUESTED_TARGET" "$api_status" "$api_version" \
+            "$compute_status" "$compute_version" \
+            > "$EVIDENCE_DIR/before-state.json"
+          jq -e \
+            --arg digest "$ENVIRONMENT_DIGEST" \
+            --arg version_id "$SOURCE_COMPUTE_VERSION_ID" \
+            --arg version_tag "$SOURCE_COMPUTE_VERSION_TAG" '
+              .phase == "inspected" and
+              .policy == "off" and
+              .canary_allowlist == [] and
+              .certification_principal == null and
+              .environment_digest == $digest and
+              .compute.version_id == $version_id and
+              .compute.version_tag == $version_tag
+            ' "$EVIDENCE_DIR/before-state.json" >/dev/null || {
+            echo "Live Compute is not the exact certified admission-OFF source release." >&2
+            exit 1
+          }
+          node scripts/release/verify-compute-worker-refresh-evidence.mjs \
+            fingerprint "$REQUESTED_TARGET" "$compute_version" \
+            > "$EVIDENCE_DIR/before-worker-fingerprint.json"
+          node compute-worker/scripts/verify-container-readiness.mjs \
+            "$container_list" "$CONTAINER_APPLICATION" "$DEPLOYED_IMAGE" \
+            > "$EVIDENCE_DIR/before-container-readiness.json"
+          echo "previous_compute_version_id=$compute_version_id" >> "$GITHUB_OUTPUT"
+
+      - name: Build the exact-digest no-Container-rollout config
+        shell: bash
+        working-directory: compute-worker
+        run: |
+          set -euo pipefail
+          refresh_config="$(mktemp -p . .wrangler.compute-worker-refresh.XXXXXX.toml)"
+          node - "$COMPUTE_CONFIG" "$refresh_config" "$DEPLOYED_IMAGE" <<'NODE'
+          const fs = require('node:fs');
+          const [source, destination, image] = process.argv.slice(2);
+          if (!/^registry\.cloudflare\.com\/[0-9a-f]{32}\/[a-z0-9-]+@sha256:[0-9a-f]{64}$/.test(image)) {
+            throw new Error('refusing non-digest Compute image');
+          }
+          const marker = 'image = "./images/standard/Dockerfile"';
+          const input = fs.readFileSync(source, 'utf8');
+          if (input.split(marker).length !== 2) {
+            throw new Error('expected exactly one local Compute image declaration');
+          }
+          fs.writeFileSync(destination, input.replace(marker, 'image = "' + image + '"'));
+          NODE
+          echo "REFRESH_CONFIG=$refresh_config" >> "$GITHUB_ENV"
+
+      - name: Dry-run and deploy only the Compute Worker
+        id: deploy
+        shell: bash
+        working-directory: compute-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          npx wrangler deploy \
+            --config "$REFRESH_CONFIG" \
+            --dry-run \
+            --containers-rollout=none \
+            --keep-vars \
+            --var "COMPUTE_ENVIRONMENT_DIGEST:$ENVIRONMENT_DIGEST" \
+            --outdir "$RUNNER_TEMP/compute-worker-refresh-dry-run"
+
+          echo "attempted=true" >> "$GITHUB_OUTPUT"
+          npx wrangler deploy \
+            --config "$REFRESH_CONFIG" \
+            --containers-rollout=none \
+            --keep-vars \
+            --tag "$REFRESH_VERSION_TAG" \
+            --message "Worker-only Compute refresh run $GITHUB_RUN_ID" \
+            --var "COMPUTE_ENVIRONMENT_DIGEST:$ENVIRONMENT_DIGEST" \
+            2>&1 | tee "$RUNNER_TEMP/compute-worker-refresh-deploy.txt"
+
+      - name: Verify the refreshed Worker and every unchanged surface
+        id: verify
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          api_status="$RUNNER_TEMP/refresh-after-api-status.json"
+          api_version="$RUNNER_TEMP/refresh-after-api-version.json"
+          compute_status="$RUNNER_TEMP/refresh-after-compute-status.json"
+          compute_version="$RUNNER_TEMP/refresh-after-compute-version.json"
+          container_list="$RUNNER_TEMP/refresh-after-container-list.json"
+          verify_error="$RUNNER_TEMP/refresh-after-verify.err"
+          verified=false
+
+          for attempt in {1..12}; do
+            if (
+              pushd api >/dev/null
+              npx wrangler deployments status \
+                --config wrangler.toml --env "$API_WRANGLER_ENV" \
+                --name "$API_WORKER" --json > "$api_status"
+              api_version_id="$(jq -er '
+                if (.versions | length) == 1 and
+                   ((.versions[0].percentage | tonumber) == 100)
+                then .versions[0].version_id else error("unstable API") end
+              ' "$api_status")"
+              npx wrangler versions view "$api_version_id" \
+                --config wrangler.toml --env "$API_WRANGLER_ENV" \
+                --name "$API_WORKER" --json > "$api_version"
+              popd >/dev/null
+
+              pushd compute-worker >/dev/null
+              npx wrangler deployments status \
+                --config "$COMPUTE_CONFIG" --name "$COMPUTE_WORKER" --json \
+                > "$compute_status"
+              compute_version_id="$(jq -er '
+                if (.versions | length) == 1 and
+                   ((.versions[0].percentage | tonumber) == 100)
+                then .versions[0].version_id else error("unstable Compute") end
+              ' "$compute_status")"
+              npx wrangler versions view "$compute_version_id" \
+                --config "$COMPUTE_CONFIG" --name "$COMPUTE_WORKER" --json \
+                > "$compute_version"
+              npx wrangler containers list \
+                --config "$COMPUTE_CONFIG" --json > "$container_list"
+              popd >/dev/null
+
+              node scripts/release/verify-api-compute-rollout-state.mjs \
+                inspect "$REQUESTED_TARGET" "$api_status" "$api_version" \
+                "$compute_status" "$compute_version" \
+                > "$EVIDENCE_DIR/after-state.json"
+              node scripts/release/verify-compute-worker-refresh-evidence.mjs \
+                fingerprint "$REQUESTED_TARGET" "$compute_version" \
+                > "$EVIDENCE_DIR/after-worker-fingerprint.json"
+              node compute-worker/scripts/verify-container-readiness.mjs \
+                "$container_list" "$CONTAINER_APPLICATION" "$DEPLOYED_IMAGE" \
+                > "$EVIDENCE_DIR/after-container-readiness.json"
+              node scripts/release/verify-compute-worker-refresh-evidence.mjs \
+                build "$EVIDENCE_DIR" "$REQUESTED_TARGET" \
+                "$COMPUTE_RELEASE_RUN_ID_INPUT" \
+                "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                >/dev/null 2> "$verify_error"
+            ); then
+              verified=true
+              break
+            fi
+            if [ "$attempt" -lt 12 ]; then sleep 5; fi
+          done
+          if [ "$verified" != "true" ]; then
+            cat "$verify_error" >&2 || true
+            echo "Refreshed Compute Worker did not reach the exact fenced state." >&2
+            exit 1
+          fi
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Finalize the committed Worker refresh evidence
+        id: finalize
+        if: steps.verify.outputs.verified == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          node scripts/release/verify-compute-worker-refresh-evidence.mjs \
+            build "$EVIDENCE_DIR" "$REQUESTED_TARGET" \
+            "$COMPUTE_RELEASE_RUN_ID_INPUT" "$generated_at" \
+            > "$EVIDENCE_DIR/refresh.json"
+          {
+            echo "## Galactic Compute Worker refresh"
+            echo
+            echo "- Target: $REQUESTED_TARGET"
+            echo "- Source image release run: $COMPUTE_RELEASE_RUN_ID_INPUT"
+            echo "- Image digest retained: $ENVIRONMENT_DIGEST"
+            echo "- Prior Compute version: $(jq -r '.before.compute_version_id' "$EVIDENCE_DIR/refresh.json")"
+            echo "- Refreshed Compute version: $(jq -r '.after.compute_version_id' "$EVIDENCE_DIR/refresh.json")"
+            echo "- Admission remained OFF."
+            echo "- API, Container application/image, queues, buckets, schema, and secrets were unchanged."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore the captured Compute version after a failed refresh
+        id: compensate
+        if: >-
+          always() &&
+          steps.deploy.outputs.attempted == 'true' &&
+          (
+            steps.deploy.outcome != 'success' ||
+            steps.verify.outcome != 'success' ||
+            steps.finalize.outcome != 'success'
+          )
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PREVIOUS_COMPUTE_VERSION_ID: ${{ steps.before.outputs.previous_compute_version_id }}
+        run: |
+          set -euo pipefail
+          restored=false
+          for promotion_attempt in 1 2 3; do
+            set +e
+            pushd compute-worker >/dev/null
+            npx wrangler versions deploy "$PREVIOUS_COMPUTE_VERSION_ID@100%" \
+              --config "$COMPUTE_CONFIG" --name "$COMPUTE_WORKER" --yes \
+              --message "Failed Worker refresh restore run $GITHUB_RUN_ID attempt $promotion_attempt"
+            promotion_rc="$?"
+            popd >/dev/null
+            set -e
+
+            for read_attempt in {1..12}; do
+              api_status="$RUNNER_TEMP/refresh-restore-api-status.json"
+              api_version="$RUNNER_TEMP/refresh-restore-api-version.json"
+              compute_status="$RUNNER_TEMP/refresh-restore-compute-status.json"
+              compute_version="$RUNNER_TEMP/refresh-restore-compute-version.json"
+              container_list="$RUNNER_TEMP/refresh-restore-container-list.json"
+              if (
+                pushd api >/dev/null
+                npx wrangler deployments status \
+                  --config wrangler.toml --env "$API_WRANGLER_ENV" \
+                  --name "$API_WORKER" --json > "$api_status"
+                api_version_id="$(jq -er '.versions[0].version_id' "$api_status")"
+                npx wrangler versions view "$api_version_id" \
+                  --config wrangler.toml --env "$API_WRANGLER_ENV" \
+                  --name "$API_WORKER" --json > "$api_version"
+                popd >/dev/null
+                pushd compute-worker >/dev/null
+                npx wrangler deployments status \
+                  --config "$COMPUTE_CONFIG" --name "$COMPUTE_WORKER" --json \
+                  > "$compute_status"
+                jq -e --arg id "$PREVIOUS_COMPUTE_VERSION_ID" '
+                  (.versions | length) == 1 and
+                  ((.versions[0].percentage | tonumber) == 100) and
+                  .versions[0].version_id == $id
+                ' "$compute_status" >/dev/null
+                npx wrangler versions view "$PREVIOUS_COMPUTE_VERSION_ID" \
+                  --config "$COMPUTE_CONFIG" --name "$COMPUTE_WORKER" --json \
+                  > "$compute_version"
+                npx wrangler containers list \
+                  --config "$COMPUTE_CONFIG" --json > "$container_list"
+                popd >/dev/null
+                node scripts/release/verify-api-compute-rollout-state.mjs \
+                  inspect "$REQUESTED_TARGET" "$api_status" "$api_version" \
+                  "$compute_status" "$compute_version" \
+                  > "$EVIDENCE_DIR/compensated-state.json"
+                node scripts/release/verify-compute-worker-refresh-evidence.mjs \
+                  fingerprint "$REQUESTED_TARGET" "$compute_version" \
+                  > "$EVIDENCE_DIR/compensated-worker-fingerprint.json"
+                node compute-worker/scripts/verify-container-readiness.mjs \
+                  "$container_list" "$CONTAINER_APPLICATION" "$DEPLOYED_IMAGE" \
+                  > "$EVIDENCE_DIR/compensated-container-readiness.json"
+                jq -ne \
+                  --slurpfile before "$EVIDENCE_DIR/before-state.json" \
+                  --slurpfile current "$EVIDENCE_DIR/compensated-state.json" \
+                  --slurpfile before_fp "$EVIDENCE_DIR/before-worker-fingerprint.json" \
+                  --slurpfile current_fp "$EVIDENCE_DIR/compensated-worker-fingerprint.json" \
+                  --slurpfile before_container "$EVIDENCE_DIR/before-container-readiness.json" \
+                  --slurpfile current_container "$EVIDENCE_DIR/compensated-container-readiness.json" '
+                    ($current[0].policy == "off") and
+                    ($current[0].environment_digest == $before[0].environment_digest) and
+                    ($current[0].api == $before[0].api) and
+                    (($current[0].compute | del(.deployment_id)) ==
+                      ($before[0].compute | del(.deployment_id))) and
+                    ($current_fp[0] == $before_fp[0]) and
+                    ($current_container[0].id == $before_container[0].id) and
+                    ($current_container[0].name == $before_container[0].name) and
+                    ($current_container[0].image == $before_container[0].image) and
+                    (($current_container[0].version | tostring) ==
+                      ($before_container[0].version | tostring))
+                  ' </dev/null >/dev/null
+              ); then
+                restored=true
+                break 2
+              fi
+              if [ "$read_attempt" -lt 12 ]; then sleep 5; fi
+            done
+            if [ "$promotion_rc" -ne 0 ] && [ "$promotion_attempt" -lt 3 ]; then
+              sleep 5
+            fi
+          done
+          [ "$restored" = "true" ] || {
+            echo "Failed to restore the exact captured Compute Worker version." >&2
+            exit 1
+          }
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Remove the temporary exact-digest config
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${REFRESH_CONFIG:-}" ] &&
+             [ -f "compute-worker/$REFRESH_CONFIG" ]; then
+            rm "compute-worker/$REFRESH_CONFIG"
+          fi
+
+      - name: Write the deterministic refresh evidence manifest
+        id: manifest
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          if [ ! -f "$EVIDENCE_DIR/refresh.json" ]; then
+            jq -n \
+              --arg target "$REQUESTED_TARGET" \
+              --arg workflow_run_id "$GITHUB_RUN_ID" \
+              --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+              --arg git_sha "$GITHUB_SHA" \
+              --arg deploy_outcome "${{ steps.deploy.outcome }}" \
+              --arg verify_outcome "${{ steps.verify.outcome }}" \
+              --arg finalize_outcome "${{ steps.finalize.outcome }}" \
+              --arg compensation_outcome "${{ steps.compensate.outcome }}" '
+                {
+                  schema_version: 1,
+                  kind: "galactic_compute_worker_refresh_failure",
+                  target: $target,
+                  dispatch: {
+                    workflow_run_id: $workflow_run_id,
+                    run_attempt: $run_attempt,
+                    git_sha: $git_sha
+                  },
+                  outcomes: {
+                    deploy: $deploy_outcome,
+                    verify: $verify_outcome,
+                    finalize: $finalize_outcome,
+                    compensation: $compensation_outcome
+                  }
+                }
+              ' > "$EVIDENCE_DIR/failure.json"
+          fi
+          (
+            cd "$EVIDENCE_DIR"
+            find . -type f ! -name evidence.sha256 -print0 |
+              LC_ALL=C sort -z |
+              xargs -0 sha256sum
+          ) > "$EVIDENCE_DIR/evidence.sha256"
+
+      - name: Upload private Worker refresh evidence
+        id: upload_evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: compute-worker-refresh-${{ inputs.target }}-${{ github.sha }}
+          path: compute-worker-refresh-evidence
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Restore the captured version if committed evidence was not published
+        id: unpublished_restore
+        if: >-
+          always() &&
+          steps.deploy.outputs.attempted == 'true' &&
+          steps.finalize.outcome == 'success' &&
+          (
+            steps.manifest.outcome != 'success' ||
+            steps.upload_evidence.outcome != 'success'
+          )
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PREVIOUS_COMPUTE_VERSION_ID: ${{ steps.before.outputs.previous_compute_version_id }}
+        run: |
+          set -euo pipefail
+          restored=false
+          for promotion_attempt in 1 2 3; do
+            set +e
+            pushd compute-worker >/dev/null
+            npx wrangler versions deploy "$PREVIOUS_COMPUTE_VERSION_ID@100%" \
+              --config "$COMPUTE_CONFIG" --name "$COMPUTE_WORKER" --yes \
+              --message "Unpublished Worker refresh restore run $GITHUB_RUN_ID attempt $promotion_attempt"
+            promotion_rc="$?"
+            popd >/dev/null
+            set -e
+            for read_attempt in {1..12}; do
+              status="$RUNNER_TEMP/unpublished-refresh-compute-status.json"
+              pushd compute-worker >/dev/null
+              if npx wrangler deployments status \
+                   --config "$COMPUTE_CONFIG" --name "$COMPUTE_WORKER" --json \
+                   > "$status" &&
+                 jq -e --arg id "$PREVIOUS_COMPUTE_VERSION_ID" '
+                   (.versions | length) == 1 and
+                   ((.versions[0].percentage | tonumber) == 100) and
+                   .versions[0].version_id == $id
+                 ' "$status" >/dev/null; then
+                popd >/dev/null
+                restored=true
+                break 2
+              fi
+              popd >/dev/null
+              if [ "$read_attempt" -lt 12 ]; then sleep 5; fi
+            done
+            if [ "$promotion_rc" -ne 0 ] && [ "$promotion_attempt" -lt 3 ]; then
+              sleep 5
+            fi
+          done
+          [ "$restored" = "true" ] || {
+            echo "Published evidence failed and exact-version restore did not verify." >&2
+            exit 1
+          }
+          {
+            echo
+            echo "Committed evidence was not published; the captured Compute version was restored."
+          } >> "$GITHUB_STEP_SUMMARY"

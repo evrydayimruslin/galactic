@@ -1,10 +1,12 @@
 name: Compute Canary Rollout
 
 # Restore the already-deployed Galactic Compute digest by changing only the
-# five API admission/certification-policy vars. Every mutating dispatch captures or uploads
+# five API admission/certification-policy vars. Optional Worker-refresh evidence
+# may advance Worker code while retaining that certified digest before this
+# workflow begins. Every mutating dispatch captures or uploads
 # its own exact admission-OFF rollback version before promotion. Historical
-# Compute Deploy evidence certifies only the Compute Worker/image pair and is
-# never accepted as rollback authority.
+# Compute Deploy evidence remains image authority; a bound Worker-refresh run
+# is Worker-code authority. Neither is ever accepted as rollback authority.
 on:
   workflow_dispatch:
     inputs:
@@ -37,6 +39,11 @@ on:
       compute_release_run_id:
         description: Successful preserve_off Compute Deploy run certifying the live digest.
         required: true
+        type: string
+      compute_worker_refresh_run_id:
+        description: Successful Worker-only refresh run chained to that Compute Deploy; optional when the live Worker is the released version.
+        required: false
+        default: ''
         type: string
       predecessor_rollout_run_id:
         description: Prior successful rollout stage run; optional only for staging_canary or emergency revert recovery.
@@ -82,6 +89,7 @@ jobs:
       ROLLOUT_CONFIRMATION: ${{ inputs.confirmation }}
       ROLLOUT_REASON: ${{ inputs.reason }}
       COMPUTE_RELEASE_RUN_ID_INPUT: ${{ inputs.compute_release_run_id }}
+      COMPUTE_WORKER_REFRESH_RUN_ID_INPUT: ${{ inputs.compute_worker_refresh_run_id }}
       PREDECESSOR_RUN_ID_INPUT: ${{ inputs.predecessor_rollout_run_id }}
       RECOVERY_SOURCE_SHA_INPUT: ${{ inputs.recovery_source_sha }}
       COMPLETED_STOP_OPERATION_ID_INPUT: ${{ inputs.completed_stop_operation_id }}
@@ -164,6 +172,11 @@ jobs:
           }
           if ! [[ "$COMPUTE_RELEASE_RUN_ID_INPUT" =~ ^[1-9][0-9]*$ ]]; then
             echo "compute_release_run_id must be a positive run ID." >&2
+            exit 1
+          fi
+          if [ -n "$COMPUTE_WORKER_REFRESH_RUN_ID_INPUT" ] &&
+             ! [[ "$COMPUTE_WORKER_REFRESH_RUN_ID_INPUT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "compute_worker_refresh_run_id must be a positive run ID when supplied." >&2
             exit 1
           fi
           if [ "$predecessor_required" = "true" ]; then
@@ -279,6 +292,7 @@ jobs:
             --arg confirmation "$ROLLOUT_CONFIRMATION" \
             --arg reason_sha256 "$reason_sha256" \
             --arg compute_release_run_id "$COMPUTE_RELEASE_RUN_ID_INPUT" \
+            --arg compute_worker_refresh_run_id "$COMPUTE_WORKER_REFRESH_RUN_ID_INPUT" \
             --arg predecessor_run_id "$PREDECESSOR_RUN_ID_INPUT" \
             --arg recovery_source_sha "$RECOVERY_SOURCE_SHA_INPUT" \
             --arg upload_source_sha "$upload_source_sha" \
@@ -291,6 +305,9 @@ jobs:
               confirmation: $confirmation,
               reason_sha256: $reason_sha256,
               compute_release_run_id: $compute_release_run_id,
+              compute_worker_refresh_run_id:
+                (if $compute_worker_refresh_run_id == "" then null
+                 else $compute_worker_refresh_run_id end),
               predecessor_rollout_run_id:
                 (if $predecessor_run_id == "" then null else $predecessor_run_id end),
               recovery_source_sha:
@@ -354,6 +371,37 @@ jobs:
             "$COMPUTE_RELEASE_RUN_ID_INPUT" \
             > "$EVIDENCE_DIR/compute-release-verification.json"
 
+          if [ -n "$COMPUTE_WORKER_REFRESH_RUN_ID_INPUT" ]; then
+            refresh_run_json="$RUNNER_TEMP/compute-worker-refresh-run.json"
+            refresh_artifact_dir="$RUNNER_TEMP/compute-worker-refresh-evidence"
+            gh api \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$COMPUTE_WORKER_REFRESH_RUN_ID_INPUT" \
+              > "$refresh_run_json"
+            refresh_sha="$(jq -er '.head_sha' "$refresh_run_json")"
+            [ "$refresh_sha" = "$GITHUB_SHA" ] || {
+              echo "Compute Worker refresh must be from this exact rollout SHA." >&2
+              exit 1
+            }
+            refresh_artifact="compute-worker-refresh-$REQUESTED_TARGET-$refresh_sha"
+            mkdir -p "$refresh_artifact_dir"
+            gh run download "$COMPUTE_WORKER_REFRESH_RUN_ID_INPUT" \
+              --repo "$GITHUB_REPOSITORY" \
+              --name "$refresh_artifact" \
+              --dir "$refresh_artifact_dir"
+            node scripts/release/verify-compute-worker-refresh-evidence.mjs \
+              verify "$refresh_artifact_dir" "$REQUESTED_TARGET" \
+              "$refresh_run_json" "$COMPUTE_WORKER_REFRESH_RUN_ID_INPUT" \
+              "$COMPUTE_RELEASE_RUN_ID_INPUT" \
+              > "$EVIDENCE_DIR/compute-worker-refresh-verification.json"
+            jq -e \
+              --arg sha "$GITHUB_SHA" \
+              --arg source_run "$COMPUTE_RELEASE_RUN_ID_INPUT" '
+                .git_sha == $sha and
+                .source_compute_release_run_id == $source_run
+              ' "$EVIDENCE_DIR/compute-worker-refresh-verification.json" \
+              >/dev/null
+          fi
+
           gh api "repos/$GITHUB_REPOSITORY/pulls/172" > "$pull_json"
           jq -e '
             (.number == 172) and
@@ -374,11 +422,21 @@ jobs:
             exit 1
           fi
 
-          jq -r '
-            "environment_digest=" + .environment_digest,
-            "compute_version_id=" + .compute_version_id,
-            "compute_version_tag=" + .compute_version_tag
-          ' "$EVIDENCE_DIR/compute-release-verification.json" >> "$GITHUB_OUTPUT"
+          if [ -f "$EVIDENCE_DIR/compute-worker-refresh-verification.json" ]; then
+            jq -r '
+              "environment_digest=" + .environment_digest,
+              "compute_version_id=" + .compute_version_id,
+              "compute_version_tag=" + .compute_version_tag
+            ' "$EVIDENCE_DIR/compute-worker-refresh-verification.json" \
+              >> "$GITHUB_OUTPUT"
+          else
+            jq -r '
+              "environment_digest=" + .environment_digest,
+              "compute_version_id=" + .compute_version_id,
+              "compute_version_tag=" + .compute_version_tag
+            ' "$EVIDENCE_DIR/compute-release-verification.json" \
+              >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Download and verify the predecessor stage
         id: predecessor
@@ -540,7 +598,9 @@ jobs:
             local destination="$1"
             local captured_at
             captured_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            for workflow_file in api-deploy.yml compute-deploy.yml compute-probe.yml; do
+            for workflow_file in \
+              api-deploy.yml compute-deploy.yml compute-probe.yml \
+              compute-worker-refresh.yml; do
               fetch_workflow_page_set \
                 "$workflow_file" "$soak_root/$workflow_file-pages.json"
               normalize_workflow_query \
@@ -554,7 +614,8 @@ jobs:
               --arg captured_at "$captured_at" \
               --slurpfile api "$soak_root/api-deploy.yml-query.json" \
               --slurpfile compute "$soak_root/compute-deploy.yml-query.json" \
-              --slurpfile probe "$soak_root/compute-probe.yml-query.json" '
+              --slurpfile probe "$soak_root/compute-probe.yml-query.json" \
+              --slurpfile refresh "$soak_root/compute-worker-refresh.yml-query.json" '
                 {
                   schema_version: 1,
                   kind: "galactic_compute_soak_run_inventory",
@@ -562,7 +623,7 @@ jobs:
                   window_started_at: $window_started_at,
                   window_ended_at: $captured_at,
                   captured_at: $captured_at,
-                  queries: [$api[0], $compute[0], $probe[0]]
+                  queries: [$api[0], $compute[0], $probe[0], $refresh[0]]
                 }
               ' > "$destination"
           }
@@ -751,12 +812,14 @@ jobs:
           esac
           jq -ne \
             --slurpfile state "$baseline" \
-            --slurpfile release "$EVIDENCE_DIR/compute-release-verification.json" '
-              ($state[0].environment_digest == $release[0].environment_digest) and
-              ($state[0].compute.version_id == $release[0].compute_version_id) and
-              ($state[0].compute.version_tag == $release[0].compute_version_tag)
+            --arg digest "${{ steps.release.outputs.environment_digest }}" \
+            --arg compute_version_id "${{ steps.release.outputs.compute_version_id }}" \
+            --arg compute_version_tag "${{ steps.release.outputs.compute_version_tag }}" '
+              ($state[0].environment_digest == $digest) and
+              ($state[0].compute.version_id == $compute_version_id) and
+              ($state[0].compute.version_tag == $compute_version_tag)
             ' </dev/null >/dev/null || {
-            echo "Live Compute does not match the cryptographically verified release evidence." >&2
+            echo "Live Compute does not match the verified image release and Worker refresh chain." >&2
             exit 1
           }
           if [ "$REQUESTED_STAGE" = "production_global" ]; then
@@ -1816,6 +1879,21 @@ jobs:
           rollback_sha="$(hash_file rollback-anchor.json)"
           active_sha="$(hash_file final-state.json)"
           release_sha="$(hash_file compute-release-verification.json)"
+          if [ -f "$EVIDENCE_DIR/compute-worker-refresh-verification.json" ]; then
+            worker_refresh_json="$(jq -n \
+              --arg workflow_run_id "$COMPUTE_WORKER_REFRESH_RUN_ID_INPUT" \
+              --arg source_compute_release_run_id "$COMPUTE_RELEASE_RUN_ID_INPUT" \
+              --arg sha256 "$(hash_file compute-worker-refresh-verification.json)" '
+                {
+                  evidence_file: "compute-worker-refresh-verification.json",
+                  sha256: $sha256,
+                  workflow_run_id: $workflow_run_id,
+                  source_compute_release_run_id: $source_compute_release_run_id
+                }
+              ')"
+          else
+            worker_refresh_json=null
+          fi
 
           if [ -f "$EVIDENCE_DIR/canary-identity.json" ]; then
             identity_json="$(jq -n \
@@ -1876,6 +1954,7 @@ jobs:
             --arg compute_release_sha "$release_sha" \
             --arg rollback_sha "$rollback_sha" \
             --arg active_sha "$active_sha" \
+            --argjson compute_worker_refresh "$worker_refresh_json" \
             --argjson canary_identity "$identity_json" \
             --argjson deployed_certification "$certification_json" \
             --argjson active_soak "$active_soak_json" \
@@ -1902,6 +1981,7 @@ jobs:
                   sha256: $compute_release_sha,
                   workflow_run_id: $compute_release_run_id
                 },
+                compute_worker_refresh: $compute_worker_refresh,
                 rollback_anchor: {
                   evidence_file: "rollback-anchor.json",
                   sha256: $rollback_sha

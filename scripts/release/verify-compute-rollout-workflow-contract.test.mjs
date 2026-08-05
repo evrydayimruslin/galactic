@@ -6,6 +6,10 @@ const workflow = readFileSync(
   new URL("../../.github/workflows/compute-canary-rollout.yml", import.meta.url),
   "utf8",
 );
+const workerRefreshWorkflow = readFileSync(
+  new URL("../../.github/workflows/compute-worker-refresh.yml", import.meta.url),
+  "utf8",
+);
 
 function namedStepBlocks(source) {
   const starts = [...source.matchAll(/^      - name: /gmu)].map(
@@ -115,4 +119,55 @@ test("every OFF transition waits only for the exact enabled predecessor", () => 
     assert.match(step, /if \[ "\$attempt" -lt 12 \]; then\n\s+sleep 5/u);
     assert.doesNotMatch(step, /sleep (?:[6-9]|[1-9][0-9])/u);
   }
+});
+
+test("Worker refresh reuses the certified digest and fails back to this dispatch's version", () => {
+  assert.match(workerRefreshWorkflow, /compute_release_run_id:/u);
+  assert.match(
+    workerRefreshWorkflow,
+    /group: api-\$\{\{ inputs\.target \}\}-deploy/u,
+  );
+  assert.match(
+    workerRefreshWorkflow,
+    /verify-compute-rollout-release-evidence\.mjs/u,
+  );
+  assert.match(
+    workerRefreshWorkflow,
+    /image = "\.\/images\/standard\/Dockerfile"/u,
+  );
+  assert.match(workerRefreshWorkflow, /--containers-rollout=none/u);
+  assert.doesNotMatch(workerRefreshWorkflow, /--containers-rollout=(?:gradual|immediate)/u);
+  assert.doesNotMatch(workerRefreshWorkflow, /docker (?:build|push)/u);
+  assert.match(
+    workerRefreshWorkflow,
+    /before-container-readiness\.json/u,
+  );
+  assert.match(
+    workerRefreshWorkflow,
+    /after-container-readiness\.json/u,
+  );
+  assert.match(
+    workerRefreshWorkflow,
+    /verify-compute-worker-refresh-evidence\.mjs \\\n+\s+build/u,
+  );
+  assert.match(
+    workerRefreshWorkflow,
+    /PREVIOUS_COMPUTE_VERSION_ID: \$\{\{ steps\.before\.outputs\.previous_compute_version_id \}\}/u,
+  );
+  assert.match(
+    workerRefreshWorkflow,
+    /versions deploy "\$PREVIOUS_COMPUTE_VERSION_ID@100%"/u,
+  );
+  assert.match(workerRefreshWorkflow, /steps\.upload_evidence\.outcome != 'success'/u);
+
+  assert.match(workflow, /compute_worker_refresh_run_id:/u);
+  assert.match(
+    workflow,
+    /verify-compute-worker-refresh-evidence\.mjs \\\n+\s+verify/u,
+  );
+  assert.match(workflow, /compute_worker_refresh: \$compute_worker_refresh/u);
+  assert.match(
+    workflow,
+    /Live Compute does not match the verified image release and Worker refresh chain/u,
+  );
 });

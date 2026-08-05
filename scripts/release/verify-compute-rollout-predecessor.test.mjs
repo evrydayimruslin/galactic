@@ -29,6 +29,7 @@ const API_ID = '33333333-3333-4333-8333-333333333333';
 const CANDIDATE_API_ID = '44444444-4444-4444-8444-444444444444';
 const RECOVERY_OFF_API_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 const COMPUTE_ID = '55555555-5555-4555-8555-555555555555';
+const SOURCE_COMPUTE_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const API_DEPLOYMENT_ID = '66666666-6666-4666-8666-666666666666';
 const CANDIDATE_DEPLOYMENT_ID = '77777777-7777-4777-8777-777777777777';
 const COMPUTE_DEPLOYMENT_ID = '88888888-8888-4888-8888-888888888888';
@@ -416,6 +417,7 @@ function createFixture(
       ),
       workflow_run_id: releaseVerification.workflow_run_id,
     },
+    compute_worker_refresh: null,
     rollback_anchor: {
       evidence_file: 'rollback-anchor.json',
       sha256: writeJson(directory, 'rollback-anchor.json', rollbackAnchor),
@@ -549,6 +551,67 @@ test('accepts the complete stage lineage and both revert targets', () => {
     } finally {
       dispose(fixture);
     }
+  }
+});
+
+test('accepts a hash-bound Worker refresh between image release and canary', () => {
+  const fixture = createFixture('staging_canary');
+  try {
+    const sourceTag = `compute-${RELEASE_SHA}`;
+    fixture.releaseVerification.compute_version_id = SOURCE_COMPUTE_ID;
+    fixture.releaseVerification.compute_version_tag = sourceTag;
+    rebind(
+      fixture,
+      'compute_release',
+      'compute-release-verification.json',
+      fixture.releaseVerification,
+    );
+    const refresh = {
+      schema_version: 1,
+      verified: true,
+      target: 'staging',
+      workflow_run_id: '30990000001',
+      git_sha: GIT_SHA,
+      source_compute_release_run_id:
+        fixture.releaseVerification.workflow_run_id,
+      source_release_sha: fixture.releaseVerification.release_sha,
+      environment_digest: DIGEST,
+      deployed_image: fixture.releaseVerification.deployed_image,
+      source_compute_version_id: SOURCE_COMPUTE_ID,
+      source_compute_version_tag: sourceTag,
+      source_compute_code_etag: 'source-compute-code-etag',
+      compute_version_id: fixture.finalState.compute.version_id,
+      compute_version_tag: fixture.finalState.compute.version_tag,
+      compute_code_etag: fixture.finalState.compute.code_etag,
+      compute_configuration_sha256: 'f'.repeat(64),
+    };
+    fixture.rollout.compute_worker_refresh = {
+      evidence_file: 'compute-worker-refresh-verification.json',
+      sha256: writeJson(
+        fixture.directory,
+        'compute-worker-refresh-verification.json',
+        refresh,
+      ),
+      workflow_run_id: refresh.workflow_run_id,
+      source_compute_release_run_id: refresh.source_compute_release_run_id,
+    };
+    persist(fixture);
+    assert.equal(verify(fixture, { minimumAgeSeconds: '0' }).verified, true);
+
+    refresh.source_compute_release_run_id = '29000000001';
+    rebind(
+      fixture,
+      'compute_worker_refresh',
+      'compute-worker-refresh-verification.json',
+      refresh,
+    );
+    persist(fixture);
+    assert.throws(
+      () => verify(fixture, { minimumAgeSeconds: '0' }),
+      /Compute rollout predecessor is invalid/u,
+    );
+  } finally {
+    dispose(fixture);
   }
 });
 

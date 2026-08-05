@@ -15,6 +15,7 @@ const POSITIVE_INTEGER = /^[1-9][0-9]*$/u;
 const NONNEGATIVE_INTEGER = /^(0|[1-9][0-9]*)$/u;
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const VERSION_TAG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const ZERO_DIGEST = `sha256:${'0'.repeat(64)}`;
 const WORKFLOW_PATH = '.github/workflows/compute-canary-rollout.yml';
 const ROLLOUT_KIND = 'galactic_compute_canary_rollout';
@@ -84,6 +85,7 @@ const ROLLOUT_KEYS = [
   'api_upload_source_sha',
   'canary_identity',
   'compute_release',
+  'compute_worker_refresh',
   'deployed_certification',
   'dispatch',
   'generated_at',
@@ -693,14 +695,79 @@ function validateComputeReleaseVerification({ verification, target, finalState }
     !GIT_SHA.test(row.release_sha) ||
     typeof row.workflow_run_id !== 'string' ||
     !POSITIVE_INTEGER.test(row.workflow_run_id) ||
-    row.compute_version_id !== finalState.compute.version_id ||
-    row.compute_version_tag !== finalState.compute.version_tag ||
     digest !== finalState.environment_digest ||
     !imageMatch ||
     imageMatch[2] !== TARGETS[target].computeWorker ||
     imageMatch[3] !== digest
   ) {
     fail('compute release verification does not match the final Compute state');
+  }
+  return row;
+}
+
+function validateComputeWorkerRefreshVerification({
+  verification,
+  target,
+  dispatch,
+  finalState,
+  computeRelease,
+}) {
+  const row = exactKeys(
+    verification,
+    [
+      'compute_code_etag',
+      'compute_configuration_sha256',
+      'compute_version_id',
+      'compute_version_tag',
+      'deployed_image',
+      'environment_digest',
+      'git_sha',
+      'schema_version',
+      'source_compute_code_etag',
+      'source_compute_release_run_id',
+      'source_compute_version_id',
+      'source_compute_version_tag',
+      'source_release_sha',
+      'target',
+      'verified',
+      'workflow_run_id',
+    ],
+    'Compute Worker refresh verification',
+  );
+  canonicalUuid(row.source_compute_version_id, 'source Compute version id');
+  canonicalUuid(row.compute_version_id, 'refreshed Compute version id');
+  if (
+    typeof row.source_compute_version_tag !== 'string' ||
+    !VERSION_TAG.test(row.source_compute_version_tag) ||
+    typeof row.compute_version_tag !== 'string' ||
+    !VERSION_TAG.test(row.compute_version_tag) ||
+    typeof row.source_compute_code_etag !== 'string' ||
+    row.source_compute_code_etag.length === 0 ||
+    typeof row.compute_code_etag !== 'string' ||
+    row.compute_code_etag.length === 0 ||
+    typeof row.compute_configuration_sha256 !== 'string' ||
+    !HEX_SHA256.test(row.compute_configuration_sha256)
+  ) {
+    fail('Compute Worker refresh identity is malformed');
+  }
+  if (
+    row.schema_version !== 1 || row.verified !== true ||
+    row.target !== target || row.git_sha !== dispatch.git_sha ||
+    typeof row.workflow_run_id !== 'string' ||
+    !POSITIVE_INTEGER.test(row.workflow_run_id) ||
+    row.workflow_run_id === computeRelease.workflow_run_id ||
+    row.source_compute_release_run_id !== computeRelease.workflow_run_id ||
+    row.source_release_sha !== computeRelease.release_sha ||
+    row.environment_digest !== computeRelease.environment_digest ||
+    row.deployed_image !== computeRelease.deployed_image ||
+    row.source_compute_version_id !== computeRelease.compute_version_id ||
+    row.source_compute_version_tag !== computeRelease.compute_version_tag ||
+    row.compute_version_id !== finalState.compute.version_id ||
+    row.compute_version_tag !== finalState.compute.version_tag ||
+    row.compute_code_etag !== finalState.compute.code_etag ||
+    row.compute_code_etag === row.source_compute_code_etag
+  ) {
+    fail('Compute Worker refresh does not chain the image release to the final state');
   }
   return row;
 }
@@ -1197,6 +1264,54 @@ export function verifyComputeRolloutPredecessor({
       computeReleaseVerification.workflow_run_id
   ) {
     fail('compute release reference has the wrong workflow run id');
+  }
+
+  let computeWorkerRefreshVerification = null;
+  if (rollout.compute_worker_refresh !== null) {
+    const refreshReference = exactKeys(
+      rollout.compute_worker_refresh,
+      [
+        'evidence_file',
+        'sha256',
+        'source_compute_release_run_id',
+        'workflow_run_id',
+      ],
+      'Compute Worker refresh reference',
+    );
+    computeWorkerRefreshVerification =
+      validateComputeWorkerRefreshVerification({
+        verification: boundJson(
+          evidenceDirectory,
+          refreshReference,
+          'compute-worker-refresh-verification.json',
+          'Compute Worker refresh verification',
+          [
+            'evidence_file',
+            'sha256',
+            'source_compute_release_run_id',
+            'workflow_run_id',
+          ],
+        ),
+        target: expectedTarget,
+        dispatch,
+        finalState,
+        computeRelease: computeReleaseVerification,
+      });
+    if (
+      refreshReference.workflow_run_id !==
+        computeWorkerRefreshVerification.workflow_run_id ||
+      refreshReference.source_compute_release_run_id !==
+        computeReleaseVerification.workflow_run_id
+    ) {
+      fail('Compute Worker refresh reference metadata does not match its evidence');
+    }
+  } else if (
+    computeReleaseVerification.compute_version_id !==
+      finalState.compute.version_id ||
+    computeReleaseVerification.compute_version_tag !==
+      finalState.compute.version_tag
+  ) {
+    fail('final Compute version requires bound Worker refresh evidence');
   }
 
   let predecessorVerification = null;
