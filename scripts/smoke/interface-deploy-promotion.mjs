@@ -5,9 +5,16 @@ const CANONICAL_VERSION_RE =
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const COMPUTE_CERTIFICATION_DOCUMENT_SHA256 =
-  "1decb2b1b2229cbe1b01c6332a9cc9f5dc24a9a95d71a1510f730e6529bb170c";
+  "a8fe2a94b2dd90f6627ea0301d3efeaa1bef5507e1ecdda65649fe57d55e209d";
 const COMPUTE_CERTIFICATION_MANIFEST_SHA256 =
-  "9701d4a0b2d6d476abcebc6af6c1cc8c55e80a534e5ae133a523d2c3efb79b7a";
+  "9240ff38d9a68870fef974641fdb3f2041df2fffec1744ae978fcc5f52190e49";
+const COMPUTE_CERTIFICATION_ROUTINE_AUTHORITY = Object.freeze({
+  level: "external_write",
+  effects: Object.freeze({
+    "compute.execute": "free",
+    "notification.owner.write": "free",
+  }),
+});
 
 const COMPUTE_CERTIFICATION_SCENARIOS = Object.freeze([
   "sync_toolchain",
@@ -26,7 +33,7 @@ const INTERFACE_DEMO_FIXTURE = Object.freeze({
   name: "interface-demo",
   directory: "examples/interface-demo",
   uploadName: "Interface Demo (smoke)",
-  permission: "compute:exec",
+  permissions: Object.freeze(["compute:exec"]),
   functionName: "run_compute_smoke",
   testFunctionName: "get_greeting",
   testArgs: Object.freeze({ name: "smoke" }),
@@ -44,7 +51,7 @@ const COMPUTE_CERTIFICATION_FIXTURE = Object.freeze({
   name: "compute-certification",
   directory: "examples/compute-certification",
   uploadName: "Compute Certification",
-  permission: "compute:exec",
+  permissions: Object.freeze(["compute:exec", "notify:owner"]),
   functionName: "run_compute_certification",
   testFunctionName: "fixture_identity",
   testArgs: Object.freeze({}),
@@ -80,7 +87,7 @@ export function reviewedFixtureProfile(name = INTERFACE_DEMO_FIXTURE.name) {
 
 function reviewFlags(fixture) {
   return {
-    "--reviewed-permission": fixture.permission,
+    "--reviewed-permission": fixture.permissions.join(","),
     "--reviewed-function": fixture.functionName,
     "--reviewed-compute-profile": fixture.profile,
     "--reviewed-compute-tools": fixture.tools.join(","),
@@ -279,7 +286,7 @@ export function validateReviewedComputeManifest(
   const manifest = parsedManifest(value, "Compute fixture manifest");
   exactStrings(
     manifest.permissions,
-    [fixture.permission],
+    fixture.permissions,
     "Compute fixture permissions",
   );
   const compute = record(manifest.compute, "Compute fixture ceiling");
@@ -328,6 +335,15 @@ export function validateReviewedComputeManifest(
       functions.run_compute_policy_probe?.uses_compute !== true
     ) {
       throw new Error("Compute certification function authority drifted.");
+    }
+    if (
+      JSON.stringify(canonicalJson(
+        functions.run_compute_policy_probe?.authority,
+      )) !== JSON.stringify(canonicalJson(
+        COMPUTE_CERTIFICATION_ROUTINE_AUTHORITY,
+      ))
+    ) {
+      throw new Error("Compute certification routine authority drifted.");
     }
     if (!Array.isArray(manifest.routines) || manifest.routines.length !== 1) {
       throw new Error("Compute certification routine declaration drifted.");

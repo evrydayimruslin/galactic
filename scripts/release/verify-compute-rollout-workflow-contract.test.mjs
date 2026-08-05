@@ -46,6 +46,15 @@ test("routine provisioning is fenced before any admission version upload", () =>
   assert.ok(routine > refresh, "routine preflight must follow fixture refresh");
   assert.ok(upload > routine, "routine preflight must precede version upload");
 
+  const [refreshStep] = namedStepBlocks(workflow).filter((step) =>
+    step.includes("name: Refresh the fixed certification fixture")
+  );
+  assert.ok(refreshStep, "fixture refresh step is missing");
+  assert.match(
+    refreshStep,
+    /--reviewed-permission compute:exec,notify:owner \\/u,
+  );
+
   const [routineStep] = namedStepBlocks(workflow).filter((step) =>
     step.includes(
       "name: Ensure the fixed certification routine is paused and ready",

@@ -33,9 +33,20 @@ const CERTIFICATION_DOCUMENT = await readFile(
   new URL("../../examples/compute-certification/galactic.yaml", import.meta.url),
   "utf8",
 );
+const CERTIFICATION_SOURCE = await readFile(
+  new URL("../../examples/compute-certification/index.ts", import.meta.url),
+  "utf8",
+);
 const COMPUTE_AUTHORITY = {
   level: "read",
   effects: { "compute.execute": "free" },
+};
+const ROUTINE_AUTHORITY = {
+  level: "external_write",
+  effects: {
+    "compute.execute": "free",
+    "notification.owner.write": "free",
+  },
 };
 
 test("reviewed Compute certification collection includes its V2 YAML contract", () => {
@@ -58,7 +69,7 @@ const CERTIFICATION_MANIFEST = {
     "Private release-only Agent for certifying Galactic Compute admission and isolation.",
   type: "mcp",
   entry: { functions: "index.ts" },
-  permissions: ["compute:exec"],
+  permissions: ["compute:exec", "notify:owner"],
   compute: {
     profile: "developer-v1",
     tools: ["browser", "shell"],
@@ -143,7 +154,7 @@ const CERTIFICATION_MANIFEST = {
         type: "object",
         description: "Raw public Compute start projection",
       },
-      authority: COMPUTE_AUTHORITY,
+      authority: ROUTINE_AUTHORITY,
       spend: { compute: "free" },
       uses_compute: true,
     },
@@ -187,7 +198,7 @@ function certificationArgs(overrides = {}) {
   return new Map(Object.entries({
     "--promote-reviewed": true,
     "--reviewed-fixture": "compute-certification",
-    "--reviewed-permission": "compute:exec",
+    "--reviewed-permission": "compute:exec,notify:owner",
     "--reviewed-function": "run_compute_certification",
     "--reviewed-compute-profile": "developer-v1",
     "--reviewed-compute-tools": "browser,shell",
@@ -306,6 +317,10 @@ test("named certification promotion is closed over its exact directory and autho
   assert.equal(config.enabled, true);
   assert.equal(config.fixture.name, "compute-certification");
   assert.deepEqual(config.fixture.tools, ["browser", "shell"]);
+  assert.deepEqual(
+    config.fixture.permissions,
+    ["compute:exec", "notify:owner"],
+  );
   assert.deepEqual(config.fixture.sourcePaths, ["galactic.yaml", "index.ts"]);
   assert.throws(
     () =>
@@ -328,6 +343,17 @@ test("named certification promotion is closed over its exact directory and autho
         directory: "examples/compute-certification",
       }),
     /--reviewed-compute-tools/u,
+  );
+  assert.throws(
+    () =>
+      reviewedPromotionConfig({
+        args: certificationArgs({ "--reviewed-permission": "compute:exec" }),
+        ownerAccessToken: "short-lived-owner-token",
+        appId: APP_ID,
+        allowCreate: false,
+        directory: "examples/compute-certification",
+      }),
+    /--reviewed-permission/u,
   );
   assert.throws(() => reviewedFixtureProfile("caller-controlled"), /Unknown/u);
 });
@@ -368,6 +394,10 @@ test("raw source fingerprint matches the canonical path/content algorithm", () =
 test("Compute smoke fixture uses the scanner-safe direct echo command", () => {
   assert.match(COMPUTE_FIXTURE_SOURCE, /argv:\s*\[\s*"cat"\s*\]/u);
   assert.doesNotMatch(COMPUTE_FIXTURE_SOURCE, /node:fs|fs\.readFileSync/u);
+});
+
+test("certification routine reporting authority is a declaration ceiling", () => {
+  assert.doesNotMatch(CERTIFICATION_SOURCE, /galactic\.notify/u);
 });
 
 test("refresh reuses exact live, promotes exact candidate, and never deletes full unrelated drafts", () => {
@@ -494,6 +524,36 @@ test("certification contract, compiled manifest, and deterministic identity are 
         routines: [{ ...CERTIFICATION_MANIFEST.routines[0], handler: "other" }],
       }, "compute-certification"),
     /routine declaration drifted/u,
+  );
+  assert.throws(
+    () =>
+      validateReviewedComputeManifest({
+        ...CERTIFICATION_MANIFEST,
+        permissions: ["compute:exec"],
+      }, "compute-certification"),
+    /permissions/u,
+  );
+  assert.throws(
+    () =>
+      validateReviewedComputeManifest({
+        ...CERTIFICATION_MANIFEST,
+        permissions: ["compute:exec", "notify:owner", "net:fetch"],
+      }, "compute-certification"),
+    /permissions/u,
+  );
+  assert.throws(
+    () =>
+      validateReviewedComputeManifest({
+        ...CERTIFICATION_MANIFEST,
+        functions: {
+          ...CERTIFICATION_MANIFEST.functions,
+          run_compute_policy_probe: {
+            ...CERTIFICATION_MANIFEST.functions.run_compute_policy_probe,
+            authority: COMPUTE_AUTHORITY,
+          },
+        },
+      }, "compute-certification"),
+    /routine authority drifted/u,
   );
   assert.throws(
     () =>

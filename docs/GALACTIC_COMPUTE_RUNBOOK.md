@@ -778,7 +778,12 @@ The API must fail closed if this secret equals
 the values in an Actions step.
 The fixed certification Agent's `run_compute_policy_probe` function must be at
 the managed `free` baseline and its certification routine must be paused and
-idle before a normal dispatch. Before uploading any admission version, the
+idle before a normal dispatch. Its reviewed authority declares
+`notification.owner.write: free` (and therefore the `notify:owner` manifest
+permission) because every persistent Launch routine must be able to report to
+the owner's inbox. The fixed handler accepts no caller input and does not call
+`galactic.notify`; the declaration is the platform-required authority ceiling
+that keeps the routine activatable. Before uploading any admission version, the
 rollout workflow idempotently creates that account-owned routine from the
 live `compute_policy_probe` template when it is missing. It never edits an
 existing routine: duplicate names, Agent/template/handler drift, capabilities,

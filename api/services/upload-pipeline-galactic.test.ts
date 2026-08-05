@@ -95,7 +95,7 @@ Deno.test({
     assertEquals(pipeline.agentDocument?.sourceKind, "galactic_yaml");
     assertEquals(
       pipeline.agentDocument?.documentDigest,
-      "a24790ca4a67e6e427a81a09681151f18b3210c5dc095517c7a0d4a2d5680c97",
+      "51c9fb95f3500fdd99c64883c23835d1c68fa5bb2484ea9166bebb07b848fcd1",
     );
     assertEquals(pipeline.agentDocument?.cases, [{
       id: "fixture-identity",
@@ -103,7 +103,10 @@ Deno.test({
       input: {},
       required: true,
     }]);
-    assertEquals(pipeline.manifest?.permissions, ["compute:exec"]);
+    assertEquals(pipeline.manifest?.permissions, [
+      "compute:exec",
+      "notify:owner",
+    ]);
     assertEquals(pipeline.manifest?.compute, {
       profile: "developer-v1",
       tools: ["browser", "shell"],
@@ -120,6 +123,17 @@ Deno.test({
     assertEquals(
       pipeline.manifest?.functions?.run_compute_policy_probe?.uses_compute,
       true,
+    );
+    assertEquals(
+      pipeline.agentDocument?.document?.spec.functions
+        .run_compute_policy_probe?.authority,
+      {
+        level: "external_write",
+        effects: {
+          "compute.execute": "free",
+          "notification.owner.write": "free",
+        },
+      },
     );
     assert(pipeline.esmBundledCode);
   },

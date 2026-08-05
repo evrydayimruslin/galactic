@@ -386,22 +386,43 @@ test("fails closed on every stored routine identity or safety drift", async (t) 
 
 test("fails closed on every launch lifecycle drift", async (t) => {
   const cases = [
-    ["active status", { status: "active", actions: { canActivate: false } }],
-    ["active count", { activeRunCount: 1 }],
+    [
+      "active status",
+      { status: "active", actions: { canActivate: false } },
+      /not paused/u,
+    ],
+    ["active count", { activeRunCount: 1 }, /active run count/u],
     ["visible active run", {
       recentRuns: [{ id: OTHER_ROUTINE_ID, status: "queued" }],
-    }],
+    }, /visible active run/u],
     ["malformed recent history", {
       recentRuns: [{ id: "not-a-run-id", status: "succeeded" }],
-    }],
-    ["blocker", { blockers: [{ code: "subscription_required" }] }],
-    ["not activatable", { actions: { canActivate: false } }],
+    }, /recent run history is invalid/u],
+    [
+      "blocker",
+      { blockers: [{ code: "subscription_required", message: OWNER_TOKEN }] },
+      /activation blockers: subscription_required/u,
+    ],
+    [
+      "malformed blocker",
+      { blockers: [{ code: `unsafe-${OWNER_TOKEN}` }] },
+      /blocker projection is invalid/u,
+    ],
+    [
+      "not activatable",
+      { actions: { canActivate: false } },
+      /cannot be activated/u,
+    ],
   ];
-  for (const [label, overrides] of cases) {
+  for (const [label, overrides, expected] of cases) {
     await t.test(label, async () => {
       await assert.rejects(
         runExisting({ launch: launchRoutine(overrides) }),
-        /not paused, idle, and activatable/u,
+        (error) => {
+          assert.match(error.message, expected);
+          assert.equal(error.message.includes(OWNER_TOKEN), false);
+          return true;
+        },
       );
     });
   }
