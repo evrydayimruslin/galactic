@@ -1,4 +1,6 @@
 export type RoutineCapabilityAccess = 'read' | 'write';
+/** Stable JSON-RPC denial type emitted when an owner's autonomous policy is Off. */
+export declare const AUTONOMOUS_POLICY_OFF_ERROR_TYPE: "POLICY_OFF";
 export interface RoutineParameter {
     type: 'string' | 'number' | 'boolean' | 'object' | 'array';
     description?: string;
