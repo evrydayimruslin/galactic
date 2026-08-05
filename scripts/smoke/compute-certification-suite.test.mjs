@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
@@ -12,6 +13,7 @@ import {
   COMPUTE_POLICY_BASELINE,
   computeCertificationConfigFromEnv,
   ensurePolicyCleanup,
+  EXPECTED_GALACTIC_CLI_VERSION,
   runComputeCertificationSuite,
   validateComputeCertificationProof,
   validateTerminalPublicRun,
@@ -42,6 +44,55 @@ const CREATED_AT = "2026-08-04T12:00:01.000Z";
 const STARTED_AT = "2026-08-04T12:00:02.000Z";
 const FINISHED_AT = "2026-08-04T12:00:03.000Z";
 const EXPIRES_AT = "2026-08-05T12:00:03.000Z";
+
+test("binds toolchain certification to the workspace and image CLI metadata", () => {
+  const cliPackage = JSON.parse(
+    readFileSync(new URL("../../cli/package.json", import.meta.url), "utf8"),
+  );
+  const fixtureSource = readFileSync(
+    new URL("../../examples/compute-certification/index.ts", import.meta.url),
+    "utf8",
+  );
+  assert.equal(EXPECTED_GALACTIC_CLI_VERSION, cliPackage.version);
+  assert.match(
+    fixtureSource,
+    /\/opt\/galactic\/image-metadata\/galactic-cli-version\.txt/u,
+  );
+  assert.doesNotMatch(fixtureSource, /galactic_cli: "[0-9]+\.[0-9]+\.[0-9]+"/u);
+
+  const proof = {
+    schema_version: 1,
+    scenario: "sync_toolchain",
+    verified: true,
+    python: "3.13.14",
+    npm: "12.0.1",
+    deno: "2.9.3",
+    galactic_cli: EXPECTED_GALACTIC_CLI_VERSION,
+    playwright: "1.62.0-alpha-2026-07-20",
+    chromium: "152.0.7977.8",
+  };
+  const proofText = JSON.stringify(proof);
+  assert.deepEqual(
+    validateComputeCertificationProof(
+      { stdout: proofText, stderr: "" },
+      "sync_toolchain",
+    ),
+    {
+      stdoutSha256: createHash("sha256").update(proofText).digest("hex"),
+      stderrSha256: createHash("sha256").update("").digest("hex"),
+    },
+  );
+  assert.throws(
+    () => validateComputeCertificationProof(
+      {
+        stdout: JSON.stringify({ ...proof, galactic_cli: "0.0.0-stale" }),
+        stderr: "",
+      },
+      "sync_toolchain",
+    ),
+    (error) => error.code === "INVALID_PROBE_OUTPUT",
+  );
+});
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
