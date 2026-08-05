@@ -16,6 +16,7 @@ import {
   computeCertificationConfigFromEnv,
   ensurePolicyCleanup,
   EXPECTED_GALACTIC_CLI_VERSION,
+  failedScenarioRuntimeDiagnostic,
   runComputeCertificationSuite,
   validateComputeCertificationProof,
   validateTerminalPublicRun,
@@ -1141,6 +1142,7 @@ test("captures a failed terminal runtime before rejecting certification", async 
   let currentLimits = limits;
   let callIndex = 900;
   const statusScenarios = [];
+  let browserStatusReads = 0;
   const written = [];
   const fetchImpl = async (input, init = {}) => {
     const url = String(input);
@@ -1210,6 +1212,16 @@ test("captures a failed terminal runtime before rejecting certification", async 
         false,
       );
       if (isBrowser) delete terminalIdentity.async;
+      if (isBrowser && browserStatusReads++ === 0) {
+        return invocation(functionName, {
+          ...terminalIdentity,
+          status: "settlement_pending",
+          started_at: STARTED_AT,
+          finished_at: FINISHED_AT,
+          exit_code: 1,
+          artifacts: [],
+        }, callReceiptId);
+      }
       return invocation(functionName, {
         ...terminalIdentity,
         started_at: STARTED_AT,
@@ -1247,7 +1259,11 @@ test("captures a failed terminal runtime before rejecting certification", async 
   );
 
   assert.equal(enabled, false);
-  assert.deepEqual(statusScenarios, ["async_echo", "browser_https"]);
+  assert.deepEqual(statusScenarios, [
+    "async_echo",
+    "browser_https",
+    "browser_https",
+  ]);
   assert.equal(written.length, 2);
   assert.deepEqual(written[0].value.run_ids, [ASYNC_RUN_ID, BROWSER_RUN_ID]);
   const runtimeDiagnostic = written[1].value.failure.runtime_diagnostic;
@@ -1260,12 +1276,35 @@ test("captures a failed terminal runtime before rejecting certification", async 
     scenario: "browser_https",
     run_id: BROWSER_RUN_ID,
     receipt_id: BROWSER_RECEIPT_ID,
+    expected_status: "completed",
+    expected_exit_code: 0,
+    owner_status: "completed",
+    owner_exit_code: 1,
     status: "completed",
     exit_code: 1,
+    projection_converged: true,
+    public_run_id_matches: true,
+    public_receipt_id_matches: true,
+    public_status_matches_owner: true,
+    public_exit_code_valid: true,
+    owner_exit_code_valid: true,
+    public_exit_code_matches_owner: true,
+    owner_infra_failure_code: null,
+    owner_infra_failure_retryable: null,
+    stdout_present: true,
     stdout_bytes: 0,
     stdout_sha256: digest(Buffer.from("")),
+    stderr_present: true,
     stderr_bytes: Buffer.byteLength(leakedStderr),
     stderr_sha256: digest(Buffer.from(leakedStderr)),
+    public_error_present: false,
+    public_error_bytes: null,
+    public_error_sha256: null,
+    public_artifact_count: 0,
+    owner_artifact_count: 0,
+    created_at: CREATED_AT,
+    started_at: STARTED_AT,
+    finished_at: FINISHED_AT,
     failure_class: "tls_certificate",
     runtime_error_code: "ERR_CERT_AUTHORITY_INVALID",
   });
@@ -1274,6 +1313,63 @@ test("captures a failed terminal runtime before rejecting certification", async 
   const serialized = JSON.stringify(written);
   assert.equal(serialized.includes(OWNER_TOKEN), false);
   assert.equal(serialized.includes("private-runtime-detail"), false);
+});
+
+test("retains safe terminal diagnostics when projections have not converged", () => {
+  const privateError = "artifact upload failed for secret://private-object";
+  const privateOwnerMessage = "private R2 credential detail";
+  const diagnostic = failedScenarioRuntimeDiagnostic(
+    {
+      ...computeIdentity(
+        BROWSER_RUN_ID,
+        BROWSER_RECEIPT_ID,
+        ["browser", "shell"],
+        "settlement_pending",
+        false,
+      ),
+      error: privateError,
+      artifacts: [],
+    },
+    {
+      scenario: "browser_https",
+      runId: BROWSER_RUN_ID,
+      receiptId: BROWSER_RECEIPT_ID,
+      status: "completed",
+      exitCode: 0,
+    },
+    {
+      ...ownerRun(BROWSER_RUN_ID, COMPUTE_CERTIFICATION_FUNCTION),
+      status: "failed",
+      exitCode: null,
+      infraFailure: {
+        code: "ARTIFACT_ERROR",
+        message: privateOwnerMessage,
+        retryable: true,
+      },
+    },
+    {
+      startCallReceiptId: "00000000-0000-4000-8000-000000000901",
+      statusCallReceiptId: "00000000-0000-4000-8000-000000000902",
+    },
+  );
+
+  assert.equal(diagnostic.projection_converged, false);
+  assert.equal(diagnostic.owner_status, "failed");
+  assert.equal(diagnostic.status, "settlement_pending");
+  assert.equal(diagnostic.owner_infra_failure_code, "ARTIFACT_ERROR");
+  assert.equal(diagnostic.owner_infra_failure_retryable, true);
+  assert.equal(diagnostic.stdout_present, false);
+  assert.equal(diagnostic.stdout_bytes, null);
+  assert.equal(diagnostic.stderr_present, false);
+  assert.equal(diagnostic.stderr_sha256, null);
+  assert.equal(diagnostic.public_error_present, true);
+  assert.equal(
+    diagnostic.public_error_sha256,
+    digest(Buffer.from(privateError)),
+  );
+  const serialized = JSON.stringify(diagnostic);
+  assert.equal(serialized.includes(privateError), false);
+  assert.equal(serialized.includes(privateOwnerMessage), false);
 });
 
 test("fails closed when Cloudflare serves a version other than the pinned candidate", () => {

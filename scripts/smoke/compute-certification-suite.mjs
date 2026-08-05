@@ -131,6 +131,7 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
 const DEFAULT_SCENARIO_TIMEOUT_MS = 20 * 60 * 1_000;
 const DEFAULT_CLEANUP_TIMEOUT_MS = 5 * 60 * 1_000;
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
+const PUBLIC_TERMINAL_CONVERGENCE_TIMEOUT_MS = 60_000;
 const MAX_OWNER_RUN_PAGES = 10;
 const RUNTIME_ERROR_CODE_RE =
   /\b(?:net::)?(ERR_[A-Z0-9_]{1,64}|CERT_HAS_EXPIRED|DEPTH_ZERO_SELF_SIGNED_CERT|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ENETUNREACH|ENOTFOUND|ETIMEDOUT|SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_GET_ISSUER_CERT_LOCALLY|UNABLE_TO_VERIFY_LEAF_SIGNATURE)\b/u;
@@ -816,6 +817,38 @@ async function readComputeRun(context, runId, scenario) {
   return { ...checked, identity };
 }
 
+function publicTerminalProjectionMatches(run, expected, owner) {
+  const exitCode = run?.exit_code ?? null;
+  return diagnosticUuid(run?.run_id) === expected.runId &&
+    diagnosticUuid(run?.receipt_id) === expected.receiptId &&
+    OWNER_SETTLED_STATUSES.has(run?.status) &&
+    run.status === owner.status &&
+    diagnosticExitCodeIsValid(run?.exit_code) &&
+    exitCode === (owner.exitCode ?? null);
+}
+
+async function waitForPublicTerminalRun(
+  context,
+  expected,
+  owner,
+  { scenarioTimeoutMs, pollIntervalMs, sleep, now },
+) {
+  const deadline = now() + Math.min(
+    scenarioTimeoutMs,
+    PUBLIC_TERMINAL_CONVERGENCE_TIMEOUT_MS,
+  );
+  let checked = null;
+  do {
+    checked = await readComputeRun(context, expected.runId, expected.scenario);
+    if (publicTerminalProjectionMatches(checked.result, expected, owner)) {
+      return { checked, converged: true };
+    }
+    if (now() >= deadline) break;
+    await sleep(pollIntervalMs);
+  } while (now() <= deadline);
+  return { checked, converged: false };
+}
+
 export async function waitForCancellableBodyStart(
   context,
   expected,
@@ -1090,59 +1123,125 @@ export function classifyComputeRuntimeFailure(stderr) {
   };
 }
 
-function failedScenarioRuntimeDiagnostic(
+function diagnosticUuid(value) {
+  return typeof value === "string" && UUID_RE.test(value)
+    ? value.toLowerCase()
+    : null;
+}
+
+function diagnosticStatus(value) {
+  return typeof value === "string" && OWNER_STATUSES.has(value) ? value : null;
+}
+
+function diagnosticExitCode(value) {
+  const normalized = value ?? null;
+  return diagnosticExitCodeIsValid(value)
+    ? normalized
+    : null;
+}
+
+function diagnosticExitCodeIsValid(value) {
+  const normalized = value ?? null;
+  return normalized === null || Number.isSafeInteger(normalized);
+}
+
+function diagnosticTimestamp(value) {
+  return typeof value === "string" && Number.isFinite(Date.parse(value))
+    ? value
+    : null;
+}
+
+function diagnosticText(value) {
+  if (typeof value !== "string") {
+    return { present: false, bytes: null, sha256: null };
+  }
+  return {
+    present: true,
+    bytes: Buffer.byteLength(value),
+    sha256: sha256Text(value),
+  };
+}
+
+function diagnosticFailureCode(value) {
+  return typeof value === "string" && /^[A-Z][A-Z0-9_]{0,63}$/u.test(value)
+    ? value
+    : null;
+}
+
+export function failedScenarioRuntimeDiagnostic(
   run,
   expected,
   owner,
   { startCallReceiptId, statusCallReceiptId },
 ) {
-  const identity = validateComputeIdentity(run, `${expected.scenario} failed terminal`);
-  const exitCode = run.exit_code ?? null;
-  if (
-    identity.runId !== expected.runId ||
-    identity.receiptId !== expected.receiptId ||
-    !OWNER_SETTLED_STATUSES.has(run.status) ||
-    !(exitCode === null || Number.isSafeInteger(exitCode)) ||
-    run.status !== owner.status ||
-    exitCode !== (owner.exitCode ?? null) ||
-    typeof run.stdout !== "string" ||
-    typeof run.stderr !== "string"
-  ) {
-    fail(
-      "INVALID_COMPUTE_RESULT",
-      `${expected.scenario} failed terminal projection is invalid.`,
-    );
-  }
-  const startedAt = timestamp(
-    run.started_at,
-    `${expected.scenario} failed started_at`,
-  );
-  const finishedAt = timestamp(
-    run.finished_at,
-    `${expected.scenario} failed finished_at`,
-  );
-  if (
-    Date.parse(startedAt) < Date.parse(identity.createdAt) ||
-    Date.parse(finishedAt) < Date.parse(startedAt)
-  ) {
-    fail(
-      "INVALID_COMPUTE_RESULT",
-      `${expected.scenario} failed timestamps are invalid.`,
-    );
-  }
+  const publicRun = run !== null && typeof run === "object" && !Array.isArray(run)
+    ? run
+    : {};
+  const ownerRun = owner !== null && typeof owner === "object" && !Array.isArray(owner)
+    ? owner
+    : {};
+  const publicStatus = diagnosticStatus(publicRun.status);
+  const publicExitCode = diagnosticExitCode(publicRun.exit_code);
+  const publicExitCodeValid = diagnosticExitCodeIsValid(publicRun.exit_code);
+  const ownerStatus = diagnosticStatus(ownerRun.status);
+  const ownerExitCode = diagnosticExitCode(ownerRun.exitCode);
+  const ownerExitCodeValid = diagnosticExitCodeIsValid(ownerRun.exitCode);
+  const stdout = diagnosticText(publicRun.stdout);
+  const stderr = diagnosticText(publicRun.stderr);
+  const publicError = diagnosticText(publicRun.error);
+  const infraFailure = ownerRun.infraFailure !== null &&
+      typeof ownerRun.infraFailure === "object" &&
+      !Array.isArray(ownerRun.infraFailure)
+    ? ownerRun.infraFailure
+    : null;
   return {
     scenario: expected.scenario,
-    run_id: identity.runId,
-    receipt_id: identity.receiptId,
-    start_call_receipt_id: startCallReceiptId,
-    status_call_receipt_id: statusCallReceiptId,
-    status: run.status,
-    exit_code: exitCode,
-    stdout_bytes: Buffer.byteLength(run.stdout),
-    stdout_sha256: sha256Text(run.stdout),
-    stderr_bytes: Buffer.byteLength(run.stderr),
-    stderr_sha256: sha256Text(run.stderr),
-    ...classifyComputeRuntimeFailure(run.stderr),
+    run_id: expected.runId,
+    receipt_id: expected.receiptId,
+    start_call_receipt_id: diagnosticUuid(startCallReceiptId),
+    status_call_receipt_id: diagnosticUuid(statusCallReceiptId),
+    expected_status: diagnosticStatus(expected.status),
+    expected_exit_code: diagnosticExitCode(expected.exitCode),
+    owner_status: ownerStatus,
+    owner_exit_code: ownerExitCode,
+    status: publicStatus,
+    exit_code: publicExitCode,
+    projection_converged: publicTerminalProjectionMatches(
+      publicRun,
+      expected,
+      ownerRun,
+    ),
+    public_run_id_matches: diagnosticUuid(publicRun.run_id) === expected.runId,
+    public_receipt_id_matches:
+      diagnosticUuid(publicRun.receipt_id) === expected.receiptId,
+    public_status_matches_owner: publicStatus !== null &&
+      publicStatus === ownerStatus,
+    public_exit_code_valid: publicExitCodeValid,
+    owner_exit_code_valid: ownerExitCodeValid,
+    public_exit_code_matches_owner: publicExitCodeValid &&
+      ownerExitCodeValid && publicExitCode === ownerExitCode,
+    owner_infra_failure_code: diagnosticFailureCode(infraFailure?.code),
+    owner_infra_failure_retryable:
+      typeof infraFailure?.retryable === "boolean" ? infraFailure.retryable : null,
+    stdout_present: stdout.present,
+    stdout_bytes: stdout.bytes,
+    stdout_sha256: stdout.sha256,
+    stderr_present: stderr.present,
+    stderr_bytes: stderr.bytes,
+    stderr_sha256: stderr.sha256,
+    public_error_present: publicError.present,
+    public_error_bytes: publicError.bytes,
+    public_error_sha256: publicError.sha256,
+    public_artifact_count: Array.isArray(publicRun.artifacts)
+      ? publicRun.artifacts.length
+      : null,
+    owner_artifact_count: Array.isArray(ownerRun.artifacts)
+      ? ownerRun.artifacts.length
+      : null,
+    created_at: diagnosticTimestamp(publicRun.created_at),
+    started_at: diagnosticTimestamp(publicRun.started_at),
+    finished_at: diagnosticTimestamp(publicRun.finished_at),
+    ...classifyComputeRuntimeFailure(publicRun.stderr),
   };
 }
 
@@ -1299,10 +1398,16 @@ async function runScenario(context, config, scenario, producer, dependencies) {
     observedStates,
   });
   context.activeRunIds.delete(started.runId);
-  const checked = await readComputeRun(context, started.runId, scenario);
   if (owner.cancellable !== false) {
     fail("INVALID_OWNER_RUN", `${scenario} owner terminal state is invalid.`);
   }
+  const publicProjection = await waitForPublicTerminalRun(
+    context,
+    expected,
+    owner,
+    dependencies,
+  );
+  const checked = publicProjection.checked;
   if (
     owner.status !== expected.status ||
     (owner.exitCode ?? null) !== expected.exitCode
@@ -1319,6 +1424,22 @@ async function runScenario(context, config, scenario, producer, dependencies) {
     fail(
       "SCENARIO_RUNTIME_FAILED",
       `${scenario} runtime did not satisfy certification.`,
+      { stage: `scenario_${scenario}`, runtimeDiagnostic },
+    );
+  }
+  if (!publicProjection.converged) {
+    const runtimeDiagnostic = failedScenarioRuntimeDiagnostic(
+      checked?.result,
+      expected,
+      owner,
+      {
+        startCallReceiptId: startedCall.callReceiptId,
+        statusCallReceiptId: checked?.callReceiptId,
+      },
+    );
+    fail(
+      "PUBLIC_TERMINAL_TIMEOUT",
+      `${scenario} public terminal projection did not converge.`,
       { stage: `scenario_${scenario}`, runtimeDiagnostic },
     );
   }
