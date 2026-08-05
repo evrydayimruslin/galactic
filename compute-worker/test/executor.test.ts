@@ -217,13 +217,21 @@ interface HarnessOptions {
   destroyFailures?: number;
   beforeCreate?: (sessionName: string | undefined) => Promise<void>;
   bucketObjects?: Map<string, string>;
+  bucketPutError?: string;
 }
 
 function makeHarness(options: HarnessOptions = {}) {
   const events: string[] = [];
   const requests: Array<{ operation: string; body: unknown }> = [];
-  const puts: Array<{ key: string; options?: { sha256?: string } }> = [];
+  const puts: Array<{
+    key: string;
+    options?: { sha256?: string };
+    fixedLength?: number;
+    uploadedBytes?: number;
+  }> = [];
   const bucketObjects = options.bucketObjects ?? new Map<string, string>();
+  const fixedLengthStreams = new WeakMap<ReadableStream<Uint8Array>, number>();
+  const fixedLengthStreamLengths: number[] = [];
   const files = new Map<string, string>();
   const session = makeSession(events, options.session, files);
   const captureSession = makeSession(
@@ -349,8 +357,27 @@ function makeHarness(options: HarnessOptions = {}) {
         return;
       }
       events.push("r2:put");
-      puts.push({ key, ...(putOptions ? { options: putOptions } : {}) });
-      if (typeof value === "string") bucketObjects.set(key, value);
+      if (typeof value === "string") {
+        puts.push({ key, ...(putOptions ? { options: putOptions } : {}) });
+        bucketObjects.set(key, value);
+        return;
+      }
+      const fixedLength = fixedLengthStreams.get(value);
+      if (fixedLength === undefined) {
+        throw new Error("R2 requires a known-length artifact stream");
+      }
+      const put: (typeof puts)[number] = {
+        key,
+        ...(putOptions ? { options: putOptions } : {}),
+        fixedLength,
+      };
+      puts.push(put);
+      if (options.bucketPutError) throw new Error(options.bucketPutError);
+      const uploaded = await new Response(value).arrayBuffer();
+      put.uploadedBytes = uploaded.byteLength;
+      if (uploaded.byteLength !== fixedLength) {
+        throw new Error("fixed-length artifact body mismatch");
+      }
     },
     async delete(key) {
       if (key.startsWith("_galactic-control/")) events.push("checkpoint:delete");
@@ -381,6 +408,12 @@ function makeHarness(options: HarnessOptions = {}) {
     finalizationDelay: async (milliseconds: number) => {
       delays.push(milliseconds);
     },
+    fixedLengthStream: (length: number) => {
+      const stream = new TransformStream<Uint8Array, Uint8Array>();
+      fixedLengthStreams.set(stream.readable, length);
+      fixedLengthStreamLengths.push(length);
+      return stream;
+    },
   };
   return {
     env,
@@ -391,6 +424,7 @@ function makeHarness(options: HarnessOptions = {}) {
     dependencies,
     delays,
     bucketObjects,
+    fixedLengthStreamLengths,
     createdSessions,
     deletedSessionIds,
   };
@@ -1088,6 +1122,11 @@ describe("compute executor lifecycle", () => {
     );
     expect(harness.puts).toHaveLength(1);
     expect(harness.puts[0]?.options?.sha256).toBe("a".repeat(64));
+    expect(harness.fixedLengthStreamLengths).toEqual([2]);
+    expect(harness.puts[0]).toMatchObject({
+      fixedLength: 2,
+      uploadedBytes: 2,
+    });
     expect(harness.events.indexOf("control:reserve-output")).toBeLessThan(
       harness.events.indexOf("r2:put"),
     );
@@ -1123,6 +1162,30 @@ describe("compute executor lifecycle", () => {
     expect(operations(harness.requests, "complete")).toBe(1);
     expect(operations(harness.requests, "fail")).toBe(0);
   });
+
+  it("classifies a rejected R2 artifact upload and destroys before failing", async () => {
+    const harness = makeHarness({
+      run: { capture_paths: ["reports/result.bin"] },
+      session: { captureKind: "file", captureSize: 2 },
+      bucketPutError: "R2 upload rejected",
+    });
+    const receipt = await executeComputeRun(
+      harness.env,
+      { version: 1, run_id: RUN_ID },
+      harness.dependencies,
+    );
+    expect(receipt?.status).toBe("failed");
+    expect(harness.fixedLengthStreamLengths).toEqual([2]);
+    expect(operations(harness.requests, "commit-output")).toBe(0);
+    const failure = harness.requests.find((request) => request.operation === "fail");
+    expect(failure?.body).toMatchObject({
+      code: "artifact_error",
+      message: "R2 upload rejected",
+    });
+    expect(harness.events.indexOf("sandbox:destroy")).toBeLessThan(
+      harness.events.indexOf("control:fail"),
+    );
+  });
 });
 
 describe("destruction and artifact stream caps", () => {
@@ -1139,6 +1202,19 @@ describe("destruction and artifact stream caps", () => {
       start(controller) {
         controller.enqueue(new Uint8Array([1, 2]));
         controller.enqueue(new Uint8Array([3]));
+        controller.close();
+      },
+    });
+    const bounded = boundedArtifactStream(source, 2, 2);
+    await expect(new Response(bounded).arrayBuffer()).rejects.toThrow(
+      "artifact changed",
+    );
+  });
+
+  it("rejects an artifact stream that shrinks after measurement", async () => {
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1]));
         controller.close();
       },
     });
