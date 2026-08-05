@@ -56,6 +56,8 @@ on:
       - 'scripts/smoke/compute-admitted-smoke.test.mjs'
       - 'scripts/smoke/compute-certification-suite.mjs'
       - 'scripts/smoke/compute-certification-suite.test.mjs'
+      - 'scripts/smoke/ensure-compute-certification-routine.mjs'
+      - 'scripts/smoke/ensure-compute-certification-routine.test.mjs'
       - 'scripts/smoke/resolve-compute-canary-identity.mjs'
       - 'scripts/smoke/resolve-compute-canary-identity.test.mjs'
       - 'scripts/smoke/interface-deploy-smoke.mjs'
@@ -135,6 +137,8 @@ on:
       - 'scripts/smoke/compute-admitted-smoke.test.mjs'
       - 'scripts/smoke/compute-certification-suite.mjs'
       - 'scripts/smoke/compute-certification-suite.test.mjs'
+      - 'scripts/smoke/ensure-compute-certification-routine.mjs'
+      - 'scripts/smoke/ensure-compute-certification-routine.test.mjs'
       - 'scripts/smoke/resolve-compute-canary-identity.mjs'
       - 'scripts/smoke/resolve-compute-canary-identity.test.mjs'
       - 'scripts/smoke/interface-deploy-smoke.mjs'
@@ -234,6 +238,7 @@ jobs:
             scripts/release/write-api-compute-disabled-config.test.mjs \
             scripts/smoke/compute-admitted-smoke.test.mjs \
             scripts/smoke/compute-certification-suite.test.mjs \
+            scripts/smoke/ensure-compute-certification-routine.test.mjs \
             scripts/smoke/resolve-compute-canary-identity.test.mjs \
             scripts/smoke/gx-test-containment-smoke.test.mjs \
             scripts/smoke/interface-deploy-promotion.test.mjs \
