@@ -65,6 +65,11 @@ on:
         required: false
         default: ''
         type: string
+      diagnostic_safe_terminal_error:
+        description: Log the Worker's already-redacted owner terminal error; staging diagnostics only.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -94,6 +99,7 @@ jobs:
       RECOVERY_SOURCE_SHA_INPUT: ${{ inputs.recovery_source_sha }}
       COMPLETED_STOP_OPERATION_ID_INPUT: ${{ inputs.completed_stop_operation_id }}
       COMPLETED_STOP_CONFIRMATION_INPUT: ${{ inputs.completed_stop_release_confirmation }}
+      DIAGNOSTIC_SAFE_TERMINAL_ERROR_INPUT: ${{ inputs.diagnostic_safe_terminal_error && '1' || '0' }}
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -166,6 +172,11 @@ jobs:
             echo "Stage/target resolution is inconsistent." >&2
             exit 1
           }
+          if [ "$DIAGNOSTIC_SAFE_TERMINAL_ERROR_INPUT" = "1" ] &&
+             [ "$REQUESTED_STAGE" != "staging_canary" ]; then
+            echo "Safe terminal-error diagnostics are staging_canary-only." >&2
+            exit 1
+          fi
           [ "$ROLLOUT_CONFIRMATION" = "$expected_confirmation" ] || {
             echo "confirmation must be exactly $expected_confirmation" >&2
             exit 1
@@ -1655,7 +1666,7 @@ jobs:
           COMPUTE_RELEASE_RUN_ID: ${{ github.run_id }}
           COMPUTE_RELEASE_EVIDENCE_DIR: ${{ github.workspace }}/compute-rollout-evidence
           COMPUTE_CERTIFICATION_API_VERSION_ID: ${{ steps.prepare.outputs.candidate_version_id }}
-          COMPUTE_CERTIFICATION_LOG_SAFE_TERMINAL_ERROR: "1"
+          COMPUTE_CERTIFICATION_LOG_SAFE_TERMINAL_ERROR: ${{ inputs.diagnostic_safe_terminal_error && '1' || '0' }}
         run: |
           set -euo pipefail
           suite_file="$EVIDENCE_DIR/compute-certification-$REQUESTED_TARGET.json"

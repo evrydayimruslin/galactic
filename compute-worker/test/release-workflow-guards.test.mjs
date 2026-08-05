@@ -995,6 +995,17 @@ describe("Compute canary rollout workflow static guards", () => {
     expect(request).toContain('git rev-parse "$GITHUB_REF^{commit}"');
     expect(request).toContain('[ "$resolved_tag_sha" = "$GITHUB_SHA" ]');
     expect(request).toContain('[ "$GITHUB_REF" != "$expected_ref" ]');
+    expect(workflow).toContain("diagnostic_safe_terminal_error:");
+    expect(workflow).toContain("default: false");
+    expect(request).toContain(
+      '[ "$REQUESTED_STAGE" != "staging_canary" ]',
+    );
+    expect(request).toContain(
+      "Safe terminal-error diagnostics are staging_canary-only.",
+    );
+    expect(workflow).toContain(
+      "COMPUTE_CERTIFICATION_LOG_SAFE_TERMINAL_ERROR: ${{ inputs.diagnostic_safe_terminal_error && '1' || '0' }}",
+    );
     expect(workflow).not.toContain("CERTIFIED_OFF_API_VERSION_ID");
     expect(workflow).not.toContain("certified_admission_off_api");
   });
