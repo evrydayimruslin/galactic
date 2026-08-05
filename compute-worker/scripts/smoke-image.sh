@@ -30,9 +30,11 @@ docker run --rm \
   MPLBACKEND=Agg python3 -c '\''import IPython, matplotlib, numpy, pandas, psutil; frame = pandas.DataFrame({"x": numpy.array([1, 2]), "y": [3, 4]}); axes = frame.plot(x="x", y="y"); axes.figure.canvas.draw()'\''
   node --version
   test "$(npm --version)" = "12.0.1"
-  test "$(node -p '\''require("/usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json").version'\'')" = "5.0.8"
+  test "$(node -p '\''require("/usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json").version'\'')" = "5.0.9"
   test "$(node -p '\''require("/usr/local/lib/node_modules/npm/node_modules/brace-expansion").EXPANSION_MAX_LENGTH'\'')" = "4000000"
   test "$(node -p '\''require("/usr/local/lib/node_modules/npm/node_modules/brace-expansion").expand("a{b,c}d").join(",")'\'')" = "abd,acd"
+  test "$(node -p '\''require("/usr/local/lib/node_modules/npm/node_modules/ip-address/package.json").version'\'')" = "10.4.0"
+  test "$(node -p '\''const { Address4, Address6 } = require("/usr/local/lib/node_modules/npm/node_modules/ip-address"); new Address4("192.0.2.1").correctForm() + "," + new Address6("2001:db8::1").correctForm()'\'')" = "192.0.2.1,2001:db8::1"
   test "$(node -p '\''require("/usr/local/lib/node_modules/npm/node_modules/minimatch").minimatch("release-v0.4.52", "release-v{0.4.52,0.4.53}")'\'')" = "true"
   deno --version | grep "^deno 2.9.3 "
   test "$(cat /opt/galactic/image-metadata/galactic-cli-version.txt)" = "$EXPECTED_GALACTIC_CLI_VERSION"
