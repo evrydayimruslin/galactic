@@ -1018,6 +1018,24 @@ export function validateComputeCertificationProof(
         fail("INVALID_PROBE_OUTPUT", `${scenario} did not prove ${key}.`);
       }
     }
+    const literalDenialModes = new Set([
+      "http_520",
+      "transport_exit_7",
+      "transport_exit_28",
+      "transport_exit_52",
+      "transport_exit_56",
+    ]);
+    for (const key of ["private_denial_mode", "metadata_denial_mode"]) {
+      if (!literalDenialModes.has(row[key])) {
+        fail("INVALID_PROBE_OUTPUT", `${scenario} returned an invalid ${key}.`);
+      }
+    }
+    if (row.control_plane_denial_mode !== "http_520") {
+      fail(
+        "INVALID_PROBE_OUTPUT",
+        `${scenario} did not prove the control-plane deniedHosts gate.`,
+      );
+    }
   } else if (scenario === "raw_tcp_denied") {
     if (row.raw_tcp_denied !== true) {
       fail("INVALID_PROBE_OUTPUT", `${scenario} did not prove raw TCP denial.`);
