@@ -57,6 +57,7 @@ import {
   validateReviewedComputeSource,
   validateReviewedFixtureIdentity,
   validateStagedPromotion,
+  waitForPromotedAgentHomeRelease,
 } from './interface-deploy-promotion.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -314,7 +315,6 @@ check('upload returned an app id', Boolean(id), JSON.stringify(result || {}).sli
 // idempotency, and executable-bundle reconciliation for the promotion.
 if (reviewedPromotion.enabled && id) {
   try {
-    let promotedHome = reviewedState.home;
     if (reviewedState.plan.action !== 'reuse_live') {
       const stagedHome = reviewedState.plan.action === 'promote_candidate'
         ? reviewedState.home
@@ -331,7 +331,7 @@ if (reviewedPromotion.enabled && id) {
           sourceHash: reviewedState.sourceHash,
         })
         : stagedHome;
-      promotedHome = await requestJson(
+      await requestJson(
         `/api/launch/agents/${encodeURIComponent(id)}/home/actions`,
         {
           method: 'POST',
@@ -344,12 +344,22 @@ if (reviewedPromotion.enabled && id) {
         },
       );
     }
-    const [liveApp, liveHome, liveFunctions, liveSettings] = await Promise.all([
+    // The promotion record and executable pointer are committed atomically by
+    // the platform, but Cloudflare KV reads can briefly expose the prior live
+    // attestation in another location. Poll only the read-only Home projection
+    // until it proves the exact version, source, and signed executable bytes.
+    const liveHome = await waitForPromotedAgentHomeRelease({
+      readHome: () =>
+        requestJson(`/api/launch/agents/${encodeURIComponent(id)}/home`, {
+          label: 'Promoted Agent Home projection',
+        }),
+      appId,
+      version: reviewedState.plan.version,
+      sourceHash: reviewedState.sourceHash,
+    });
+    const [liveApp, liveFunctions, liveSettings] = await Promise.all([
       requestJson(`/api/apps/${encodeURIComponent(id)}`, {
         label: 'Promoted fixture projection',
-      }),
-      requestJson(`/api/launch/agents/${encodeURIComponent(id)}/home`, {
-        label: 'Promoted Agent Home projection',
       }),
       requestJson(`/api/launch/agents/${encodeURIComponent(id)}/functions`, {
         label: 'Promoted fixture functions',
@@ -396,7 +406,7 @@ if (reviewedPromotion.enabled && id) {
       reviewedState.plan.action === 'reuse_live'
         ? 'reviewed exact version reused'
         : 'reviewed exact version promoted',
-      promotedHome?.release?.live?.version === reviewedState.plan.version,
+      liveHome.release.live.version === reviewedState.plan.version,
       'Owner-session response did not identify the reviewed live version.',
     );
     check('live executable version verified', true);
