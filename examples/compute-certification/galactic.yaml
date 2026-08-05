@@ -1,0 +1,112 @@
+apiVersion: agents.connectgalactic.com/v1alpha1
+kind: Agent
+
+metadata:
+  name: Compute Certification
+  version: 1.0.0
+  description: Private release-only Agent for certifying Galactic Compute admission and isolation.
+
+spec:
+  entry:
+    functions: index.ts
+
+  functions:
+    fixture_identity:
+      description: Returns deterministic fixture identity and scenario metadata without starting Compute.
+      parameters: {}
+      returns:
+        type: object
+        description: Fixed certification fixture metadata
+      authority:
+        level: read
+        effects: {}
+
+    run_compute_certification:
+      description: Starts, reads, or cancels one fixed Galactic Compute certification scenario.
+      parameters:
+        action:
+          type: string
+          description: "Closed operation: start, status, or cancel"
+          required: true
+          enum:
+            - start
+            - status
+            - cancel
+        scenario:
+          type: string
+          description: Reviewed scenario id; required only for start
+          required: false
+          enum:
+            - sync_toolchain
+            - async_echo
+            - browser_https
+            - artifact_producer
+            - artifact_consumer
+            - exit_23
+            - timeout
+            - cancellable
+            - https_egress_boundaries
+            - raw_tcp_denied
+        marker:
+          type: string
+          description: Canonical public release marker; accepted only by async_echo
+          required: false
+        artifact_id:
+          type: string
+          description: Existing Compute artifact UUID; accepted only by artifact_consumer
+          required: false
+        expected_sha256:
+          type: string
+          description: Expected lowercase SHA-256; accepted only by artifact_consumer
+          required: false
+        run_id:
+          type: string
+          description: Compute run UUID; required only for status or cancel
+          required: false
+      returns:
+        type: object
+        description: Raw public Compute start, status, or cancellation projection
+      authority:
+        level: read
+        effects:
+          compute.execute: free
+      spend:
+        compute: free
+
+    run_compute_policy_probe:
+      description: Starts one fixed bounded Compute probe for managed-routine policy certification.
+      parameters: {}
+      returns:
+        type: object
+        description: Raw public Compute start projection
+      authority:
+        level: read
+        effects:
+          compute.execute: free
+      spend:
+        compute: free
+
+  routines:
+    - id: compute_policy_probe
+      label: Compute policy certification
+      description: Paused managed-routine target for certifying the Policy Pillar before Compute admission.
+      handler: run_compute_policy_probe
+      default_schedule:
+        every_minutes: 60
+      config_schema: {}
+      default_config: {}
+
+  compute:
+    profile: developer-v1
+    tools:
+      - browser
+      - shell
+    secrets: []
+
+  conformance:
+    profile: basic
+    cases:
+      - id: fixture-identity
+        function: fixture_identity
+        input: {}
+        required: true

@@ -54,7 +54,7 @@ import {
   promotionAction,
   reviewedPromotionConfig,
   validatePromotedComputeFixture,
-  validateReviewedComputeManifest,
+  validateReviewedComputeSource,
   validateReviewedFixtureIdentity,
   validateStagedPromotion,
 } from './interface-deploy-promotion.mjs';
@@ -168,12 +168,16 @@ if (reviewedPromotion.enabled) {
       );
     }
   }
-  const manifestFile = files.find((file) => file.path === 'manifest.json');
-  if (!manifestFile) {
-    throw new Error('Reviewed fixture promotion requires manifest.json.');
+  const contractFile = files.find(
+    (file) => file.path === reviewedPromotion.fixture.contractPath,
+  );
+  if (!contractFile) {
+    throw new Error(
+      `Reviewed fixture promotion requires ${reviewedPromotion.fixture.contractPath}.`,
+    );
   }
-  validateReviewedComputeManifest(
-    manifestFile.content,
+  validateReviewedComputeSource(
+    contractFile.content,
     reviewedPromotion.fixture.name,
   );
 }

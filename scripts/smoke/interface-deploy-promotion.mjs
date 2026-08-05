@@ -4,8 +4,10 @@ const CANONICAL_VERSION_RE =
   /^(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/u;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const COMPUTE_CERTIFICATION_DOCUMENT_SHA256 =
+  "1decb2b1b2229cbe1b01c6332a9cc9f5dc24a9a95d71a1510f730e6529bb170c";
 const COMPUTE_CERTIFICATION_MANIFEST_SHA256 =
-  "1f03b36bf0cf347becc5395f9d4728ae8aeeea7cdf929d4f83321fe7476352e4";
+  "9701d4a0b2d6d476abcebc6af6c1cc8c55e80a534e5ae133a523d2c3efb79b7a";
 
 const COMPUTE_CERTIFICATION_SCENARIOS = Object.freeze([
   "sync_toolchain",
@@ -32,6 +34,7 @@ const INTERFACE_DEMO_FIXTURE = Object.freeze({
   profile: "developer-v1",
   tools: Object.freeze(["shell"]),
   secrets: Object.freeze([]),
+  contractPath: "manifest.json",
   sourcePaths: null,
   requiresInterface: true,
   requiresIdentityProbe: false,
@@ -53,7 +56,8 @@ const COMPUTE_CERTIFICATION_FIXTURE = Object.freeze({
   profile: "developer-v1",
   tools: Object.freeze(["browser", "shell"]),
   secrets: Object.freeze([]),
-  sourcePaths: Object.freeze(["index.ts", "manifest.json"]),
+  contractPath: "galactic.yaml",
+  sourcePaths: Object.freeze(["galactic.yaml", "index.ts"]),
   requiresInterface: false,
   requiresIdentityProbe: true,
 });
@@ -351,6 +355,23 @@ export function validateReviewedComputeManifest(
     }
   }
   return manifest;
+}
+
+export function validateReviewedComputeSource(
+  value,
+  fixtureName = INTERFACE_DEMO_FIXTURE.name,
+) {
+  const fixture = reviewedFixtureProfile(fixtureName);
+  if (fixture.name !== COMPUTE_CERTIFICATION_FIXTURE.name) {
+    return validateReviewedComputeManifest(value, fixture.name);
+  }
+  if (
+    typeof value !== "string" ||
+    sha256(value) !== COMPUTE_CERTIFICATION_DOCUMENT_SHA256
+  ) {
+    throw new Error("Compute certification galactic.yaml content drifted.");
+  }
+  return value;
 }
 
 export function validateReviewedFixtureIdentity(
