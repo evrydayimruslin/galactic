@@ -1523,7 +1523,7 @@ jobs:
           else
             converged=false
             consecutive=0
-            for attempt in {1..12}; do
+            for attempt in {1..36}; do
               attempt_file="${status_file%.json}-attempt-$(printf '%02d' "$attempt").json"
               curl -fsS --retry 2 --connect-timeout 10 --max-time 30 \
                 -H "Authorization: Bearer $COMPUTE_EMERGENCY_STOP_TOKEN" \
@@ -1533,9 +1533,10 @@ jobs:
                 "$API_BASE/api/admin/compute/emergency-stop" > "$attempt_file"
               cp "$attempt_file" "$status_file"
               if node scripts/release/verify-compute-emergency-stop-status.mjs \
-                   "$attempt_file" enabled clear >/dev/null 2>&1; then
+                   "$attempt_file" enabled clear - \
+                   "$CANDIDATE_API_VERSION_ID" >/dev/null 2>&1; then
                 consecutive=$((consecutive + 1))
-                if [ "$consecutive" -ge 3 ]; then
+                if [ "$consecutive" -ge 12 ]; then
                   converged=true
                   break
                 fi
@@ -1547,7 +1548,7 @@ jobs:
                 node scripts/release/verify-compute-emergency-stop-status.mjs \
                   "$attempt_file" enabled clear
               fi
-              if [ "$attempt" -lt 12 ]; then
+              if [ "$attempt" -lt 36 ]; then
                 sleep 5
               fi
             done
@@ -1556,7 +1557,7 @@ jobs:
               exit 1
             }
             node scripts/release/verify-compute-emergency-stop-status.mjs \
-              "$status_file" enabled clear
+              "$status_file" enabled clear - "$CANDIDATE_API_VERSION_ID"
           fi
           unset COMPUTE_EMERGENCY_STOP_TOKEN
           echo "verified=true" >> "$GITHUB_OUTPUT"
@@ -1882,7 +1883,7 @@ jobs:
             fi
           else
             node scripts/release/verify-compute-emergency-stop-status.mjs \
-              "$status_file" enabled clear
+              "$status_file" enabled clear - "$CANDIDATE_API_VERSION_ID"
           fi
           echo "verified=true" >> "$GITHUB_OUTPUT"
 

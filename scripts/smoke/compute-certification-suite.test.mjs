@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
+  assertPinnedApiVersionResponse,
   buildComputeCertificationMarker,
   COMPUTE_CERTIFICATION_ARTIFACT_SHA256,
   COMPUTE_CERTIFICATION_FUNCTION,
@@ -97,7 +98,10 @@ test("binds toolchain certification to the workspace and image CLI metadata", ()
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Galactic-Worker-Version": CANDIDATE_API_VERSION_ID,
+    },
   });
 }
 
@@ -1058,7 +1062,13 @@ test("certifies admitted owner-visible probes and always disables the fixture", 
     const artifact = ownerArtifacts.find((item) =>
       url.endsWith(item.url)
     );
-    if (artifact) return new Response(browserBytes.get(artifact.name));
+    if (artifact) {
+      return new Response(browserBytes.get(artifact.name), {
+        headers: {
+          "X-Galactic-Worker-Version": CANDIDATE_API_VERSION_ID,
+        },
+      });
+    }
     throw new Error(`Unexpected certification request: ${method} ${url}`);
   };
   const written = [];
@@ -1095,4 +1105,26 @@ test("certifies admitted owner-visible probes and always disables the fixture", 
     ),
     true,
   );
+});
+
+test("fails closed when Cloudflare serves a version other than the pinned candidate", () => {
+  for (const headers of [
+    {},
+    {
+      "X-Galactic-Worker-Version":
+        "87654321-4321-4321-4321-cba987654321",
+    },
+  ]) {
+    assert.throws(
+      () => assertPinnedApiVersionResponse(
+        new Response(null, { status: 500, headers }),
+        CANDIDATE_API_VERSION_ID,
+        { label: "sync_toolchain start", stage: "scenario_sync_toolchain" },
+      ),
+      (error) =>
+        error.code === "API_VERSION_MISMATCH" &&
+        error.stage === "scenario_sync_toolchain" &&
+        error.httpStatus === 500,
+    );
+  }
 });
