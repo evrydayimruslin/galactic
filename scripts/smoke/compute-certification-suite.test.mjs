@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { runInNewContext } from "node:vm";
 
 import {
   assertPinnedApiVersionResponse,
@@ -47,6 +49,25 @@ const CREATED_AT = "2026-08-04T12:00:01.000Z";
 const STARTED_AT = "2026-08-04T12:00:02.000Z";
 const FINISHED_AT = "2026-08-04T12:00:03.000Z";
 const EXPIRES_AT = "2026-08-05T12:00:03.000Z";
+
+function computeFixtureScript(name) {
+  const source = readFileSync(
+    new URL("../../examples/compute-certification/index.ts", import.meta.url),
+    "utf8",
+  );
+  const match = source.match(
+    new RegExp(`const ${name} = (\\[[\\s\\S]*?\\]\\.join\\("\\\\n"\\));`, "u"),
+  );
+  assert.ok(match, `Missing ${name} in the Compute certification fixture`);
+  return runInNewContext(match[1]);
+}
+
+function runHttpsEgressFixture(curlBody) {
+  return spawnSync("bash", ["-s"], {
+    encoding: "utf8",
+    input: `curl() {\n${curlBody}\n}\n${computeFixtureScript("HTTPS_EGRESS_SCRIPT")}\n`,
+  });
+}
 
 test("binds toolchain certification to the workspace and image CLI metadata", () => {
   const cliPackage = JSON.parse(
@@ -294,6 +315,93 @@ test("requires the async marker digest instead of trusting verified=true", () =>
     }, "async_echo", { marker: MARKER }),
     (error) => error.code === "INVALID_PROBE_OUTPUT",
   );
+});
+
+test("accepts fail-closed literal transport denial but requires the control-plane host gate", () => {
+  const proof = {
+    schema_version: 1,
+    scenario: "https_egress_boundaries",
+    verified: true,
+    public_https_ok: true,
+    private_denied: true,
+    private_denial_mode: "transport_exit_7",
+    metadata_denied: true,
+    metadata_denial_mode: "http_520",
+    control_plane_denied: true,
+    control_plane_denial_mode: "http_520",
+  };
+  assert.match(
+    validateComputeCertificationProof({
+      stdout: JSON.stringify(proof),
+      stderr: "",
+    }, "https_egress_boundaries").stdoutSha256,
+    /^[0-9a-f]{64}$/u,
+  );
+
+  assert.throws(
+    () => validateComputeCertificationProof({
+      stdout: JSON.stringify({
+        ...proof,
+        control_plane_denial_mode: "transport_exit_7",
+      }),
+      stderr: "",
+    }, "https_egress_boundaries"),
+    (error) => error.code === "INVALID_PROBE_OUTPUT",
+  );
+  assert.throws(
+    () => validateComputeCertificationProof({
+      stdout: JSON.stringify({
+        ...proof,
+        private_denial_mode: "transport_exit_6",
+      }),
+      stderr: "",
+    }, "https_egress_boundaries"),
+    (error) => error.code === "INVALID_PROBE_OUTPUT",
+  );
+});
+
+test("the HTTPS egress fixture records narrow denial modes and rejects a transport-only control-plane result", () => {
+  const fixedTargets = [
+    'target=""',
+    'for argument in "$@"; do target="$argument"; done',
+    'case "$target" in',
+    '  https://example.com/) printf 200; return 0 ;;',
+    '  http://127.0.0.1/) printf 000; return 7 ;;',
+    '  http://169.254.169.254/latest/meta-data/) printf 520; return 0 ;;',
+    '  https://api.connectgalactic.com/health) printf 520; return 0 ;;',
+    '  *) printf 000; return 6 ;;',
+    "esac",
+  ].join("\n");
+  const success = runHttpsEgressFixture(fixedTargets);
+  assert.equal(success.status, 0, success.stderr);
+  assert.deepEqual(JSON.parse(success.stdout), {
+    schema_version: 1,
+    scenario: "https_egress_boundaries",
+    verified: true,
+    public_https_ok: true,
+    private_denied: true,
+    private_denial_mode: "transport_exit_7",
+    metadata_denied: true,
+    metadata_denial_mode: "http_520",
+    control_plane_denied: true,
+    control_plane_denial_mode: "http_520",
+  });
+
+  const controlPlaneTransportOnly = runHttpsEgressFixture(
+    fixedTargets.replace(
+      "https://api.connectgalactic.com/health) printf 520; return 0",
+      "https://api.connectgalactic.com/health) printf 000; return 7",
+    ),
+  );
+  assert.equal(controlPlaneTransportOnly.status, 92);
+
+  const reachablePrivateTarget = runHttpsEgressFixture(
+    fixedTargets.replace(
+      "http://127.0.0.1/) printf 000; return 7",
+      "http://127.0.0.1/) printf 200; return 0",
+    ),
+  );
+  assert.equal(reachablePrivateTarget.status, 90);
 });
 
 test("cross-binds producer and consumer proofs to the deterministic fixture", () => {
