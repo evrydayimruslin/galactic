@@ -21,6 +21,8 @@ describe("developer-v1 image contract", () => {
   it("pins the Sandbox image and lease MCP dependency", () => {
     const dockerfile = fixture("Dockerfile");
     const bridgePackage = JSON.parse(fixture("bridge/package.json"));
+    const bridgeLock = JSON.parse(fixture("bridge/package-lock.json"));
+    const cliLock = JSON.parse(repositoryFile("cli/package-lock.json"));
     const toolchainPackage = JSON.parse(fixture("toolchain/package.json"));
     expect(dockerfile).toContain("cloudflare/sandbox:0.12.3-python");
     expect(dockerfile).toContain('"playwright@${PLAYWRIGHT_VERSION}"');
@@ -60,6 +62,10 @@ describe("developer-v1 image contract", () => {
       "1.62.0-alpha-2026-07-20",
     );
     expect(bridgePackage.dependencies["@modelcontextprotocol/sdk"]).toBe("1.29.0");
+    for (const lock of [bridgeLock, cliLock]) {
+      expect(lock.packages["node_modules/fast-uri"].version).toBe("3.1.5");
+      expect(lock.packages["node_modules/ip-address"].version).toBe("10.4.0");
+    }
   });
 
   it("smokes the same ESM Playwright import a workspace job will use", () => {
