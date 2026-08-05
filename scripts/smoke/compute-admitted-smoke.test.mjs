@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   buildComputeSmokeMarker,
+  COMPUTE_CERTIFICATION_FUNCTION,
   COMPUTE_PREFLIGHT_KIND,
   COMPUTE_SMOKE_FUNCTION,
   COMPUTE_SMOKE_KIND,
@@ -31,6 +32,8 @@ function jsonResponse(body, status = 200) {
 function settingsView({
   enabled = false,
   revision = "0",
+  allowedTools = ["shell"],
+  manifestTools = ["shell"],
   limits = {
     maxTimeoutMs: 60_000,
     maxConcurrency: 1,
@@ -42,14 +45,14 @@ function settingsView({
     settings: {
       enabled,
       profile: "developer-v1",
-      allowedTools: ["shell"],
+      allowedTools,
       secretBindings: [],
       authorityRules: [],
       limits,
       manifestCeiling: {
         enabled: true,
         profile: "developer-v1",
-        tools: ["shell"],
+        tools: manifestTools,
         secrets: [],
       },
       ownerConfirmedAt: enabled ? "2026-07-25T12:00:00.000Z" : null,
@@ -236,6 +239,8 @@ test("parses only pinned target/release inputs and derives the evidence path", (
   const config = computeSmokeConfigFromEnv(env);
   assert.equal(config.apiBase, API_BASE);
   assert.equal(config.marker, MARKER);
+  assert.equal(config.fixtureName, "interface-demo");
+  assert.equal(config.functionName, COMPUTE_SMOKE_FUNCTION);
   assert.equal(
     config.evidencePath,
     "/tmp/release-evidence/compute-admitted-production.json",
@@ -246,6 +251,31 @@ test("parses only pinned target/release inputs and derives the evidence path", (
   assert.equal(
     preflight.evidencePath,
     "/tmp/release-evidence/compute-preflight-production.json",
+  );
+  const certificationPreflight = computeSmokeConfigFromEnv({
+    ...env,
+    GALACTIC_SMOKE_FIXTURE: "compute-certification",
+  }, ["--preflight-only"]);
+  assert.equal(certificationPreflight.fixtureName, "compute-certification");
+  assert.equal(
+    certificationPreflight.functionName,
+    COMPUTE_CERTIFICATION_FUNCTION,
+  );
+  assert.throws(
+    () =>
+      computeSmokeConfigFromEnv({
+        ...env,
+        GALACTIC_SMOKE_FIXTURE: "compute-certification",
+      }),
+    /only for the read-only binding preflight/u,
+  );
+  assert.throws(
+    () =>
+      computeSmokeConfigFromEnv({
+        ...env,
+        GALACTIC_SMOKE_FIXTURE: "unreviewed-fixture",
+      }, ["--preflight-only"]),
+    /interface-demo or compute-certification/u,
   );
   assert.throws(
     () => computeSmokeConfigFromEnv(env, ["--preflight-only", "extra"]),
@@ -1036,6 +1066,65 @@ test("preflight proves the admission-off binding path with no mutation or job", 
   const serialized = JSON.stringify(written[0].value);
   assert.equal(serialized.includes(leaked), false);
   assert.equal(serialized.includes(OWNER_TOKEN), false);
+});
+
+test("preflight proves the OFF binding through the V2 certification fixture", async () => {
+  const calls = [];
+  const written = [];
+  const fetchImpl = async (input, init = {}) => {
+    const url = String(input);
+    const method = init.method || "GET";
+    const body = init.body === undefined ? null : JSON.parse(init.body);
+    calls.push({ url, method, body });
+    if (url.endsWith("/compute/settings") && method === "GET") {
+      return jsonResponse(settingsView({
+        enabled: false,
+        revision: "11",
+        // A failed canary restores the exact disabled baseline, which may be a
+        // strict subset of the certification manifest ceiling.
+        allowedTools: ["shell"],
+        manifestTools: ["browser", "shell"],
+      }));
+    }
+    if (
+      url.endsWith(`/functions/${COMPUTE_CERTIFICATION_FUNCTION}/run`) &&
+      method === "POST"
+    ) {
+      assert.deepEqual(body, {
+        args: { action: "status", run_id: PREFLIGHT_RUN_ID },
+      });
+      return jsonResponse({
+        error: {
+          type: "GalacticComputeError",
+          code: "COMPUTE_RUN_NOT_FOUND",
+          message:
+            "galactic.compute failed (COMPUTE_RUN_NOT_FOUND): fixed probe",
+        },
+      }, 500);
+    }
+    throw new Error(`unexpected test request: ${method} ${url}`);
+  };
+
+  const evidence = await runAdmittedComputeSmoke(smokeConfig({
+    preflightOnly: true,
+    fixtureName: "compute-certification",
+    functionName: COMPUTE_CERTIFICATION_FUNCTION,
+    evidencePath: "/tmp/compute-preflight-production.json",
+  }), {
+    fetchImpl,
+    writeEvidence: async (path, value) => written.push({ path, value }),
+  });
+
+  assert.equal(evidence.verified, true);
+  assert.equal(evidence.function_name, COMPUTE_CERTIFICATION_FUNCTION);
+  assert.equal(evidence.fixture_policy.enabled, false);
+  assert.equal(calls.length, 2);
+  assert.equal(calls.some((call) => call.method === "PUT"), false);
+  assert.equal(
+    calls.some((call) => call.url.includes(`/${COMPUTE_SMOKE_FUNCTION}/`)),
+    false,
+  );
+  assert.equal(written.length, 1);
 });
 
 test("preflight fails closed on an unexpected safe code and writes bounded evidence", async () => {

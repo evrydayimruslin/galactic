@@ -593,7 +593,7 @@ function verifyBindingPreflight({
     preflight.target !== targetName ||
     preflight.candidate_sha !== release.git_sha ||
     preflight.workflow_run_id !== expectedRunId ||
-    preflight.function_name !== 'run_compute_smoke' ||
+    preflight.function_name !== 'run_compute_certification' ||
     preflight.fixture_policy.enabled !== false ||
     typeof preflight.fixture_policy.revision !== 'string' ||
     !REVISION.test(preflight.fixture_policy.revision) ||

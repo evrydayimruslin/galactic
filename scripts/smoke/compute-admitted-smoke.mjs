@@ -7,7 +7,9 @@
  * Demo fixture, starts one async shell-only job, proves terminal settlement and
  * exact stdout through both owner and in-Agent views, then disables Compute
  * again. It never sends a secret, reaches the network from the body, or creates
- * an artifact.
+ * an artifact. The read-only --preflight-only mode may instead target the
+ * V2-qualified Compute Certification fixture used by the rollout workflow; it
+ * checks one nonexistent run and never opens admission or starts a job.
  */
 
 import { createHash } from "node:crypto";
@@ -16,6 +18,7 @@ import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export const COMPUTE_SMOKE_FUNCTION = "run_compute_smoke";
+export const COMPUTE_CERTIFICATION_FUNCTION = "run_compute_certification";
 export const COMPUTE_SMOKE_KIND = "galactic_compute_admitted_smoke";
 export const COMPUTE_PREFLIGHT_KIND = "galactic_compute_binding_preflight";
 export const COMPUTE_SMOKE_SCHEMA_VERSION = 1;
@@ -85,6 +88,19 @@ const SMOKE_LIMITS = Object.freeze({
 const COMPUTE_PREFLIGHT_RUN_ID =
   "00000000-0000-4000-8000-000000000000";
 const COMPUTE_PREFLIGHT_EXPECTED_CODE = "COMPUTE_RUN_NOT_FOUND";
+const DEFAULT_COMPUTE_FIXTURE = "interface-demo";
+const COMPUTE_FIXTURES = Object.freeze({
+  [DEFAULT_COMPUTE_FIXTURE]: Object.freeze({
+    name: DEFAULT_COMPUTE_FIXTURE,
+    functionName: COMPUTE_SMOKE_FUNCTION,
+    manifestTools: Object.freeze(["shell"]),
+  }),
+  "compute-certification": Object.freeze({
+    name: "compute-certification",
+    functionName: COMPUTE_CERTIFICATION_FUNCTION,
+    manifestTools: Object.freeze(["browser", "shell"]),
+  }),
+});
 
 export class ComputeSmokeError extends Error {
   constructor(
@@ -107,6 +123,26 @@ export class ComputeSmokeError extends Error {
 
 function fail(code, message, options) {
   throw new ComputeSmokeError(code, message, options);
+}
+
+function computeFixture(value, { preflightOnly = false } = {}) {
+  const name = String(value || DEFAULT_COMPUTE_FIXTURE).trim();
+  const fixture = Object.hasOwn(COMPUTE_FIXTURES, name)
+    ? COMPUTE_FIXTURES[name]
+    : null;
+  if (!fixture) {
+    fail(
+      "INVALID_CONFIGURATION",
+      "GALACTIC_SMOKE_FIXTURE must be interface-demo or compute-certification.",
+    );
+  }
+  if (fixture.name === "compute-certification" && !preflightOnly) {
+    fail(
+      "INVALID_CONFIGURATION",
+      "The compute-certification fixture is supported only for the read-only binding preflight.",
+    );
+  }
+  return fixture;
 }
 
 function requiredString(value, label) {
@@ -300,6 +336,9 @@ export function computeSmokeConfigFromEnv(
       "Usage: compute-admitted-smoke.mjs [--cleanup-only|--preflight-only]",
     );
   }
+  const fixture = computeFixture(env.GALACTIC_SMOKE_FIXTURE, {
+    preflightOnly,
+  });
   const target = smokeTarget(env.GALACTIC_SMOKE_TARGET);
   const candidateSha = requiredString(
     env.COMPUTE_RELEASE_SHA,
@@ -333,6 +372,8 @@ export function computeSmokeConfigFromEnv(
     workflowRunId,
     marker,
     agentId,
+    fixtureName: fixture.name,
+    functionName: fixture.functionName,
     ownerAccessToken: requiredString(
       env[OWNER_ACCESS_TOKEN_ENV],
       OWNER_ACCESS_TOKEN_ENV,
@@ -398,7 +439,7 @@ async function requestJson({
   }
 }
 
-function validateManifestCeiling(settings) {
+function validateManifestCeiling(settings, fixture) {
   const ceiling = object(settings.manifestCeiling, "Compute manifest ceiling");
   if (ceiling.enabled !== true || ceiling.profile !== "developer-v1") {
     fail(
@@ -406,7 +447,11 @@ function validateManifestCeiling(settings) {
       "The release fixture does not expose the expected Compute ceiling.",
     );
   }
-  exactStringArray(ceiling.tools, ["shell"], "Compute manifest tools");
+  exactStringArray(
+    ceiling.tools,
+    fixture.manifestTools,
+    "Compute manifest tools",
+  );
   exactStringArray(ceiling.secrets, [], "Compute manifest secrets");
 }
 
@@ -430,20 +475,46 @@ function validateLimits(value, label) {
   };
 }
 
-function validateSettingsView(value, { requireDisabledBaseline = false } = {}) {
+function validateSettingsView(
+  value,
+  {
+    requireDisabledBaseline = false,
+    fixture = COMPUTE_FIXTURES[DEFAULT_COMPUTE_FIXTURE],
+  } = {},
+) {
   const view = object(value, "Compute settings response");
   const settings = object(view.settings, "Compute settings");
   if (!REVISION_RE.test(String(view.revision ?? ""))) {
     fail("INVALID_RESPONSE", "Compute settings revision is invalid.");
   }
-  validateManifestCeiling(settings);
+  validateManifestCeiling(settings, fixture);
   if (
     typeof settings.enabled !== "boolean" ||
     settings.profile !== "developer-v1"
   ) {
     fail("INVALID_RESPONSE", "Compute settings are invalid.");
   }
-  exactStringArray(settings.allowedTools, ["shell"], "Compute allowed tools");
+  if (fixture.name === DEFAULT_COMPUTE_FIXTURE) {
+    exactStringArray(settings.allowedTools, ["shell"], "Compute allowed tools");
+  } else if (
+    !Array.isArray(settings.allowedTools) ||
+    settings.allowedTools.some((tool) =>
+      !fixture.manifestTools.includes(tool)
+    ) ||
+    new Set(settings.allowedTools).size !== settings.allowedTools.length ||
+    (settings.enabled &&
+      (
+        settings.allowedTools.length !== fixture.manifestTools.length ||
+        settings.allowedTools.some((tool, index) =>
+          tool !== fixture.manifestTools[index]
+        )
+      ))
+  ) {
+    fail(
+      "INVALID_RESPONSE",
+      "Compute allowed tools did not match the release fixture.",
+    );
+  }
   exactStringArray(settings.secretBindings, [], "Compute secret bindings");
   exactStringArray(settings.authorityRules, [], "Compute authority rules");
   const limits = validateLimits(settings.limits, "Compute limits");
@@ -458,7 +529,7 @@ function validateSettingsView(value, { requireDisabledBaseline = false } = {}) {
     settings: {
       enabled: settings.enabled,
       profile: "developer-v1",
-      allowedTools: ["shell"],
+      allowedTools: [...settings.allowedTools],
       secretBindings: [],
       authorityRules: [],
       limits,
@@ -503,7 +574,9 @@ async function putSettings(context, revision, enabled, limits = SMOKE_LIMITS) {
       : "Compute fixture disablement",
     stage: enabled ? "settings_enable" : "settings_disable",
   });
-  const validated = validateSettingsView(response);
+  const validated = validateSettingsView(response, {
+    fixture: context.fixture,
+  });
   if (validated.settings.enabled !== enabled) {
     fail(
       "POLICY_MUTATION_FAILED",
@@ -518,7 +591,7 @@ async function invokeSmokeFunction(context, args, label, stage) {
     ...context,
     path:
       `/api/launch/agents/${encodeURIComponent(context.agentId)}/functions/${
-        encodeURIComponent(COMPUTE_SMOKE_FUNCTION)
+        encodeURIComponent(context.functionName)
       }/run`,
     method: "POST",
     body: { args },
@@ -528,7 +601,7 @@ async function invokeSmokeFunction(context, args, label, stage) {
   const response = object(payload, `${label} response`);
   if (
     response.success !== true ||
-    response.functionName !== COMPUTE_SMOKE_FUNCTION ||
+    response.functionName !== context.functionName ||
     response.error !== null
   ) {
     fail("FUNCTION_RUN_FAILED", `${label} did not succeed.`);
@@ -766,7 +839,9 @@ async function settleRunDuringCleanup(context, state, dependencies) {
 }
 
 async function disableFixture(context, state) {
-  const current = validateSettingsView(await getSettings(context));
+  const current = validateSettingsView(await getSettings(context), {
+    fixture: context.fixture,
+  });
   if (current.settings.enabled === false) {
     state.policyDisabled = true;
     state.cleanupRevision = current.revision;
@@ -824,7 +899,7 @@ function preflightEvidenceFor(
     candidate_sha: config.candidateSha,
     workflow_run_id: config.workflowRunId,
     agent_id: config.agentId,
-    function_name: COMPUTE_SMOKE_FUNCTION,
+    function_name: config.functionName,
     fixture_policy: {
       enabled,
       revision,
@@ -858,7 +933,9 @@ async function runComputeBindingPreflight(
   let success = false;
 
   try {
-    const baseline = validateSettingsView(await getSettings(context));
+    const baseline = validateSettingsView(await getSettings(context), {
+      fixture: context.fixture,
+    });
     enabled = baseline.settings.enabled;
     revision = baseline.revision;
     if (enabled !== false) {
@@ -934,7 +1011,7 @@ function evidenceFor(config, state, success, failure, now) {
     candidate_sha: config.candidateSha,
     workflow_run_id: config.workflowRunId,
     agent_id: config.agentId,
-    function_name: COMPUTE_SMOKE_FUNCTION,
+    function_name: config.functionName,
     marker_sha256: markerDigest,
     compute_run_id: state.runId,
     compute_receipt_id: state.computeReceiptId,
@@ -974,6 +1051,23 @@ export async function runAdmittedComputeSmoke(
     writeEvidence = writeComputeSmokeEvidence,
   } = {},
 ) {
+  const fixture = computeFixture(config?.fixtureName, {
+    preflightOnly: config?.preflightOnly === true,
+  });
+  if (
+    config?.functionName !== undefined &&
+    config.functionName !== fixture.functionName
+  ) {
+    fail(
+      "INVALID_CONFIGURATION",
+      "Compute smoke function does not match the selected fixture.",
+    );
+  }
+  const normalizedConfig = {
+    ...config,
+    fixtureName: fixture.name,
+    functionName: fixture.functionName,
+  };
   const target = smokeTarget(config?.target);
   const expectedMarker = buildComputeSmokeMarker(
     config?.candidateSha,
@@ -1005,10 +1099,12 @@ export async function runAdmittedComputeSmoke(
       OWNER_ACCESS_TOKEN_ENV,
     ),
     agentId: assertUuid(config.agentId, "GALACTIC_SMOKE_APP_ID"),
+    fixture,
+    functionName: fixture.functionName,
     requestTimeoutMs,
   };
   if (config?.preflightOnly === true) {
-    return await runComputeBindingPreflight(config, context, {
+    return await runComputeBindingPreflight(normalizedConfig, context, {
       now,
       writeEvidence,
     });
@@ -1033,6 +1129,7 @@ export async function runAdmittedComputeSmoke(
   try {
     const baseline = validateSettingsView(await getSettings(context), {
       requireDisabledBaseline: !config.cleanupOnly,
+      fixture,
     });
     state.baselineLimits = baseline.settings.limits;
     if (config.cleanupOnly) {
@@ -1121,7 +1218,7 @@ export async function runAdmittedComputeSmoke(
     }
 
     const evidence = evidenceFor(
-      config,
+      normalizedConfig,
       state,
       success && !primaryError,
       primaryError,

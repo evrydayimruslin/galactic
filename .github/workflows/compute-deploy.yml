@@ -667,13 +667,12 @@ jobs:
             > "$EVIDENCE_DIR/pre-rollout-off-container-readiness.json"
           echo "verified=true" >> "$GITHUB_OUTPUT"
 
-      # A canary certification attempt deliberately places this fixed private
-      # Agent on the browser-capable compute-certification profile. Normalize it
-      # back to the exact shell-only release fixture before asking
-      # compute-admitted-smoke to
-      # prove the OFF binding. The reviewed promotion is idempotent, keeps the
-      # Agent disabled, and refuses to delete or bypass unrelated owner drafts.
-      - name: Prepare exact fixed Compute smoke Agent for OFF binding preflight
+      # Deployment and canary certification share one V2-qualified private
+      # fixture. Keeping the fixed Agent on compute-certification avoids
+      # attempting to promote legacy V1 evidence through the current Agent Home
+      # trust boundary. The reviewed promotion is idempotent, keeps the Agent
+      # disabled, and refuses to delete or bypass unrelated owner drafts.
+      - name: Prepare exact fixed Compute certification Agent for OFF binding preflight
         if: >-
           ${{
             success() &&
@@ -704,12 +703,13 @@ jobs:
             --target "$REQUESTED_TARGET" \
             -- node scripts/smoke/interface-deploy-smoke.mjs \
               --url "$api_base" \
-              --dir examples/interface-demo \
+              --dir examples/compute-certification \
               --promote-reviewed \
-              --reviewed-permission compute:exec \
-              --reviewed-function run_compute_smoke \
+              --reviewed-fixture compute-certification \
+              --reviewed-permission compute:exec,notify:owner \
+              --reviewed-function run_compute_certification \
               --reviewed-compute-profile developer-v1 \
-              --reviewed-compute-tools shell \
+              --reviewed-compute-tools browser,shell \
               --reviewed-compute-secrets none \
             | tee "$EVIDENCE_DIR/pre-rollout-compute-smoke-agent-refresh.txt"
 
@@ -730,6 +730,7 @@ jobs:
           SUPABASE_PRODUCTION_PROJECT_ID: ${{ (inputs.target == 'production' && secrets.SUPABASE_PRODUCTION_PROJECT_ID) || '' }}
           ULTRALIGHT_TOKEN: ${{ (inputs.target == 'staging' && secrets.ULTRALIGHT_TOKEN_STAGING) || (inputs.target == 'production' && secrets.ULTRALIGHT_TOKEN) }}
           GALACTIC_SMOKE_APP_ID: ${{ (inputs.target == 'staging' && secrets.GALACTIC_SMOKE_APP_ID_STAGING) || (inputs.target == 'production' && secrets.GALACTIC_SMOKE_APP_ID) }}
+          GALACTIC_SMOKE_FIXTURE: compute-certification
           COMPUTE_RELEASE_SHA: ${{ github.sha }}
           COMPUTE_RELEASE_RUN_ID: ${{ github.run_id }}
           COMPUTE_RELEASE_EVIDENCE_DIR: ${{ github.workspace }}/compute-release-evidence/pre-rollout-off-binding
@@ -750,6 +751,7 @@ jobs:
               .target == $target and
               .candidate_sha == $sha and
               .workflow_run_id == $run_id and
+              .function_name == "run_compute_certification" and
               .fixture_policy.enabled == false and
               .probe.action == "status" and
               .probe.run_id == "00000000-0000-4000-8000-000000000000" and
@@ -778,6 +780,7 @@ jobs:
           SUPABASE_STAGING_PROJECT_ID: ${{ secrets.SUPABASE_STAGING_PROJECT_ID }}
           ULTRALIGHT_TOKEN: ${{ secrets.ULTRALIGHT_TOKEN_STAGING }}
           GALACTIC_SMOKE_APP_ID: ${{ secrets.GALACTIC_SMOKE_APP_ID_STAGING }}
+          GALACTIC_SMOKE_FIXTURE: compute-certification
           COMPUTE_RELEASE_SHA: ${{ github.sha }}
           COMPUTE_RELEASE_RUN_ID: ${{ github.run_id }}
           COMPUTE_RELEASE_EVIDENCE_DIR: ${{ github.workspace }}/compute-release-evidence/pre-rollout-off-recovery-binding
@@ -868,6 +871,7 @@ jobs:
             .kind == "galactic_compute_binding_preflight" and
             .verified == true and
             .target == "staging" and
+            .function_name == "run_compute_certification" and
             .fixture_policy.enabled == false and
             .probe.observed_public_compute_code == "COMPUTE_RUN_NOT_FOUND"
           ' "$preflight" >/dev/null || {
@@ -1544,7 +1548,7 @@ jobs:
             echo "compute_version_tag=$compute_version_tag"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Review, promote, and verify exact fixed Compute smoke Agent while admission is off
+      - name: Review, promote, and verify exact fixed Compute certification Agent while admission is off
         shell: bash
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
@@ -1567,12 +1571,13 @@ jobs:
             --target "$REQUESTED_TARGET" \
             -- node scripts/smoke/interface-deploy-smoke.mjs \
               --url "$api_base" \
-              --dir examples/interface-demo \
+              --dir examples/compute-certification \
               --promote-reviewed \
-              --reviewed-permission compute:exec \
-              --reviewed-function run_compute_smoke \
+              --reviewed-fixture compute-certification \
+              --reviewed-permission compute:exec,notify:owner \
+              --reviewed-function run_compute_certification \
               --reviewed-compute-profile developer-v1 \
-              --reviewed-compute-tools shell \
+              --reviewed-compute-tools browser,shell \
               --reviewed-compute-secrets none \
             | tee "$EVIDENCE_DIR/compute-smoke-agent-refresh.txt"
 
@@ -1585,6 +1590,7 @@ jobs:
           SUPABASE_PRODUCTION_PROJECT_ID: ${{ (inputs.target == 'production' && secrets.SUPABASE_PRODUCTION_PROJECT_ID) || '' }}
           ULTRALIGHT_TOKEN: ${{ (inputs.target == 'staging' && secrets.ULTRALIGHT_TOKEN_STAGING) || (inputs.target == 'production' && secrets.ULTRALIGHT_TOKEN) }}
           GALACTIC_SMOKE_APP_ID: ${{ (inputs.target == 'staging' && secrets.GALACTIC_SMOKE_APP_ID_STAGING) || (inputs.target == 'production' && secrets.GALACTIC_SMOKE_APP_ID) }}
+          GALACTIC_SMOKE_FIXTURE: compute-certification
           COMPUTE_RELEASE_SHA: ${{ github.sha }}
           COMPUTE_RELEASE_RUN_ID: ${{ github.run_id }}
           COMPUTE_RELEASE_EVIDENCE_DIR: ${{ github.workspace }}/compute-release-evidence
@@ -1608,6 +1614,7 @@ jobs:
               .target == $target and
               .candidate_sha == $sha and
               .workflow_run_id == $run_id and
+              .function_name == "run_compute_certification" and
               .fixture_policy.enabled == false and
               .probe.action == "status" and
               .probe.run_id == "00000000-0000-4000-8000-000000000000" and
