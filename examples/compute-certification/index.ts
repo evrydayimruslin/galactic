@@ -222,8 +222,9 @@ const ARTIFACT_CONSUMER_SCRIPT = [
 ].join("\n");
 
 const EXIT_23_SCRIPT = [
-  'process.stdout.write(JSON.stringify({ schema_version: 1, scenario: "exit_23", verified: true, expected_exit_code: 23 }) + "\\n");',
-  "process.exit(23);",
+  "set -eu",
+  'printf \'%s\\n\' \'{"schema_version":1,"scenario":"exit_23","verified":true,"expected_exit_code":23}\'',
+  "exit 23",
 ].join("\n");
 
 const HTTPS_EGRESS_SCRIPT = [
@@ -382,7 +383,7 @@ function buildScenarioRequest(
       };
     }
     case "exit_23":
-      return baseRequest(["node", "-e", EXIT_23_SCRIPT], "sync", 10_000);
+      return baseRequest(["bash", "-lc", EXIT_23_SCRIPT], "sync", 10_000);
     case "timeout":
       return baseRequest(
         ["node", "-e", "setTimeout(() => {}, 30_000);"],
