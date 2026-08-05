@@ -1696,6 +1696,10 @@ describe("Compute canary rollout workflow static guards", () => {
     expect(compensationLatch).toContain(
       "emergency-stop-after-compensation.json",
     );
+    expect(compensationLatch).toContain("for attempt in {1..12}");
+    expect(compensationLatch).toContain('"$attempt_file" enabled clear');
+    expect(compensationLatch).toContain('"$attempt_file" disabled clear');
+    expect(compensationLatch).toContain("Cache-Control: no-cache");
     expect(compensationLatch).not.toMatch(/emergency-stop\/[^\s]+\/release/u);
     expect(compensationLatch).not.toContain("RELEASE_COMPUTE_STOP");
     expect(compensationLatch).not.toContain("-X POST");
@@ -1710,6 +1714,10 @@ describe("Compute canary rollout workflow static guards", () => {
     expect(unpublishedLatch).toContain(
       "steps.unpublished_restore.outputs.verified == 'true'",
     );
+    expect(unpublishedLatch).toContain("for attempt in {1..12}");
+    expect(unpublishedLatch).toContain('"$attempt_file" enabled clear');
+    expect(unpublishedLatch).toContain('"$attempt_file" disabled clear');
+    expect(unpublishedLatch).toContain("Cache-Control: no-cache");
     expect(unpublishedFixture).toContain(
       "steps.unpublished_restore_latch.outputs.verified == 'true'",
     );
