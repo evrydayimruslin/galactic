@@ -314,7 +314,10 @@ import type {
   AgentGrantUpdateRequest,
 } from "../../shared/contracts/agent-grants.ts";
 import type { SensitiveRoute } from "../services/sensitive-route-rate-limit.ts";
-import { listAgentReleases } from "../services/app-releases-projection.ts";
+import {
+  listAgentReleases,
+  resolveFunctionPolicyReleaseAuthority,
+} from "../services/app-releases-projection.ts";
 import {
   buildFunctionPolicyProjections,
   computeDeclarationHash,
@@ -8627,13 +8630,13 @@ async function handleLaunchAgentFunctionPolicies(
     return withPrivateLaunchPrivacy(resolved);
   }
   const releases = await listAgentReleases(user.id, resolved.id);
-  const release = releases[0]
-    ? {
-      id: releases[0].id,
-      version: releases[0].version,
-      createdAt: releases[0].createdAt,
-    }
-    : null;
+  const release = resolveFunctionPolicyReleaseAuthority(releases, {
+    agentId: resolved.id,
+    deploymentState: resolved.deployment_state,
+    currentVersion: resolved.current_version,
+    currentVersionPromotedAt: resolved.current_version_promoted_at,
+    activeReleaseDigest: resolved.active_release_digest,
+  });
   // Facts come from THE shared extraction (policy-gate) — the same one the
   // dispatch gate's hold path hashes and classifies against. Diverging
   // normalizations here would make declaration-hash congruence lie.

@@ -2,7 +2,10 @@ import { assert } from "https://deno.land/std@0.210.0/assert/assert.ts";
 import { assertEquals } from "https://deno.land/std@0.210.0/assert/assert_equals.ts";
 import { assertRejects } from "https://deno.land/std@0.210.0/assert/assert_rejects.ts";
 
-import { listAgentReleases } from "./app-releases-projection.ts";
+import {
+  listAgentReleases,
+  resolveFunctionPolicyReleaseAuthority,
+} from "./app-releases-projection.ts";
 
 const TEST_ENV = {
   SUPABASE_URL: "https://supabase.test",
@@ -88,5 +91,86 @@ Deno.test("listAgentReleases fails loudly on a database error", async () => {
         Error,
         "Failed to list agent releases",
       ),
+  );
+});
+
+Deno.test("function policy authority prefers the immutable release ledger", () => {
+  assertEquals(
+    resolveFunctionPolicyReleaseAuthority([{
+      id: "release-2",
+      version: "2.0.0",
+      releaseGeneration: 2,
+      storageBytes: 2048,
+      createdAt: "2026-08-02T12:00:00.000Z",
+    }], {
+      agentId: "agent-1",
+      deploymentState: "legacy",
+      currentVersion: "1.0.0",
+      currentVersionPromotedAt: "2026-07-01T12:00:00.000Z",
+      activeReleaseDigest: "a".repeat(64),
+    }),
+    {
+      id: "release-2",
+      version: "2.0.0",
+      createdAt: "2026-08-02T12:00:00.000Z",
+    },
+  );
+});
+
+Deno.test("function policy authority fences a legacy Agent to its live promotion", () => {
+  const source = {
+    agentId: "agent-1",
+    deploymentState: "legacy",
+    currentVersion: "1.2.3",
+    currentVersionPromotedAt: "2026-08-01T12:34:56.000Z",
+    activeReleaseDigest: "b".repeat(64),
+  };
+  const authority = resolveFunctionPolicyReleaseAuthority([], source);
+  assertEquals(authority, {
+    id: `legacy:agent-1:1.2.3:${"b".repeat(64)}`,
+    version: "1.2.3",
+    createdAt: "2026-08-01T12:34:56.000Z",
+  });
+  assert(
+    resolveFunctionPolicyReleaseAuthority([], {
+      ...source,
+      activeReleaseDigest: "c".repeat(64),
+    })?.id !== authority?.id,
+  );
+});
+
+Deno.test("legacy policy authority falls back to the promotion timestamp", () => {
+  assertEquals(
+    resolveFunctionPolicyReleaseAuthority([], {
+      agentId: "agent-1",
+      deploymentState: "legacy",
+      currentVersion: "1.2.3",
+      currentVersionPromotedAt: "2026-08-01T12:34:56Z",
+      activeReleaseDigest: null,
+    }),
+    {
+      id: "legacy:agent-1:1.2.3:2026-08-01T12%3A34%3A56.000Z",
+      version: "1.2.3",
+      createdAt: "2026-08-01T12:34:56.000Z",
+    },
+  );
+});
+
+Deno.test("function policy authority fails closed without a valid release source", () => {
+  const source = {
+    agentId: "agent-1",
+    deploymentState: "ready",
+    currentVersion: "1.2.3",
+    currentVersionPromotedAt: "2026-08-01T12:34:56.000Z",
+    activeReleaseDigest: null,
+  };
+  assertEquals(resolveFunctionPolicyReleaseAuthority([], source), null);
+  assertEquals(
+    resolveFunctionPolicyReleaseAuthority([], {
+      ...source,
+      deploymentState: "legacy",
+      currentVersion: "",
+    }),
+    null,
   );
 });
