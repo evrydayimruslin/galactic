@@ -701,6 +701,12 @@ describe("Compute release workflow static guards", () => {
     const captureStable = deploy.indexOf(
       "Capture the stable API and Compute rollback pair before mutation",
     );
+    const prepareFixture = deploy.indexOf(
+      "Prepare exact fixed Compute smoke Agent for OFF binding preflight",
+    );
+    const verifyOffBinding = deploy.indexOf(
+      "Verify the admission-OFF binding path before Compute mutation",
+    );
     const deployCompute = deploy.indexOf("Dry-run and deploy Compute Worker");
     const certifyOff = deploy.indexOf("Certify admission-off API and exact Compute digest");
     const refreshFixture = deploy.indexOf(
@@ -716,6 +722,9 @@ describe("Compute release workflow static guards", () => {
       "Restore the stable API and Compute pair after any release failure",
     );
     expect(waitForDeploys).toBeGreaterThan(0);
+    expect(prepareFixture).toBeGreaterThan(waitForDeploys);
+    expect(verifyOffBinding).toBeGreaterThan(prepareFixture);
+    expect(captureStable).toBeGreaterThan(verifyOffBinding);
     expect(captureStable).toBeGreaterThan(waitForDeploys);
     expect(deployCompute).toBeGreaterThan(captureStable);
     expect(certifyOff).toBeGreaterThan(0);
@@ -831,25 +840,26 @@ describe("Compute release workflow static guards", () => {
     expect(preserveStep).not.toContain(
       "scripts/smoke/compute-admitted-smoke.mjs\n",
     );
+    const prepareFixtureStep = deploy.slice(prepareFixture, verifyOffBinding);
     const fixtureStep = deploy.slice(refreshFixture, bindingPreflight);
     const fixtureScript = await text(
       "scripts/smoke/interface-deploy-smoke.mjs",
     );
-    expect(fixtureStep).toContain(
-      "scripts/smoke/with-staging-owner-session.mjs",
-    );
-    expect(fixtureStep).toContain("--promote-reviewed");
-    expect(fixtureStep).toContain("--reviewed-permission compute:exec");
-    expect(fixtureStep).toContain("--reviewed-function run_compute_smoke");
-    expect(fixtureStep).toContain(
-      "--reviewed-compute-profile developer-v1",
-    );
-    expect(fixtureStep).toContain("--reviewed-compute-tools shell");
-    expect(fixtureStep).toContain("--reviewed-compute-secrets none");
-    expect(fixtureStep).not.toContain("--token");
-    expect(fixtureStep).not.toContain("--app-id");
-    expect(fixtureStep).not.toContain("GALACTIC_OWNER_ACCESS_TOKEN:");
-    expect(fixtureStep).not.toMatch(/versions\/.*DELETE/iu);
+    for (const step of [prepareFixtureStep, fixtureStep]) {
+      expect(step).toContain(
+        "scripts/smoke/with-staging-owner-session.mjs",
+      );
+      expect(step).toContain("--promote-reviewed");
+      expect(step).toContain("--reviewed-permission compute:exec");
+      expect(step).toContain("--reviewed-function run_compute_smoke");
+      expect(step).toContain("--reviewed-compute-profile developer-v1");
+      expect(step).toContain("--reviewed-compute-tools shell");
+      expect(step).toContain("--reviewed-compute-secrets none");
+      expect(step).not.toContain("--token");
+      expect(step).not.toContain("--app-id");
+      expect(step).not.toContain("GALACTIC_OWNER_ACCESS_TOKEN:");
+      expect(step).not.toMatch(/versions\/.*DELETE/iu);
+    }
     expect(fixtureScript).toContain("const toolToken = token;");
     expect(fixtureScript).toContain("fixtureRefreshPlan({");
     expect(fixtureScript).toContain("callTool('gx.upload', uploadArgs)");

@@ -667,6 +667,52 @@ jobs:
             > "$EVIDENCE_DIR/pre-rollout-off-container-readiness.json"
           echo "verified=true" >> "$GITHUB_OUTPUT"
 
+      # A canary certification attempt deliberately places this fixed private
+      # Agent on the browser-capable compute-certification profile. Normalize it
+      # back to the exact shell-only release fixture before asking
+      # compute-admitted-smoke to
+      # prove the OFF binding. The reviewed promotion is idempotent, keeps the
+      # Agent disabled, and refuses to delete or bypass unrelated owner drafts.
+      - name: Prepare exact fixed Compute smoke Agent for OFF binding preflight
+        if: >-
+          ${{
+            success() &&
+            (
+              steps.inspect_off_bridge.outputs.policy == 'off' ||
+              steps.verify_off_bridge.outputs.verified == 'true'
+            )
+          }}
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_STAGING_PROJECT_ID: ${{ (inputs.target == 'staging' && secrets.SUPABASE_STAGING_PROJECT_ID) || '' }}
+          SUPABASE_PRODUCTION_PROJECT_ID: ${{ (inputs.target == 'production' && secrets.SUPABASE_PRODUCTION_PROJECT_ID) || '' }}
+          ULTRALIGHT_TOKEN: ${{ (inputs.target == 'staging' && secrets.ULTRALIGHT_TOKEN_STAGING) || (inputs.target == 'production' && secrets.ULTRALIGHT_TOKEN) }}
+          GALACTIC_SMOKE_APP_ID: ${{ (inputs.target == 'staging' && secrets.GALACTIC_SMOKE_APP_ID_STAGING) || (inputs.target == 'production' && secrets.GALACTIC_SMOKE_APP_ID) }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SUPABASE_ACCESS_TOKEN" ] || [ -z "$ULTRALIGHT_TOKEN" ] || [ -z "$GALACTIC_SMOKE_APP_ID" ]; then
+            echo "The selected target must provide its owner-session bootstrap, fixed smoke Agent token, and ID." >&2
+            exit 1
+          fi
+          if [ "$REQUESTED_TARGET" = "staging" ]; then
+            api_base=https://ultralight-api-staging.rgn4jz429m.workers.dev
+          else
+            api_base=https://api.connectgalactic.com
+          fi
+          node scripts/smoke/with-staging-owner-session.mjs \
+            --target "$REQUESTED_TARGET" \
+            -- node scripts/smoke/interface-deploy-smoke.mjs \
+              --url "$api_base" \
+              --dir examples/interface-demo \
+              --promote-reviewed \
+              --reviewed-permission compute:exec \
+              --reviewed-function run_compute_smoke \
+              --reviewed-compute-profile developer-v1 \
+              --reviewed-compute-tools shell \
+              --reviewed-compute-secrets none \
+            | tee "$EVIDENCE_DIR/pre-rollout-compute-smoke-agent-refresh.txt"
+
       - name: Verify the admission-OFF binding path before Compute mutation
         id: verify_off_binding_before_mutation
         if: >-
