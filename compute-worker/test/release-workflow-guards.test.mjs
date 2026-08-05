@@ -9,6 +9,25 @@ async function text(path) {
 }
 
 describe("Compute release workflow static guards", () => {
+  it("refreshes Worker code without rebuilding or rolling the certified Container", async () => {
+    const refresh = await text(".github/workflows/compute-worker-refresh.yml");
+    expect(refresh).toContain("compute_release_run_id:");
+    expect(refresh).toContain(
+      "verify-compute-rollout-release-evidence.mjs",
+    );
+    expect(refresh).toContain("--containers-rollout=none");
+    expect(refresh).not.toMatch(/--containers-rollout=(?:gradual|immediate)/u);
+    expect(refresh).not.toMatch(/docker (?:build|push)/u);
+    expect(refresh).toContain("before-worker-fingerprint.json");
+    expect(refresh).toContain("after-worker-fingerprint.json");
+    expect(refresh).toContain("before-container-readiness.json");
+    expect(refresh).toContain("after-container-readiness.json");
+    expect(refresh).toContain(
+      'versions deploy "$PREVIOUS_COMPUTE_VERSION_ID@100%"',
+    );
+    expect(refresh).toContain("steps.upload_evidence.outcome != 'success'");
+  });
+
   it("pins every action and CLI version in canonical schema deploy workflows", async () => {
     const workflows = await Promise.all([
       text(".github/workflows/supabase-db.yml"),

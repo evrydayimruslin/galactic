@@ -417,17 +417,33 @@ API exact environment digest with admission still off, fixed certification
 fixture refresh, staged policy enablement, deployed scenario certification,
 operator snapshot verification, and the final live-version fence.
 
-Use **Actions → Compute Deploy** only when the image, Compute Worker, schema, or
-other release inputs actually changed. Its current `preserve_off` evidence
+Use **Actions → Compute Deploy** when the image, schema, or other image-release
+inputs actually changed. Its current `preserve_off` evidence
 certifies the immutable image/Compute version, exact private bindings, schema,
 retention policy, and an admission-OFF API state. A Compute Deploy artifact is
 valid execution-plane evidence, but its API version is never rollback authority
 for a later admission dispatch.
 
-The August restoration does **not** run Compute Deploy and does not build, push,
-or redeploy an image or Compute Worker. Release evidence proves the already-live
-Compute digest. **Compute Canary Rollout** uploads full immutable API versions,
-but permits only these five policy binding values to differ from the live API:
+The August restoration does **not** run Compute Deploy and does not build or
+push an image. Release evidence proves the already-live Compute digest. If the
+Worker source is still byte-identical to that release, no Compute Worker deploy
+is needed. If a reviewed Worker-only repair is required, dispatch **Actions →
+Compute Worker Refresh** with the same release run while admission is OFF. That
+workflow replaces the local image declaration with the certified immutable
+digest and deploys with `--containers-rollout=none`. It requires the API,
+admission policy, digest, Worker configuration, Container application ID/image/
+version, queues, buckets, schema, and secrets to remain unchanged. Its private
+evidence binds the prior and refreshed Worker versions and separate code/config
+fingerprints. Any failed fence or unpublished committed evidence promotes the
+exact pre-refresh Worker version captured by that dispatch.
+
+Supply the successful Worker-refresh run to **Compute Canary Rollout** whenever
+the live Worker version is newer than the image-certifying Compute Deploy run.
+The rollout verifies both artifacts: Compute Deploy remains image authority;
+the refresh is Worker-code authority. Without a refresh artifact, the live
+Worker must still be the exact version in Compute Deploy evidence. **Compute
+Canary Rollout** uploads full immutable API versions, but permits only these
+five policy binding values to differ from the live API:
 
 - `COMPUTE_ENABLED`;
 - `COMPUTE_ENVIRONMENT_DIGEST`;
@@ -512,8 +528,9 @@ API/Compute bridge, and production/staging dry-run contracts automatically for
 relevant pull requests and `main` pushes. A manual dispatch runs those contracts
 first and then adds the locked image build, smoke, SBOM, checksum-pinned Grype
 gate, and evidence packet; that heavy job never publishes or deploys an image.
-The restoration workflow intentionally does not dispatch the heavy job or treat
-today's working-tree image inputs as evidence about the already-live digest. In
+The restoration and Worker-refresh workflows intentionally do not dispatch the
+heavy job or treat today's working-tree image inputs as evidence about the
+already-live digest. In
 particular, a newer CLI package version in source does not imply that version
 exists in the certified image; reconcile such image contract drift in the next
 Compute image release, not in this vars-only restoration. Compute CI and
@@ -805,7 +822,8 @@ OFF/live-deployment evidence, admit no job, and do not count that run toward an
 active canary soak.
 
 1. **`staging_canary` from `main`:** type `rollout-staging-canary`, supply the
-   successful staging `preserve_off` Compute Deploy run, and leave predecessor
+   successful staging `preserve_off` Compute Deploy run, supply the successful
+   exact-SHA Worker-refresh run when one was required, and leave predecessor
    blank. The workflow derives the exact owner/Agent pair from the authenticated
    fixed token; the allowlist is never dispatch input. It refreshes the closed
    `compute-certification` profile, enables only that pair, and runs the
@@ -825,7 +843,8 @@ the dispatch's captured OFF version. Each accepted read is retained in the
 private rollout evidence.
 2. **`production_canary` from the immutable `v*` tag:** type
    `rollout-production-canary`, supply the production Compute Deploy run, and
-   bind the successful staging-canary run as predecessor. The predecessor must
+   supply the exact-tag production Worker-refresh run when one was required.
+   Bind the successful staging-canary run as predecessor. The predecessor must
    have the identical release SHA and combined certification evidence. The
    production canary derives and dogfoods the production owner/Agent pair with
    the `production-canary` profile in the same way.
@@ -1005,6 +1024,7 @@ requires staged SDK/image transport migrations.
 - [ ] local image build and image smoke
 - [ ] Compute CI evidence artifact, locked-input hashes, and SPDX SBOM
 - [ ] immutable Compute Deploy evidence artifact
+- [ ] Worker-refresh evidence when the live Worker is newer than Compute Deploy
 - [ ] staging-canary evidence artifact bound to the exact release SHA
 - [ ] production-canary evidence artifact and exact active canary baseline
 - [ ] 24 hours of 15-minute lifecycle probes with no gap over 35 minutes

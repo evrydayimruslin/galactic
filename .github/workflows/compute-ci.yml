@@ -8,6 +8,7 @@ on:
     paths:
       - .dockerignore
       - .github/workflows/compute-ci.yml
+      - .github/workflows/compute-worker-refresh.yml
       - cli/**
       - compute-worker/**
       - scripts/release/verify-api-compute-off-bridge.mjs
@@ -17,6 +18,7 @@ on:
     paths:
       - .dockerignore
       - .github/workflows/compute-ci.yml
+      - .github/workflows/compute-worker-refresh.yml
       - cli/**
       - compute-worker/**
       - scripts/release/verify-api-compute-off-bridge.mjs

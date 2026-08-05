@@ -44,6 +44,8 @@ on:
       - 'scripts/release/verify-compute-rollout-predecessor.test.mjs'
       - 'scripts/release/verify-compute-rollout-release-evidence.mjs'
       - 'scripts/release/verify-compute-rollout-release-evidence.test.mjs'
+      - 'scripts/release/verify-compute-worker-refresh-evidence.mjs'
+      - 'scripts/release/verify-compute-worker-refresh-evidence.test.mjs'
       - 'scripts/release/verify-production-compute-release-evidence.mjs'
       - 'scripts/release/verify-production-compute-release-evidence.test.mjs'
       - 'scripts/release/verify-attention-shadow-evidence.mjs'
@@ -80,6 +82,7 @@ on:
       - '.github/workflows/compute-deploy.yml'
       - '.github/workflows/compute-admission.yml'
       - '.github/workflows/compute-canary-rollout.yml'
+      - '.github/workflows/compute-worker-refresh.yml'
       - '.github/workflows/compute-probe.yml'
       - '.github/workflows/g1-launch-smoke.yml'
       - '.github/workflows/launch-gate-production.yml'
@@ -125,6 +128,8 @@ on:
       - 'scripts/release/verify-compute-rollout-predecessor.test.mjs'
       - 'scripts/release/verify-compute-rollout-release-evidence.mjs'
       - 'scripts/release/verify-compute-rollout-release-evidence.test.mjs'
+      - 'scripts/release/verify-compute-worker-refresh-evidence.mjs'
+      - 'scripts/release/verify-compute-worker-refresh-evidence.test.mjs'
       - 'scripts/release/verify-production-compute-release-evidence.mjs'
       - 'scripts/release/verify-production-compute-release-evidence.test.mjs'
       - 'scripts/release/verify-attention-shadow-evidence.mjs'
@@ -161,6 +166,7 @@ on:
       - '.github/workflows/compute-deploy.yml'
       - '.github/workflows/compute-admission.yml'
       - '.github/workflows/compute-canary-rollout.yml'
+      - '.github/workflows/compute-worker-refresh.yml'
       - '.github/workflows/compute-probe.yml'
       - '.github/workflows/g1-launch-smoke.yml'
       - '.github/workflows/launch-gate-production.yml'
@@ -233,6 +239,7 @@ jobs:
             scripts/release/verify-compute-emergency-stop-status.test.mjs \
             scripts/release/verify-compute-rollout-predecessor.test.mjs \
             scripts/release/verify-compute-rollout-release-evidence.test.mjs \
+            scripts/release/verify-compute-worker-refresh-evidence.test.mjs \
             scripts/release/verify-attention-shadow-evidence.test.mjs \
             scripts/release/verify-production-compute-release-evidence.test.mjs \
             scripts/release/write-api-compute-disabled-config.test.mjs \

@@ -22,10 +22,13 @@ const RELEASE_TAG = /^v[0-9A-Za-z][0-9A-Za-z._-]*$/u;
 const PROBE_WORKFLOW = '.github/workflows/compute-probe.yml';
 const API_DEPLOY_WORKFLOW = '.github/workflows/api-deploy.yml';
 const COMPUTE_DEPLOY_WORKFLOW = '.github/workflows/compute-deploy.yml';
+const COMPUTE_WORKER_REFRESH_WORKFLOW =
+  '.github/workflows/compute-worker-refresh.yml';
 const WORKFLOW_PATHS = Object.freeze([
   API_DEPLOY_WORKFLOW,
   COMPUTE_DEPLOY_WORKFLOW,
   PROBE_WORKFLOW,
+  COMPUTE_WORKER_REFRESH_WORKFLOW,
 ]);
 const PREDECESSOR_KIND = 'galactic_compute_rollout_predecessor_verification';
 const PROBE_KIND = 'galactic_compute_production_probe';
@@ -420,7 +423,10 @@ function validateRun(value, workflowPath, inventoryEndMs, label) {
 function isProductionDeploymentRun(run, workflowPath) {
   if (!RELEASE_TAG.test(run.head_branch)) return false;
   if (workflowPath === API_DEPLOY_WORKFLOW) return run.event === 'push';
-  if (workflowPath === COMPUTE_DEPLOY_WORKFLOW) {
+  if (
+    workflowPath === COMPUTE_DEPLOY_WORKFLOW ||
+    workflowPath === COMPUTE_WORKER_REFRESH_WORKFLOW
+  ) {
     return run.event === 'workflow_dispatch';
   }
   return false;
@@ -477,7 +483,11 @@ function validateRunInventory(value, predecessor, nowMs) {
     runsByWorkflow.set(expectedPath, runs);
   });
 
-  for (const workflow of [API_DEPLOY_WORKFLOW, COMPUTE_DEPLOY_WORKFLOW]) {
+  for (const workflow of [
+    API_DEPLOY_WORKFLOW,
+    COMPUTE_DEPLOY_WORKFLOW,
+    COMPUTE_WORKER_REFRESH_WORKFLOW,
+  ]) {
     const overlapping = runsByWorkflow.get(workflow).filter((run) =>
       isProductionDeploymentRun(run, workflow) &&
       run.createdAt <= windowEndedAt && run.updatedAt >= windowStartedAt
