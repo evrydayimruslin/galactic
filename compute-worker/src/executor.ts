@@ -661,15 +661,20 @@ async function captureOutputs(
   const aggregateLimit = Math.min(MAX_TOTAL_CAPTURE_BYTES, run.max_artifact_bytes);
   for (const [index, relative] of run.capture_paths.entries()) {
     const source = workspacePath(relative);
+    // Explicit Sandbox sessions are persistent shells. Keep every inspection
+    // branch inside the command: `exit` would terminate the capture session
+    // and turn an ordinary missing path into a SessionTerminatedError.
     const kind = await session.exec(
       [
-        `resolved=$(realpath -e -- ${shellQuote(source)} 2>/dev/null) || { printf missing; exit 0; }`,
-        `case "$resolved" in /workspace|/workspace/*) ;; *) printf unsafe; exit 0 ;; esac`,
+        `if resolved=$(realpath -e -- ${shellQuote(source)} 2>/dev/null); then`,
+        `case "$resolved" in /workspace|/workspace/*)`,
         `if test -L ${shellQuote(source)}; then printf unsafe`,
         `elif test -d ${shellQuote(source)}; then if find ${shellQuote(source)} -xdev ! -type f ! -type d -print -quit | grep -q .; then printf unsafe; else printf directory; fi`,
         `elif test -f ${shellQuote(source)}; then printf file`,
-        "else printf unsafe; fi",
-      ].join("; "),
+        "else printf unsafe; fi ;;",
+        "*) printf unsafe ;; esac",
+        "else printf missing; fi",
+      ].join("\n"),
       { origin: "internal", timeout: 10_000 },
     );
     const artifactKind = kind.stdout.trim();

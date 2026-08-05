@@ -89,6 +89,8 @@ interface SessionOptions {
   captureKind?: "missing" | "unsafe" | "file" | "directory";
   captureSize?: number;
   dieAfterUserExec?: boolean;
+  terminateCaptureSessionOnExit?: boolean;
+  onCaptureInspect?: (command: string) => void;
   onUserExec?: () => void;
   beforeWriteCompletes?: (path: string) => Promise<void> | void;
   workspaceAvailableKiB?: number;
@@ -158,7 +160,11 @@ function makeSession(
           stderr: "",
         };
       }
-      if (command.startsWith("resolved=")) {
+      if (command.includes("resolved=$(realpath")) {
+        options.onCaptureInspect?.(command);
+        if (options.terminateCaptureSessionOnExit && /\bexit\b/u.test(command)) {
+          throw new Error("capture session shell terminated");
+        }
         return {
           success: true,
           exitCode: 0,
@@ -1038,6 +1044,36 @@ describe("compute executor lifecycle", () => {
     expect(harness.puts).toHaveLength(0);
     const completion = harness.requests.find((request) => request.operation === "complete");
     expect(JSON.stringify(completion?.body)).toContain("contains a link");
+  });
+
+  it("reports a missing capture without terminating the fresh session shell", async () => {
+    const inspections: string[] = [];
+    const harness = makeHarness({
+      run: { capture_paths: ["output/missing.json"] },
+      session: {
+        captureKind: "missing",
+        terminateCaptureSessionOnExit: true,
+        onCaptureInspect: (command) => inspections.push(command),
+      },
+    });
+    const receipt = await executeComputeRun(
+      harness.env,
+      { version: 1, run_id: RUN_ID },
+      harness.dependencies,
+    );
+    expect(receipt?.status).toBe("succeeded");
+    expect(harness.puts).toHaveLength(0);
+    expect(inspections).toHaveLength(1);
+    expect(inspections[0]).not.toMatch(/\bexit\b/u);
+    const completion = harness.requests.find((request) =>
+      request.operation === "complete"
+    );
+    expect(completion?.body).toMatchObject({
+      exit_code: 0,
+      stderr: "capture path not found: output/missing.json",
+      outputs: [],
+    });
+    expect(operations(harness.requests, "fail")).toBe(0);
   });
 
   it("asks R2 to verify the frozen output digest", async () => {
