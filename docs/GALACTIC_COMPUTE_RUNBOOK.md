@@ -424,10 +424,17 @@ retention policy, and an admission-OFF API state. A Compute Deploy artifact is
 valid execution-plane evidence, but its API version is never rollback authority
 for a later admission dispatch.
 
-The August restoration does **not** run Compute Deploy and does not build or
-push an image. Release evidence proves the already-live Compute digest. If the
-Worker source is still byte-identical to that release, no Compute Worker deploy
-is needed. If a reviewed Worker-only repair is required, dispatch **Actions →
+The August restoration originally planned to reuse the already-live Compute
+digest because its image inputs were byte-identical to the certified release.
+That shortcut is valid only while deployed scenario certification also passes.
+The first real browser certification disproved that runtime assumption:
+Chromium rejected Cloudflare's intercepted HTTPS certificate from Compute's
+isolated job home. Because that is an image defect, restoration must now run
+**Compute Deploy** while admission is OFF and certify the newly built digest;
+neither a vars-only rollout nor **Compute Worker Refresh** can repair it. Never
+weaken the browser probe with `ignoreHTTPSErrors` or a certificate-error flag.
+
+If a later reviewed Worker-only repair is required, dispatch **Actions →
 Compute Worker Refresh** with the same release run while admission is OFF. That
 workflow replaces the local image declaration with the certified immutable
 digest and deploys with `--containers-rollout=none`. It requires the API,
@@ -588,7 +595,7 @@ the Compute Worker does not exercise admission.
 |---|---|
 | Basic sync | an early `timeout_ms <= 30000` call runs `pwd`, Node, Python, `git`, `rg`, `jq`, SQLite, and DuckDB; exit `0`; receipt settled |
 | Late sync refusal | with insufficient parent time remaining, admission returns `COMPUTE_SYNC_DEADLINE_REQUIRES_ASYNC` before a run, hold, token, queue message, or body exists |
-| Browser | Playwright launches pinned Chromium, loads an HTTPS page, captures a screenshot artifact |
+| Browser | Playwright launches pinned Chromium, strictly validates an intercepted HTTPS certificate through the runtime system trust and the NSS Shared DB under the exact job `HOME`, then captures a screenshot artifact; certificate-error bypasses are forbidden |
 | Documents/media | one minimal `ffmpeg`, `pandoc`, LibreOffice, Poppler, and Tesseract command |
 | Async | admission returns a run ID; `galactic.compute.get()` observes terminal state |
 | Input artifact | hash-verified R2 input appears only at its declared workspace path |

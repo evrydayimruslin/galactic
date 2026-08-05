@@ -17,7 +17,7 @@ docker run --rm \
   --env "EXPECTED_GALACTIC_CLI_VERSION=$expected_cli_version" \
   --entrypoint /bin/bash "$image" -lc '
   set -eu
-  command -v bash git git-lfs gh jq rg sqlite3 duckdb ffmpeg convert pandoc libreoffice pdfinfo tesseract rclone psql mysql redis-cli gx claude codex playwright deno galactic galacticconnection python3 pip3 npm
+  command -v bash git git-lfs gh jq rg sqlite3 duckdb ffmpeg convert pandoc libreoffice pdfinfo tesseract rclone psql mysql redis-cli gx claude codex playwright deno galactic galacticconnection python3 pip3 npm certutil update-ca-certificates
   gh --version | grep "gh version 2.96.0"
   git-lfs version | grep "git-lfs/3.7.1 (Galactic;"
   rclone version | grep "rclone v1.74.4"
@@ -57,7 +57,8 @@ docker run --rm \
   '\'' /etc/ssl/certs/ca-certificates.crt > /tmp/galactic-smoke-ca.crt
   /opt/galactic/bin/configure-chrome-ca-policy.mjs \
     /tmp/galactic-smoke-ca.crt \
-    /tmp/galactic-chrome-policy/managed/galactic-cloudflare-ca.json
+    /tmp/galactic-chrome-policy/managed/galactic-cloudflare-ca.json \
+    /tmp/galactic-chrome-nss-certificates
   node -e '\''
     const { readFileSync } = require("node:fs");
     const policy = JSON.parse(readFileSync(
@@ -69,7 +70,19 @@ docker run --rm \
   test "$(stat -c %a /tmp/galactic-chrome-policy/managed)" = 755
   test "$(stat -c %a /tmp/galactic-chrome-policy/managed/galactic-cloudflare-ca.json)" = 444
   test "$(stat -c %u /tmp/galactic-chrome-policy/managed/galactic-cloudflare-ca.json)" = 0
-  rm -rf /tmp/galactic-smoke-ca.crt /tmp/galactic-chrome-policy
+  test "$(find /tmp/galactic-chrome-nss-certificates -maxdepth 1 -type f -name '\''ca-*.crt'\'' | wc -l)" = 1
+  test "$(stat -c %a /tmp/galactic-chrome-nss-certificates)" = 700
+  test "$(stat -c %a /tmp/galactic-chrome-nss-certificates/ca-01.crt)" = 400
+  mkdir -p /tmp/galactic-chrome-home/.local/share/pki/nssdb
+  certutil -N --empty-password \
+    -d sql:/tmp/galactic-chrome-home/.local/share/pki/nssdb
+  certutil -A -d sql:/tmp/galactic-chrome-home/.local/share/pki/nssdb \
+    -n "Galactic smoke CA" -t "C,," \
+    -i /tmp/galactic-chrome-nss-certificates/ca-01.crt
+  certutil -L -d sql:/tmp/galactic-chrome-home/.local/share/pki/nssdb \
+    -n "Galactic smoke CA" >/dev/null
+  rm -rf /tmp/galactic-smoke-ca.crt /tmp/galactic-chrome-policy \
+    /tmp/galactic-chrome-nss-certificates /tmp/galactic-chrome-home
   cd /workspace
   node --input-type=module -e '\''
     import { chromium } from "playwright";

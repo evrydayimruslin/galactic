@@ -142,7 +142,7 @@ describe("developer-v1 image contract", () => {
     });
   });
 
-  it("installs the runtime interception CA through mandatory Chrome policy", () => {
+  it("installs the runtime interception CA in every browser trust store", () => {
     const dockerfile = fixture("Dockerfile");
     const entrypoint = fixture("entrypoint.sh");
     const policyInstaller = fixture("configure-chrome-ca-policy.mjs");
@@ -158,6 +158,15 @@ describe("developer-v1 image contract", () => {
       "/etc/cloudflare/certs/cloudflare-containers-ca.crt",
     );
     expect(entrypoint).toContain("configure-chrome-ca-policy.mjs");
+    expect(entrypoint).toContain(
+      "/usr/local/share/ca-certificates/cloudflare-containers-ca.crt",
+    );
+    expect(entrypoint).toContain("update-ca-certificates");
+    expect(entrypoint).toContain(
+      "/tmp/galactic-home/.local/share/pki/nssdb",
+    );
+    expect(entrypoint).toContain('certutil -N --empty-password');
+    expect(entrypoint).toContain('-t "C,,"');
     expect(policyInstaller).toContain("CACertificates");
     expect(policyInstaller).toContain("new X509Certificate(der)");
     expect(policyInstaller).toContain("certificate.ca");
@@ -166,6 +175,7 @@ describe("developer-v1 image contract", () => {
     expect(dockerfile).toContain(
       "COPY compute-worker/images/standard/configure-chrome-ca-policy.mjs",
     );
+    expect(dockerfile).toContain("ca-certificates libnss3-tools");
     expect(inputHasher).toContain(
       "compute-worker/images/standard/configure-chrome-ca-policy.mjs",
     );

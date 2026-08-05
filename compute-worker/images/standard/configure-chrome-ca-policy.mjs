@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   statSync,
@@ -115,18 +116,58 @@ function writePolicy(policyFile, certificates) {
   }
 }
 
-function main() {
-  const [, , caFile, policyFile] = process.argv;
-  if (!caFile || !policyFile || process.argv.length !== 4) {
-    fail("usage: configure-chrome-ca-policy.mjs CA_FILE POLICY_FILE");
+function writeNssCertificates(certificateDirectory, certificates) {
+  if (!isAbsolute(certificateDirectory)) {
+    fail("Chrome NSS certificate directory must be absolute");
   }
-  writePolicy(policyFile, readCertificates(caFile));
+  const previousUmask = process.umask(0o077);
+  try {
+    mkdirSync(certificateDirectory, { recursive: true, mode: 0o700 });
+  } finally {
+    process.umask(previousUmask);
+  }
+  chmodSync(certificateDirectory, 0o700);
+  if (readdirSync(certificateDirectory).length !== 0) {
+    fail("Chrome NSS certificate directory must be empty");
+  }
+  certificates.forEach((certificate, index) => {
+    const lines = certificate.match(/.{1,64}/gu);
+    if (!lines) fail("Chrome NSS certificate encoding is empty");
+    const certificateFile = join(
+      certificateDirectory,
+      `ca-${String(index + 1).padStart(2, "0")}.crt`,
+    );
+    writeFileSync(
+      certificateFile,
+      `-----BEGIN CERTIFICATE-----\n${lines.join("\n")}\n-----END CERTIFICATE-----\n`,
+      { encoding: "utf8", flag: "wx", mode: 0o400 },
+    );
+    chmodSync(certificateFile, 0o400);
+  });
+}
+
+function main() {
+  const [, , caFile, policyFile, nssCertificateDirectory] = process.argv;
+  if (
+    !caFile || !policyFile ||
+    !(process.argv.length === 4 ||
+      process.argv.length === 5 && nssCertificateDirectory)
+  ) {
+    fail(
+      "usage: configure-chrome-ca-policy.mjs CA_FILE POLICY_FILE [NSS_CERTIFICATE_DIRECTORY]",
+    );
+  }
+  const certificates = readCertificates(caFile);
+  writePolicy(policyFile, certificates);
+  if (nssCertificateDirectory) {
+    writeNssCertificates(nssCertificateDirectory, certificates);
+  }
 }
 
 try {
   main();
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
-  console.error(`Chrome CA policy configuration failed: ${message}`);
+  console.error(`Chrome CA trust configuration failed: ${message}`);
   process.exitCode = 1;
 }

@@ -249,7 +249,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
       bash build-essential cmake pkg-config \
       git openssh-client rsync \
-      curl wget ca-certificates dnsutils netcat-openbsd \
+      curl wget ca-certificates libnss3-tools dnsutils netcat-openbsd \
       jq ripgrep sqlite3 \
       postgresql-client default-mysql-client redis-tools \
       ffmpeg imagemagick \

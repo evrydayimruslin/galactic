@@ -29,8 +29,13 @@ function temporaryRoot() {
   return root;
 }
 
-function runInstaller(caFile, policyFile) {
-  return spawnSync(process.execPath, [installer, caFile, policyFile], {
+function runInstaller(caFile, policyFile, nssCertificateDirectory) {
+  return spawnSync(process.execPath, [
+    installer,
+    caFile,
+    policyFile,
+    ...(nssCertificateDirectory ? [nssCertificateDirectory] : []),
+  ], {
     encoding: "utf8",
   });
 }
@@ -50,12 +55,17 @@ describe("Chrome for Testing CA policy installer", () => {
     const root = temporaryRoot();
     const caFile = join(root, "cloudflare-ca.crt");
     const policyFile = join(root, "policies", "managed", "galactic-ca.json");
+    const nssCertificateDirectory = join(root, "nss-certificates");
     writeFileSync(
       caFile,
       `${rootCertificates[0]}\n${rootCertificates[0]}\n${rootCertificates[1]}\n`,
     );
 
-    const result = runInstaller(caFile, policyFile);
+    const result = runInstaller(
+      caFile,
+      policyFile,
+      nssCertificateDirectory,
+    );
     expect(result.status, result.stderr).toBe(0);
 
     const policy = JSON.parse(readFileSync(policyFile, "utf8"));
@@ -70,6 +80,18 @@ describe("Chrome for Testing CA policy installer", () => {
     expect(readdirSync(join(root, "policies", "managed"))).toEqual([
       "galactic-ca.json",
     ]);
+    expect(readdirSync(nssCertificateDirectory)).toEqual([
+      "ca-01.crt",
+      "ca-02.crt",
+    ]);
+    expect(new X509Certificate(
+      readFileSync(join(nssCertificateDirectory, "ca-01.crt")),
+    ).raw.equals(new X509Certificate(rootCertificates[0]).raw)).toBe(true);
+    expect(new X509Certificate(
+      readFileSync(join(nssCertificateDirectory, "ca-02.crt")),
+    ).raw.equals(new X509Certificate(rootCertificates[1]).raw)).toBe(true);
+    expect(mode(nssCertificateDirectory)).toBe(0o700);
+    expect(mode(join(nssCertificateDirectory, "ca-01.crt"))).toBe(0o400);
   });
 
   it("fails closed without replacing the last valid policy", () => {
