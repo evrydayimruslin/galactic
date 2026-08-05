@@ -1,10 +1,10 @@
 name: Compute Worker Refresh
 
-# Deploy reviewed Compute Worker code against a previously certified immutable
-# Container digest. This workflow never builds or updates a Container, changes
-# the API, enables admission, or mutates queues, buckets, schema, or secrets.
-# Its evidence is consumed by compute-canary-rollout.yml when Worker code has
-# advanced beyond the image-certifying Compute Deploy run.
+# Deploy or attest reviewed Compute Worker code against a previously certified
+# immutable Container digest. This workflow never builds or updates a Container,
+# changes the API, enables admission, or mutates queues, buckets, schema, or
+# secrets. Its evidence is consumed by compute-canary-rollout.yml when the
+# rollout source has advanced beyond the image-certifying Compute Deploy run.
 on:
   workflow_dispatch:
     inputs:
@@ -133,7 +133,7 @@ jobs:
             --arg git_sha "$GITHUB_SHA" \
             --arg git_ref "$GITHUB_REF" '
               {
-                schema_version: 2,
+                schema_version: 3,
                 kind: "galactic_compute_worker_refresh_request",
                 target: $target,
                 confirmation: $confirmation,
@@ -506,6 +506,7 @@ jobs:
             echo "- Image digest retained: $ENVIRONMENT_DIGEST"
             echo "- Prior Compute version: $(jq -r '.before.compute_version_id' "$EVIDENCE_DIR/refresh.json")"
             echo "- Refreshed Compute version: $(jq -r '.after.compute_version_id' "$EVIDENCE_DIR/refresh.json")"
+            echo "- Worker transition: $(jq -r '.worker_transition // "code_update"' "$EVIDENCE_DIR/refresh.json")"
             echo "- Admission remained OFF."
             echo "- API, Container application/image, queues, buckets, schema, and secrets were unchanged."
           } >> "$GITHUB_STEP_SUMMARY"

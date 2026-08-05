@@ -156,6 +156,8 @@ test("every OFF transition waits only for the exact enabled predecessor", () => 
 test("Worker refresh reuses the certified digest and fails back to this dispatch's version", () => {
   assert.match(workerRefreshWorkflow, /compute_release_run_id:/u);
   assert.match(workerRefreshWorkflow, /predecessor_worker_refresh_run_id:/u);
+  assert.match(workerRefreshWorkflow, /schema_version: 3/u);
+  assert.match(workerRefreshWorkflow, /worker_transition/u);
   assert.match(
     workerRefreshWorkflow,
     /group: api-\$\{\{ inputs\.target \}\}-deploy/u,
