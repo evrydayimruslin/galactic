@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -436,6 +437,17 @@ describe("Compute release supply-chain contract", () => {
     expect(manifest).toContain(
       "compute-worker/images/standard/python/requirements.lock",
     );
+    for (const cve of ["11940", "11972", "15308"]) {
+      expect(manifest).toContain(
+        `compute-worker/images/standard/python/patches/cve-2026-${cve}.patch`,
+      );
+    }
+    expect(fixture("Dockerfile")).not.toContain(
+      "github.com/python/cpython/commit/",
+    );
+    expect(fixture("Dockerfile").match(/patch --batch --fuzz=0/g)).toHaveLength(
+      3,
+    );
   });
 
   it("limits VEX to the three exact tested CPython backports", () => {
@@ -451,27 +463,32 @@ describe("Compute release supply-chain contract", () => {
         "CVE-2026-11972",
         [
           "3f031d431f80668e14f3bc066bbf4369cd9281b9",
-          "240177f6a8e0e328773cb775add1f2cfe9128e67d461a9ba728fbb3cbbe89086",
+          "4d7ccbe21433911d9fccbb73fbe02b6767f3968837e117dbd4a2361ab23d7df2",
         ],
       ],
       [
         "CVE-2026-11940",
         [
           "771d12dda5140313db0ac550292987975651bbde",
-          "f74e92f1eb84a91b3efc144660d9e59162d81a922bb9ecccb2e64b832c91d387",
+          "164d2fa4eda5d9ba9084b30940bf81359523e1d1d8e6b0ff753a17fb9c308eac",
         ],
       ],
       [
         "CVE-2026-15308",
         [
           "7933f4bf7131aa4140750f9404f5de0aa2969ced",
-          "d8913b46e769704d0e810994909ee81c8af6aaa7230b79ff4c0d849fe1f305a4",
+          "1468bb09b06e351b2ed9212f9a068a8f7a988f84dd1bc0021233f85cf05693d4",
         ],
       ],
     ]);
     for (const statement of vex.statements) {
       const [commit, patchSha] = expected.get(statement.vulnerability.name) ?? [];
       expect(commit).toBeTruthy();
+      const patch = fixture(
+        `python/patches/${statement.vulnerability.name.toLowerCase()}.patch`,
+      );
+      expect(createHash("sha256").update(patch).digest("hex")).toBe(patchSha);
+      expect(fixture("Dockerfile")).toContain(patchSha);
       expect(statement.products).toEqual([
         { "@id": "pkg:generic/python@3.13.14" },
       ]);

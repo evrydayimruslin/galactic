@@ -1,10 +1,10 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "https://github.com/evrydayimruslin/galactic/security/openvex/cpython-3.13.14-security-backports/v1",
+  "@id": "https://github.com/evrydayimruslin/galactic/security/openvex/cpython-3.13.14-security-backports/v2",
   "author": "https://github.com/evrydayimruslin/galactic",
   "role": "Document Creator",
-  "timestamp": "2026-07-20T18:34:20Z",
-  "version": 1,
+  "timestamp": "2026-08-05T09:27:17Z",
+  "version": 2,
   "statements": [
     {
       "vulnerability": {
@@ -16,7 +16,7 @@
         }
       ],
       "status": "fixed",
-      "status_notes": "CPython 3.13.14 in this image has upstream CPython 3.13 backport commit 3f031d431f80668e14f3bc066bbf4369cd9281b9 applied; the build verifies patch SHA-256 240177f6a8e0e328773cb775add1f2cfe9128e67d461a9ba728fbb3cbbe89086 before compilation and runs the upstream tarfile regression suite."
+      "status_notes": "CPython 3.13.14 in this image has the vendored unified diff from upstream CPython 3.13 backport commit 3f031d431f80668e14f3bc066bbf4369cd9281b9 applied; the build verifies patch SHA-256 4d7ccbe21433911d9fccbb73fbe02b6767f3968837e117dbd4a2361ab23d7df2 before compilation and runs the upstream tarfile regression suite."
     },
     {
       "vulnerability": {
@@ -28,7 +28,7 @@
         }
       ],
       "status": "fixed",
-      "status_notes": "CPython 3.13.14 in this image has upstream CPython 3.13 backport commit 771d12dda5140313db0ac550292987975651bbde applied; the build verifies patch SHA-256 f74e92f1eb84a91b3efc144660d9e59162d81a922bb9ecccb2e64b832c91d387 before compilation and runs the upstream tarfile regression suite."
+      "status_notes": "CPython 3.13.14 in this image has the vendored unified diff from upstream CPython 3.13 backport commit 771d12dda5140313db0ac550292987975651bbde applied; the build verifies patch SHA-256 164d2fa4eda5d9ba9084b30940bf81359523e1d1d8e6b0ff753a17fb9c308eac before compilation and runs the upstream tarfile regression suite."
     },
     {
       "vulnerability": {
@@ -40,7 +40,7 @@
         }
       ],
       "status": "fixed",
-      "status_notes": "CPython 3.13.14 in this image has upstream CPython 3.13 backport commit 7933f4bf7131aa4140750f9404f5de0aa2969ced applied; the build verifies patch SHA-256 d8913b46e769704d0e810994909ee81c8af6aaa7230b79ff4c0d849fe1f305a4 before compilation and runs the upstream HTMLParser regression suite."
+      "status_notes": "CPython 3.13.14 in this image has the vendored unified diff from upstream CPython 3.13 backport commit 7933f4bf7131aa4140750f9404f5de0aa2969ced applied; the build verifies patch SHA-256 1468bb09b06e351b2ed9212f9a068a8f7a988f84dd1bc0021233f85cf05693d4 before compilation and runs the upstream HTMLParser regression suite."
     }
   ]
 }

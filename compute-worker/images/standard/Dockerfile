@@ -117,6 +117,13 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM ${SANDBOX_BASE_IMAGE} AS python-runtime
 ARG PYTHON_VERSION=3.13.14
 COPY compute-worker/images/standard/python/requirements.lock /tmp/python-requirements.lock
+# Vendored as exact unified diffs from these immutable upstream commits. GitHub's
+# generated .patch representation is not an immutable artifact and must not be
+# fetched during a release build:
+# CVE-2026-11972: 3f031d431f80668e14f3bc066bbf4369cd9281b9
+# CVE-2026-11940: 771d12dda5140313db0ac550292987975651bbde
+# CVE-2026-15308: 7933f4bf7131aa4140750f9404f5de0aa2969ced
+COPY compute-worker/images/standard/python/patches /tmp/python-security-patches
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
@@ -131,20 +138,14 @@ RUN set -eux; \
     curl -fsSL -o /tmp/Python.tar.xz \
       "https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tar.xz"; \
     echo '639e43243c620a308f968213df9e00f2f8f62332f7adbaa7a7eeb9783057c690  /tmp/Python.tar.xz' | sha256sum -c -; \
-    curl -fsSL -o /tmp/cpython-cve-2026-11972.patch \
-      'https://github.com/python/cpython/commit/3f031d431f80668e14f3bc066bbf4369cd9281b9.patch'; \
-    echo '240177f6a8e0e328773cb775add1f2cfe9128e67d461a9ba728fbb3cbbe89086  /tmp/cpython-cve-2026-11972.patch' | sha256sum -c -; \
-    curl -fsSL -o /tmp/cpython-cve-2026-11940.patch \
-      'https://github.com/python/cpython/commit/771d12dda5140313db0ac550292987975651bbde.patch'; \
-    echo 'f74e92f1eb84a91b3efc144660d9e59162d81a922bb9ecccb2e64b832c91d387  /tmp/cpython-cve-2026-11940.patch' | sha256sum -c -; \
-    curl -fsSL -o /tmp/cpython-cve-2026-15308.patch \
-      'https://github.com/python/cpython/commit/7933f4bf7131aa4140750f9404f5de0aa2969ced.patch'; \
-    echo 'd8913b46e769704d0e810994909ee81c8af6aaa7230b79ff4c0d849fe1f305a4  /tmp/cpython-cve-2026-15308.patch' | sha256sum -c -; \
+    echo '4d7ccbe21433911d9fccbb73fbe02b6767f3968837e117dbd4a2361ab23d7df2  /tmp/python-security-patches/cve-2026-11972.patch' | sha256sum -c -; \
+    echo '164d2fa4eda5d9ba9084b30940bf81359523e1d1d8e6b0ff753a17fb9c308eac  /tmp/python-security-patches/cve-2026-11940.patch' | sha256sum -c -; \
+    echo '1468bb09b06e351b2ed9212f9a068a8f7a988f84dd1bc0021233f85cf05693d4  /tmp/python-security-patches/cve-2026-15308.patch' | sha256sum -c -; \
     mkdir -p /tmp/python-source; \
     tar -xJf /tmp/Python.tar.xz --strip-components=1 -C /tmp/python-source; \
-    patch -d /tmp/python-source -p1 < /tmp/cpython-cve-2026-11972.patch; \
-    patch -d /tmp/python-source -p1 < /tmp/cpython-cve-2026-11940.patch; \
-    patch -d /tmp/python-source -p1 < /tmp/cpython-cve-2026-15308.patch; \
+    patch --batch --fuzz=0 -d /tmp/python-source -p1 < /tmp/python-security-patches/cve-2026-11972.patch; \
+    patch --batch --fuzz=0 -d /tmp/python-source -p1 < /tmp/python-security-patches/cve-2026-11940.patch; \
+    patch --batch --fuzz=0 -d /tmp/python-source -p1 < /tmp/python-security-patches/cve-2026-15308.patch; \
     cd /tmp/python-source; \
     LDFLAGS='-Wl,-rpath=/usr/local/python/lib' ./configure \
       --prefix=/usr/local/python \
@@ -164,9 +165,7 @@ RUN set -eux; \
     /usr/local/python/bin/python3 -c 'import html.parser, IPython, matplotlib, numpy, pandas, psutil; assert hasattr(html.parser.HTMLParser(), "_pending")'; \
     test "$(/usr/local/python/bin/python3 --version)" = "Python ${PYTHON_VERSION}"; \
     rm -rf /tmp/python-source /tmp/Python.tar.xz \
-      /tmp/cpython-cve-2026-11972.patch \
-      /tmp/cpython-cve-2026-11940.patch \
-      /tmp/cpython-cve-2026-15308.patch \
+      /tmp/python-security-patches \
       /tmp/python-requirements.lock
 
 FROM ${SANDBOX_BASE_IMAGE}
