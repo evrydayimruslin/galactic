@@ -112,7 +112,6 @@ describe("warm theme design contracts", () => {
     );
   });
 
-
   it("aligns the Settings panel with the hero text inset", () => {
     expect(css).toContain(".neb-hero { padding: 8px 6px 44px; }");
     expect(css).toMatch(
