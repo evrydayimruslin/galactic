@@ -16,6 +16,8 @@ const RELEASE_TAG = /^v[0-9A-Za-z][0-9A-Za-z._-]*$/u;
 const BASE_IMAGE = /^docker\.io\/cloudflare\/sandbox:0\.12\.3-python@sha256:[0-9a-f]{64}$/u;
 const MIGRATION_LINE = /^([0-9a-f]{64})\x20{2}(supabase\/migrations\/[0-9A-Za-z._-]+\.sql)$/u;
 const RETENTION_MIGRATION = 'supabase/migrations/20260720124000_compute_artifact_retention.sql';
+const UTC_TIMESTAMP =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/u;
 const RELEASE_KEYS = [
   'active_api',
   'active_compute_worker',
@@ -107,12 +109,14 @@ function hashBytes(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
+function isCanonicalUtcTimestamp(value) {
+  return typeof value === 'string' &&
+    UTC_TIMESTAMP.test(value) &&
+    Number.isFinite(Date.parse(value));
+}
+
 function verifyTimestamp(value, label) {
-  if (
-    typeof value !== 'string' ||
-    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(value) ||
-    !Number.isFinite(Date.parse(value))
-  ) {
+  if (!isCanonicalUtcTimestamp(value)) {
     fail(`${label} is not a canonical UTC timestamp`);
   }
 }
@@ -210,6 +214,7 @@ function apiBindings(target, digest, { certificationPrincipal = true } = {}) {
     expectedBinding('service', 'COMPUTE_PLANE', {
       service: target.computeWorker,
       entrypoint: 'ComputePlane',
+      environment: 'production',
     }),
     expectedBinding('queue', 'COMPUTE_QUEUE', {
       queue_name: target.computeQueue,
@@ -246,6 +251,7 @@ function computeBindings(target, digest) {
     expectedBinding('service', 'CONTROL_PLANE', {
       service: target.apiWorker,
       entrypoint: 'ComputeControlPlane',
+      environment: 'production',
     }),
     expectedBinding('r2_bucket', 'COMPUTE_ARTIFACTS', {
       bucket_name: target.artifactBucket,
@@ -894,10 +900,7 @@ function verifyImageEvidence({ evidenceDirectory, release, target }) {
       String(container.version).length === 0) ||
     !(
       container.updated_at === null ||
-      (typeof container.updated_at === 'string' &&
-        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(
-          container.updated_at,
-        ) && Number.isFinite(Date.parse(container.updated_at)))
+      isCanonicalUtcTimestamp(container.updated_at)
     )
   ) {
     fail('container readiness does not prove the exact deployed image');
