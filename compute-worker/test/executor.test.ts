@@ -88,6 +88,7 @@ interface SessionOptions {
   writeError?: { path: string; message: string };
   captureKind?: "missing" | "unsafe" | "file" | "directory";
   captureSize?: number;
+  rawCaptureSize?: number;
   dieAfterUserExec?: boolean;
   terminateCaptureSessionOnExit?: boolean;
   onCaptureInspect?: (command: string) => void;
@@ -103,6 +104,26 @@ function makeSession(
   id = `lease-${RUN_ID}`,
 ): ComputeExecutionSession {
   let userExecFinished = false;
+  const readFile = (async (
+    path: string,
+    readOptions?: { encoding?: "utf-8" | "utf8" | "base64" | "none" },
+  ) => {
+    if (readOptions?.encoding === "none") {
+      events.push("read:raw");
+      const bytes = options.captureSize ?? 0;
+      return {
+        content: new ReadableStream<Uint8Array>({
+          start(controller) {
+            if (bytes > 0) controller.enqueue(new Uint8Array(bytes));
+            controller.close();
+          },
+        }),
+        size: options.rawCaptureSize ?? bytes,
+        mimeType: "application/octet-stream",
+      };
+    }
+    return { content: files.get(path) ?? "" };
+  }) as ComputeExecutionSession["readFile"];
   return {
     id,
     async mkdir(path) {
@@ -190,18 +211,7 @@ function makeSession(
       }
       return { success: true, exitCode: 0, stdout: "", stderr: "" };
     },
-    async readFile(path) {
-      return { content: files.get(path) ?? "" };
-    },
-    async readFileStream() {
-      const bytes = options.captureSize ?? 0;
-      return new ReadableStream<Uint8Array>({
-        start(controller) {
-          if (bytes > 0) controller.enqueue(new Uint8Array(bytes));
-          controller.close();
-        },
-      });
-    },
+    readFile,
   };
 }
 
@@ -1123,6 +1133,7 @@ describe("compute executor lifecycle", () => {
     expect(harness.puts).toHaveLength(1);
     expect(harness.puts[0]?.options?.sha256).toBe("a".repeat(64));
     expect(harness.fixedLengthStreamLengths).toEqual([2]);
+    expect(harness.events).toContain("read:raw");
     expect(harness.puts[0]).toMatchObject({
       fixedLength: 2,
       uploadedBytes: 2,
@@ -1185,6 +1196,31 @@ describe("compute executor lifecycle", () => {
     expect(harness.events.indexOf("sandbox:destroy")).toBeLessThan(
       harness.events.indexOf("control:fail"),
     );
+  });
+
+  it("rejects a raw RPC file whose source-side size changed after stat", async () => {
+    const harness = makeHarness({
+      run: { capture_paths: ["reports/result.bin"] },
+      session: {
+        captureKind: "file",
+        captureSize: 2,
+        rawCaptureSize: 3,
+      },
+    });
+    const receipt = await executeComputeRun(
+      harness.env,
+      { version: 1, run_id: RUN_ID },
+      harness.dependencies,
+    );
+    expect(receipt?.status).toBe("failed");
+    expect(harness.events).toContain("read:raw");
+    expect(harness.puts).toHaveLength(0);
+    expect(harness.fixedLengthStreamLengths).toHaveLength(0);
+    const failure = harness.requests.find((request) => request.operation === "fail");
+    expect(failure?.body).toMatchObject({
+      code: "artifact_error",
+      message: "artifact changed while uploading",
+    });
   });
 });
 

@@ -819,10 +819,19 @@ async function captureOutputs(
       throw new Error("output artifact reservation is not writable");
     }
     try {
+      // readFileStream() is an SSE-framed compatibility API. Compute pins the
+      // Sandbox RPC transport, whose encoding:none overload returns the raw
+      // file body and its source-side size without framing or base64 overhead.
+      const raw = await session.readFile(uploadPath, { encoding: "none" });
+      if (!Number.isSafeInteger(raw.size) || raw.size !== size) {
+        await raw.content.cancel("artifact changed while uploading")
+          .catch(() => undefined);
+        throw new Error("artifact changed while uploading");
+      }
       await putBoundedArtifact(
         env.COMPUTE_ARTIFACTS,
         objectKey,
-        await session.readFileStream(uploadPath),
+        raw.content,
         size,
         perArtifactLimit,
         {

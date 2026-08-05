@@ -191,9 +191,16 @@ export interface ComputeExecutionSession {
   ): Promise<unknown>;
   readFile(
     path: string,
+    options: { encoding: "none" },
+  ): Promise<{
+    content: ReadableStream<Uint8Array>;
+    size: number;
+    mimeType?: string;
+  }>;
+  readFile(
+    path: string,
     options?: { encoding?: "utf-8" | "utf8" | "base64" },
   ): Promise<{ content: string; size?: number }>;
-  readFileStream(path: string): Promise<ReadableStream<Uint8Array>>;
   mkdir(path: string, options?: { recursive?: boolean }): Promise<unknown>;
 }
 
