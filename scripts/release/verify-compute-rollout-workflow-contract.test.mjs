@@ -97,13 +97,15 @@ test("post-promotion latch verification pins and stabilizes the exact candidate"
   );
   assert.match(step, /Cloudflare-Workers-Version-Overrides/u);
   assert.match(step, /for attempt in \{1\.\.12\}/u);
+  assert.match(step, /for attempt in \{1\.\.36\}/u);
   assert.match(step, /consecutive=0/u);
-  assert.match(step, /\[ "\$consecutive" -ge 3 \]/u);
+  assert.match(step, /\[ "\$consecutive" -ge 12 \]/u);
   assert.match(step, /\$\{status_file%\.json\}-attempt-/u);
   assert.match(step, /"\$attempt_file" enabled clear/u);
   assert.match(step, /"\$attempt_file" disabled clear/u);
   assert.match(step, /if \[ "\$attempt" -lt 12 \]; then\n\s+sleep 5/u);
   assert.match(step, /"\$status_file" enabled clear/u);
+  assert.match(step, /"\$CANDIDATE_API_VERSION_ID"/u);
   assert.doesNotMatch(step, /sleep (?:[6-9]|[1-9][0-9])/u);
 });
 

@@ -21,6 +21,14 @@ export interface ComputePlaneBinding {
 }
 
 export interface Env {
+  // Cloudflare-owned immutable identity for the exact Worker version serving
+  // this invocation. Rollout probes use it to reject stale edge routing.
+  CF_VERSION_METADATA?: {
+    id: string;
+    tag: string;
+    timestamp: string;
+  };
+
   // KV namespaces
   CODE_CACHE: KVNamespace;
   FN_INDEX: KVNamespace;

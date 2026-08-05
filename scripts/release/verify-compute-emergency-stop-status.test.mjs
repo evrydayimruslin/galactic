@@ -11,9 +11,11 @@ const OTHER_OPERATION_ID = "22222222-2222-4222-8222-222222222222";
 const CUTOFF_AT = "2026-07-20T12:00:00.000Z";
 const CREATED_AT = "2026-07-20T11:59:59.000Z";
 const UPDATED_AT = "2026-07-20T12:01:00.000Z";
+const WORKER_VERSION_ID = "12345678-1234-1234-1234-123456789abc";
 
 const clearAndDisabled = {
   schema_version: 1,
+  worker_version_id: WORKER_VERSION_ID,
   admission_state: "disabled",
   latch_state: "clear",
   operation_id: null,
@@ -29,6 +31,7 @@ const clearAndDisabled = {
 function operationStatus(latch_state, overrides = {}) {
   return {
     schema_version: 1,
+    worker_version_id: WORKER_VERSION_ID,
     admission_state: "disabled",
     latch_state,
     operation_id: OPERATION_ID,
@@ -55,6 +58,7 @@ test("accepts the exact sanitized clear preflight state", () => {
       admissionState: "disabled",
       latchState: "clear",
       operationId: null,
+      workerVersionId: WORKER_VERSION_ID,
     },
   );
 });
@@ -73,9 +77,52 @@ test("accepts active and completed operation projections with exact identity", (
         admissionState: "disabled",
         latchState,
         operationId: OPERATION_ID,
+        workerVersionId: WORKER_VERSION_ID,
       },
     );
   }
+});
+
+test("binds a rollout preflight to the exact serving Worker version", () => {
+  assert.equal(
+    verifyComputeEmergencyStopStatus({
+      status: clearAndDisabled,
+      expectedAdmissionState: "disabled",
+      expectedLatchState: "clear",
+      expectedWorkerVersionId: WORKER_VERSION_ID,
+    }).workerVersionId,
+    WORKER_VERSION_ID,
+  );
+  assert.throws(
+    () => verifyComputeEmergencyStopStatus({
+      status: { ...clearAndDisabled, worker_version_id: null },
+      expectedAdmissionState: "disabled",
+      expectedLatchState: "clear",
+      expectedWorkerVersionId: WORKER_VERSION_ID,
+    }),
+    /expected Worker version/u,
+  );
+});
+
+test("accepts the exact legacy projection only when no Worker version is expected", () => {
+  const { worker_version_id: _omitted, ...legacy } = clearAndDisabled;
+  assert.equal(
+    verifyComputeEmergencyStopStatus({
+      status: legacy,
+      expectedAdmissionState: "disabled",
+      expectedLatchState: "clear",
+    }).workerVersionId,
+    null,
+  );
+  assert.throws(
+    () => verifyComputeEmergencyStopStatus({
+      status: legacy,
+      expectedAdmissionState: "disabled",
+      expectedLatchState: "clear",
+      expectedWorkerVersionId: WORKER_VERSION_ID,
+    }),
+    /expected Worker version/u,
+  );
 });
 
 test("accepts every canonical admission state when explicitly expected", () => {

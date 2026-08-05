@@ -7,6 +7,7 @@ export const COMPUTE_CERTIFICATION_API_VERSION_ID_ENV =
   "COMPUTE_CERTIFICATION_API_VERSION_ID";
 export const CLOUDFLARE_WORKERS_VERSION_OVERRIDES_HEADER =
   "Cloudflare-Workers-Version-Overrides";
+export const GALACTIC_WORKER_VERSION_HEADER = "X-Galactic-Worker-Version";
 
 export function cloudflareWorkerVersionId(value) {
   const version = String(value ?? "").trim();

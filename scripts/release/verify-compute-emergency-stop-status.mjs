@@ -9,7 +9,9 @@ const ADMISSION_STATES = new Set(["enabled", "disabled", "invalid"]);
 const LATCH_STATES = new Set(["clear", "active", "completed"]);
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
-const RESPONSE_KEYS = [
+const WORKER_VERSION_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const LEGACY_RESPONSE_KEYS = [
   "admission_state",
   "completed_at",
   "created_at",
@@ -22,6 +24,10 @@ const RESPONSE_KEYS = [
   "terminalized_count",
   "updated_at",
 ];
+const RESPONSE_KEYS = [
+  ...LEGACY_RESPONSE_KEYS,
+  "worker_version_id",
+].sort();
 const RELEASE_RESPONSE_KEYS = [
   "operation_id",
   "replayed",
@@ -61,6 +67,7 @@ export function verifyComputeEmergencyStopStatus({
   expectedAdmissionState,
   expectedLatchState,
   expectedOperationId = null,
+  expectedWorkerVersionId = null,
 }) {
   if (!ADMISSION_STATES.has(expectedAdmissionState)) {
     fail(
@@ -73,18 +80,44 @@ export function verifyComputeEmergencyStopStatus({
   if (expectedOperationId !== null && !UUID.test(expectedOperationId)) {
     fail("expected operation id is malformed");
   }
+  if (
+    expectedWorkerVersionId !== null &&
+    !WORKER_VERSION_ID.test(expectedWorkerVersionId)
+  ) {
+    fail("expected Worker version id is malformed");
+  }
   if (!status || typeof status !== "object" || Array.isArray(status)) {
     fail("response is not an object");
   }
   const keys = Object.keys(status).sort();
-  if (
-    keys.length !== RESPONSE_KEYS.length ||
-    keys.some((key, index) => key !== RESPONSE_KEYS[index])
-  ) {
+  const hasVersionMetadata =
+    keys.length === RESPONSE_KEYS.length &&
+    keys.every((key, index) => key === RESPONSE_KEYS[index]);
+  const isLegacySchema =
+    keys.length === LEGACY_RESPONSE_KEYS.length &&
+    keys.every((key, index) => key === LEGACY_RESPONSE_KEYS[index]);
+  if (!hasVersionMetadata && !isLegacySchema) {
     fail("response fields do not match the sanitized schema");
   }
   if (status.schema_version !== 1) {
     fail("schema version is unsupported");
+  }
+  const servedWorkerVersionId = hasVersionMetadata
+    ? status.worker_version_id
+    : null;
+  if (
+    servedWorkerVersionId !== null &&
+    !WORKER_VERSION_ID.test(servedWorkerVersionId)
+  ) {
+    fail("Worker version id is malformed");
+  }
+  if (
+    expectedWorkerVersionId !== null &&
+    servedWorkerVersionId !== expectedWorkerVersionId
+  ) {
+    fail(
+      `expected Worker version ${expectedWorkerVersionId}, received ${String(servedWorkerVersionId)}`,
+    );
   }
   if (!ADMISSION_STATES.has(status.admission_state)) {
     fail("admission state is not canonical");
@@ -170,6 +203,7 @@ export function verifyComputeEmergencyStopStatus({
     admissionState: status.admission_state,
     latchState: status.latch_state,
     operationId: status.operation_id,
+    workerVersionId: servedWorkerVersionId,
   };
 }
 
@@ -247,11 +281,11 @@ function main(argv) {
     );
     return;
   }
-  if (argv.length < 3 || argv.length > 4) {
+  if (argv.length < 3 || argv.length > 5) {
     throw new Error(
       "Usage: verify-compute-emergency-stop-status.mjs " +
         "<status-json> <enabled|disabled|invalid> <clear|active|completed> " +
-        "[expected-operation-id|-]",
+        "[expected-operation-id|-] [expected-worker-version-id|-]",
     );
   }
   const result = verifyComputeEmergencyStopStatus({
@@ -259,6 +293,7 @@ function main(argv) {
     expectedAdmissionState: argv[1],
     expectedLatchState: argv[2],
     expectedOperationId: argv[3] && argv[3] !== "-" ? argv[3] : null,
+    expectedWorkerVersionId: argv[4] && argv[4] !== "-" ? argv[4] : null,
   });
   console.log(
     `${result.admissionState}/${result.latchState}` +

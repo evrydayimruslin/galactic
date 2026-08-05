@@ -21,6 +21,7 @@ const CERTIFICATION_AGENT_ID = "33333333-3333-4333-8333-333333333333";
 const CERTIFICATION_PRINCIPAL =
   `${CERTIFICATION_OWNER_ID}/${CERTIFICATION_AGENT_ID}`;
 const OPERATOR_REFERENCE = `compute-emergency-stop:sha256:${"a".repeat(64)}`;
+const WORKER_VERSION_ID = "12345678-1234-1234-1234-123456789abc";
 const CUTOFF_AT = "2026-07-20T12:00:00.000Z";
 const CREATED_AT = "2026-07-20T11:59:59.000Z";
 const UPDATED_AT = "2026-07-20T12:01:00.000Z";
@@ -287,7 +288,14 @@ Deno.test("request JSON cannot self-assert the emergency audit actor", async () 
 
 Deno.test("admin Compute emergency-stop status is minimal, exact, and private", async () => {
   const response = await handleAdminComputeEmergencyStopStatus({
-    env: { COMPUTE_ENABLED: "0" },
+    env: {
+      COMPUTE_ENABLED: "0",
+      CF_VERSION_METADATA: {
+        id: WORKER_VERSION_ID,
+        tag: "test",
+        timestamp: "2026-08-05T00:00:00.000Z",
+      },
+    },
     readStatus: () => Promise.resolve(completedStatus()),
   });
   assertEquals(response.status, 200);
@@ -297,6 +305,7 @@ Deno.test("admin Compute emergency-stop status is minimal, exact, and private", 
   assertEquals(response.headers.get("X-Content-Type-Options"), "nosniff");
   assertEquals(await response.json(), {
     schema_version: 1,
+    worker_version_id: WORKER_VERSION_ID,
     admission_state: "disabled",
     latch_state: "completed",
     operation_id: OPERATION_ID,
@@ -318,6 +327,7 @@ Deno.test("admin Compute emergency-stop status reports malformed flags without n
   assertEquals(response.status, 200);
   assertEquals(await response.json(), {
     schema_version: 1,
+    worker_version_id: null,
     admission_state: "invalid",
     latch_state: "clear",
     operation_id: null,
@@ -634,6 +644,11 @@ Deno.test("authorized admin Compute emergency-stop status reads the sanitized RP
     COMPUTE_CERTIFICATION_TOKEN: CERTIFICATION_TOKEN,
     COMPUTE_CERTIFICATION_PRINCIPAL: CERTIFICATION_PRINCIPAL,
     COMPUTE_ENABLED: "0",
+    CF_VERSION_METADATA: {
+      id: WORKER_VERSION_ID,
+      tag: "test",
+      timestamp: "2026-08-05T00:00:00.000Z",
+    },
   } as typeof globalThis.__env;
   const paths: string[] = [];
   globalThis.fetch = ((input, init) => {
@@ -679,6 +694,7 @@ Deno.test("authorized admin Compute emergency-stop status reads the sanitized RP
     assertEquals(response.headers.get("Cache-Control"), "private, no-store");
     assertEquals(await response.json(), {
       schema_version: 1,
+      worker_version_id: WORKER_VERSION_ID,
       admission_state: "disabled",
       latch_state: "clear",
       operation_id: null,

@@ -19,6 +19,7 @@ import {
   cloudflareWorkerVersionOverride,
   cloudflareWorkerVersionId,
   COMPUTE_CERTIFICATION_API_VERSION_ID_ENV,
+  GALACTIC_WORKER_VERSION_HEADER,
 } from "./cloudflare-worker-version-override.mjs";
 
 export const COMPUTE_CERTIFICATION_KIND =
@@ -328,6 +329,24 @@ async function boundedBody(response) {
   return output;
 }
 
+export function assertPinnedApiVersionResponse(
+  response,
+  expectedVersionId,
+  { label = "Certification", stage = null } = {},
+) {
+  if (expectedVersionId == null) return;
+  const servedVersionId = response?.headers?.get?.(
+    GALACTIC_WORKER_VERSION_HEADER,
+  ) ?? null;
+  if (servedVersionId !== expectedVersionId) {
+    fail(
+      "API_VERSION_MISMATCH",
+      `${label} was not served by the pinned API version.`,
+      { stage, httpStatus: Number(response?.status) || 0 },
+    );
+  }
+}
+
 async function request({
   context,
   path,
@@ -358,6 +377,15 @@ async function request({
     });
   } catch {
     fail("REQUEST_FAILED", `${label} request failed.`, { stage });
+  }
+  try {
+    assertPinnedApiVersionResponse(response, context.apiVersionId, {
+      label,
+      stage,
+    });
+  } catch (error) {
+    await response?.body?.cancel?.().catch(() => undefined);
+    throw error;
   }
   if (!response?.ok) {
     if (
@@ -1971,11 +1999,13 @@ export async function runComputeCertificationSuite(
   if (profile.target !== null && profile.target !== target.name) {
     fail("INVALID_CONFIGURATION", "Certification profile target is invalid.");
   }
+  let apiVersionId = null;
   let apiVersionOverride = null;
   try {
+    apiVersionId = cloudflareWorkerVersionId(config.apiVersionId);
     apiVersionOverride = cloudflareWorkerVersionOverride(
       target.apiWorker,
-      config.apiVersionId,
+      apiVersionId,
     );
   } catch {
     fail(
@@ -1998,6 +2028,7 @@ export async function runComputeCertificationSuite(
       OWNER_ACCESS_TOKEN_ENV,
     ),
     agentId: canonicalUuid(config.agentId, "certification Agent id"),
+    apiVersionId,
     apiVersionOverride,
     requestTimeoutMs,
     activeRunIds: new Set(),

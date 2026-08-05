@@ -13,6 +13,7 @@ import {
 } from "../services/compute/database.ts";
 import { computeAdmissionFlagState } from "../services/compute/config.ts";
 import { type Env, getEnv } from "../lib/env.ts";
+import { workerVersionId } from "../services/worker-version-metadata.ts";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -52,7 +53,7 @@ function privateResponse(response: Response): Response {
 
 export async function handleAdminComputeEmergencyStopStatus(
   deps: {
-    env?: Pick<Partial<Env>, "COMPUTE_ENABLED">;
+    env?: Pick<Partial<Env>, "COMPUTE_ENABLED" | "CF_VERSION_METADATA">;
     database?: ComputeDatabaseDeps;
     readStatus?: () => Promise<ComputeEmergencyStopStatus>;
   } = {},
@@ -62,6 +63,7 @@ export async function handleAdminComputeEmergencyStopStatus(
       (() => getComputeEmergencyStopStatus(deps.database ?? {})))();
     return privateResponse(json({
       schema_version: status.schemaVersion,
+      worker_version_id: workerVersionId(deps.env ?? getEnv()),
       admission_state: computeAdmissionFlagState(deps.env ?? getEnv()),
       latch_state: status.latchState,
       operation_id: status.operationId,

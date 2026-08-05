@@ -46,6 +46,7 @@ import {
   createComputePlaneBodyDestroyer,
 } from "../services/compute-launch-service.ts";
 import { cleanupExpiredStagedBundleStorage } from "../services/staged-bundle-quota.ts";
+import { applyWorkerVersionResponseHeader } from "../services/worker-version-metadata.ts";
 
 // RPC entrypoints exposed through ctx.exports for dynamic worker bindings.
 export { DatabaseBinding } from "./bindings/database-binding.ts";
@@ -64,10 +65,10 @@ export {
   TestAppCallBinding,
   TestAppDataBinding,
   TestComputeBinding,
+  TestConceptsBinding,
   TestCredentialBinding,
   TestEmbedBinding,
   TestEventsBinding,
-  TestConceptsBinding,
   TestKnowledgeBinding,
   TestMemoryBinding,
   TestNetworkBinding,
@@ -152,6 +153,7 @@ export default {
               ...standardHeaders,
             });
             applyCorsHeaders(headers, request);
+            applyWorkerVersionResponseHeader(headers, request, env);
             return headers;
           })(),
         },
@@ -167,6 +169,7 @@ export default {
       for (const [key, value] of Object.entries(standardHeaders)) {
         response.headers.set(key, value);
       }
+      applyWorkerVersionResponseHeader(response.headers, request, env);
       return response;
     }
 
@@ -185,6 +188,7 @@ export default {
       if (!isHttpRoute) {
         applyCorsHeaders(response.headers, request);
       }
+      applyWorkerVersionResponseHeader(response.headers, request, env);
 
       return response;
     } catch (err) {
@@ -205,6 +209,7 @@ export default {
               ...standardHeaders,
             });
             applyCorsHeaders(headers, request);
+            applyWorkerVersionResponseHeader(headers, request, env);
             return headers;
           })(),
         },
