@@ -61,7 +61,6 @@ if (normalizedOutput === baselineOutput) {
 }
 
 console.error('API typecheck output changed from the committed baseline.');
-console.error(normalizedOutput);
 console.error(`Current error count: ${countErrors(normalizedOutput)}.`);
 console.error('Run `npm run typecheck:full` to inspect the raw output.');
 console.error('If the new output is intentional, refresh the baseline with `npm run typecheck:update-baseline`.');
