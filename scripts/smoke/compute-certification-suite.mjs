@@ -132,6 +132,8 @@ const DEFAULT_SCENARIO_TIMEOUT_MS = 20 * 60 * 1_000;
 const DEFAULT_CLEANUP_TIMEOUT_MS = 5 * 60 * 1_000;
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
 const MAX_OWNER_RUN_PAGES = 10;
+const RUNTIME_ERROR_CODE_RE =
+  /\b(?:net::)?(ERR_[A-Z0-9_]{1,64}|CERT_HAS_EXPIRED|DEPTH_ZERO_SELF_SIGNED_CERT|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ENETUNREACH|ENOTFOUND|ETIMEDOUT|SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_GET_ISSUER_CERT_LOCALLY|UNABLE_TO_VERIFY_LEAF_SIGNATURE)\b/u;
 export const EXPECTED_GALACTIC_CLI_VERSION = (() => {
   const cliPackage = JSON.parse(
     readFileSync(new URL("../../cli/package.json", import.meta.url), "utf8"),
@@ -154,12 +156,17 @@ const CERTIFICATION_LIMITS = Object.freeze({
 });
 
 export class ComputeCertificationSuiteError extends Error {
-  constructor(code, message, { stage = null, httpStatus = null } = {}) {
+  constructor(
+    code,
+    message,
+    { stage = null, httpStatus = null, runtimeDiagnostic = null } = {},
+  ) {
     super(message);
     this.name = "ComputeCertificationSuiteError";
     this.code = code;
     this.stage = stage;
     this.httpStatus = httpStatus;
+    this.runtimeDiagnostic = runtimeDiagnostic;
   }
 }
 
@@ -1048,6 +1055,98 @@ export function validateTerminalPublicRun(run, expected) {
   };
 }
 
+export function classifyComputeRuntimeFailure(stderr) {
+  const text = typeof stderr === "string" ? stderr : "";
+  const codeMatch = text.match(RUNTIME_ERROR_CODE_RE);
+  const runtimeErrorCode = codeMatch?.[1] ?? null;
+  let failureClass = "unknown";
+  if (
+    /ERR_CERT_|CERT_HAS_EXPIRED|certificate (?:authority|verify|verification)|DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_(?:GET_ISSUER_CERT_LOCALLY|VERIFY_LEAF_SIGNATURE)/iu
+      .test(text)
+  ) {
+    failureClass = "tls_certificate";
+  } else if (/ERR_NAME_NOT_RESOLVED|EAI_AGAIN|ENOTFOUND/iu.test(text)) {
+    failureClass = "dns";
+  } else if (
+    /browserType\.launch|chromium\.launch|Executable doesn't exist|Failed to launch|error while loading shared libraries/iu
+      .test(text)
+  ) {
+    failureClass = "browser_launch";
+  } else if (
+    /ERR_CONNECTION_|ECONNREFUSED|ECONNRESET|ENETUNREACH|ETIMEDOUT/iu
+      .test(text)
+  ) {
+    failureClass = "network_connection";
+  } else if (/page\.goto|Navigation|Timeout .* exceeded/iu.test(text)) {
+    failureClass = "browser_navigation";
+  } else if (/ERR_MODULE_NOT_FOUND|Cannot find (?:module|package)/iu.test(text)) {
+    failureClass = "runtime_dependency";
+  } else if (/browser HTTPS probe|browser_https/iu.test(text)) {
+    failureClass = "browser_probe";
+  }
+  return {
+    failure_class: failureClass,
+    ...(runtimeErrorCode ? { runtime_error_code: runtimeErrorCode } : {}),
+  };
+}
+
+function failedScenarioRuntimeDiagnostic(
+  run,
+  expected,
+  owner,
+  { startCallReceiptId, statusCallReceiptId },
+) {
+  const identity = validateComputeIdentity(run, `${expected.scenario} failed terminal`);
+  const exitCode = run.exit_code ?? null;
+  if (
+    identity.runId !== expected.runId ||
+    identity.receiptId !== expected.receiptId ||
+    run.async !== false ||
+    !OWNER_SETTLED_STATUSES.has(run.status) ||
+    !(exitCode === null || Number.isSafeInteger(exitCode)) ||
+    run.status !== owner.status ||
+    exitCode !== (owner.exitCode ?? null) ||
+    typeof run.stdout !== "string" ||
+    typeof run.stderr !== "string"
+  ) {
+    fail(
+      "INVALID_COMPUTE_RESULT",
+      `${expected.scenario} failed terminal projection is invalid.`,
+    );
+  }
+  const startedAt = timestamp(
+    run.started_at,
+    `${expected.scenario} failed started_at`,
+  );
+  const finishedAt = timestamp(
+    run.finished_at,
+    `${expected.scenario} failed finished_at`,
+  );
+  if (
+    Date.parse(startedAt) < Date.parse(identity.createdAt) ||
+    Date.parse(finishedAt) < Date.parse(startedAt)
+  ) {
+    fail(
+      "INVALID_COMPUTE_RESULT",
+      `${expected.scenario} failed timestamps are invalid.`,
+    );
+  }
+  return {
+    scenario: expected.scenario,
+    run_id: identity.runId,
+    receipt_id: identity.receiptId,
+    start_call_receipt_id: startCallReceiptId,
+    status_call_receipt_id: statusCallReceiptId,
+    status: run.status,
+    exit_code: exitCode,
+    stdout_bytes: Buffer.byteLength(run.stdout),
+    stdout_sha256: sha256Text(run.stdout),
+    stderr_bytes: Buffer.byteLength(run.stderr),
+    stderr_sha256: sha256Text(run.stderr),
+    ...classifyComputeRuntimeFailure(run.stderr),
+  };
+}
+
 function scenarioExpectation(scenario) {
   if (scenario === "exit_23") {
     return { status: "completed", exitCode: 23, parseProof: true, stderrEmpty: true };
@@ -1167,6 +1266,7 @@ async function runScenario(context, config, scenario, producer, dependencies) {
   const started = validateStartedResult(startedCall.result, scenario);
   const observedStates = [started.status];
   context.activeRunIds.add(started.runId);
+  context.startedRunIds.push(started.runId);
   const expected = {
     scenario,
     runId: started.runId,
@@ -1193,7 +1293,6 @@ async function runScenario(context, config, scenario, producer, dependencies) {
     };
   }
   const owner = await waitForOwnerRun(context, expected, {
-    terminalStatuses: new Set([expected.status]),
     timeoutMs: dependencies.scenarioTimeoutMs,
     pollIntervalMs: dependencies.pollIntervalMs,
     sleep: dependencies.sleep,
@@ -1201,11 +1300,28 @@ async function runScenario(context, config, scenario, producer, dependencies) {
     observedStates,
   });
   context.activeRunIds.delete(started.runId);
-  if (owner.cancellable !== false || owner.status !== expected.status) {
+  const checked = await readComputeRun(context, started.runId, scenario);
+  if (owner.cancellable !== false) {
     fail("INVALID_OWNER_RUN", `${scenario} owner terminal state is invalid.`);
   }
-  if ((owner.exitCode ?? null) !== expected.exitCode) {
-    fail("INVALID_OWNER_RUN", `${scenario} owner exit code is invalid.`);
+  if (
+    owner.status !== expected.status ||
+    (owner.exitCode ?? null) !== expected.exitCode
+  ) {
+    const runtimeDiagnostic = failedScenarioRuntimeDiagnostic(
+      checked.result,
+      expected,
+      owner,
+      {
+        startCallReceiptId: startedCall.callReceiptId,
+        statusCallReceiptId: checked.callReceiptId,
+      },
+    );
+    fail(
+      "SCENARIO_RUNTIME_FAILED",
+      `${scenario} runtime did not satisfy certification.`,
+      { stage: `scenario_${scenario}`, runtimeDiagnostic },
+    );
   }
   if (expected.ownerFailureCode) {
     if (
@@ -1220,8 +1336,6 @@ async function runScenario(context, config, scenario, producer, dependencies) {
   ) {
     fail("INVALID_OWNER_RUN", `${scenario} reported an infrastructure failure.`);
   }
-
-  const checked = await readComputeRun(context, started.runId, scenario);
   const terminal = validateTerminalPublicRun(checked.result, expected);
   let artifactDownload = null;
   let producerProof = null;
@@ -1940,6 +2054,9 @@ function publicFailure(error) {
     code: error.code,
     stage: error.stage,
     http_status: error.httpStatus,
+    ...(error.runtimeDiagnostic
+      ? { runtime_diagnostic: error.runtimeDiagnostic }
+      : {}),
   };
 }
 
@@ -2032,6 +2149,7 @@ export async function runComputeCertificationSuite(
     apiVersionOverride,
     requestTimeoutMs,
     activeRunIds: new Set(),
+    startedRunIds: [],
   };
   const dependencies = {
     sleep,
@@ -2344,7 +2462,7 @@ export async function runComputeCertificationSuite(
     }
 
     const runIds = [
-      ...state.scenarios.map((scenario) => scenario.run_id),
+      ...context.startedRunIds,
       ...(state.policyPillar?.free?.compute_run_id
         ? [state.policyPillar.free.compute_run_id]
         : []),

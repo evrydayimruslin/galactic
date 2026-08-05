@@ -6,6 +6,7 @@ import { test } from "node:test";
 import {
   assertPinnedApiVersionResponse,
   buildComputeCertificationMarker,
+  classifyComputeRuntimeFailure,
   COMPUTE_CERTIFICATION_ARTIFACT_SHA256,
   COMPUTE_CERTIFICATION_FUNCTION,
   COMPUTE_CERTIFICATION_SCENARIOS,
@@ -321,6 +322,24 @@ test("cross-binds producer and consumer proofs to the deterministic fixture", ()
       expectedArtifactSha256: COMPUTE_CERTIFICATION_ARTIFACT_SHA256,
     }),
     (error) => error.code === "INVALID_PROBE_OUTPUT",
+  );
+});
+
+test("classifies bounded runtime failures without retaining stderr", () => {
+  const secret = "owner-secret-must-not-enter-evidence";
+  const diagnostic = classifyComputeRuntimeFailure(
+    `page.goto: net::ERR_CERT_AUTHORITY_INVALID at https://example.com/?token=${secret}`,
+  );
+  assert.deepEqual(diagnostic, {
+    failure_class: "tls_certificate",
+    runtime_error_code: "ERR_CERT_AUTHORITY_INVALID",
+  });
+  assert.equal(JSON.stringify(diagnostic).includes(secret), false);
+  assert.deepEqual(
+    classifyComputeRuntimeFailure(
+      "browserType.launch: Executable doesn't exist at /missing/chrome",
+    ),
+    { failure_class: "browser_launch" },
   );
 });
 
@@ -1105,6 +1124,154 @@ test("certifies admitted owner-visible probes and always disables the fixture", 
     ),
     true,
   );
+});
+
+test("captures a failed terminal runtime before rejecting certification", async () => {
+  const leakedStderr =
+    "page.goto: net::ERR_CERT_AUTHORITY_INVALID private-runtime-detail";
+  const limits = {
+    maxTimeoutMs: 60_000,
+    maxConcurrency: 1,
+    maxArtifactBytes: 1_048_576,
+    maxArtifacts: 2,
+  };
+  let enabled = false;
+  let revision = 0;
+  let allowedTools = [];
+  let currentLimits = limits;
+  let callIndex = 900;
+  const statusScenarios = [];
+  const written = [];
+  const fetchImpl = async (input, init = {}) => {
+    const url = String(input);
+    const method = init.method ?? "GET";
+    const body = init.body === undefined ? null : JSON.parse(init.body);
+    if (url.endsWith("/compute/settings") && method === "GET") {
+      return jsonResponse(settingsView(
+        enabled,
+        revision,
+        currentLimits,
+        allowedTools,
+      ));
+    }
+    if (url.endsWith("/compute/settings") && method === "PUT") {
+      assert.equal(body.expectedRevision, String(revision));
+      enabled = body.settings.enabled;
+      allowedTools = body.settings.allowedTools;
+      currentLimits = body.settings.limits;
+      revision += 1;
+      return jsonResponse(settingsView(
+        enabled,
+        revision,
+        currentLimits,
+        allowedTools,
+      ));
+    }
+    const functionMatch = url.match(/\/functions\/([^/]+)\/run$/u);
+    if (functionMatch && method === "POST") {
+      const functionName = functionMatch[1];
+      const callReceiptId =
+        `00000000-0000-4000-8000-${String(callIndex++).padStart(12, "0")}`;
+      if (functionName === "fixture_identity") {
+        return invocation(functionName, {
+          fixture: "galactic-compute-certification",
+          schema_version: 1,
+          scenarios: [...COMPUTE_CERTIFICATION_SCENARIOS],
+          deterministic_artifact_sha256:
+            COMPUTE_CERTIFICATION_ARTIFACT_SHA256,
+        }, callReceiptId);
+      }
+      assert.equal(functionName, COMPUTE_CERTIFICATION_FUNCTION);
+      if (body.args.action === "start") {
+        const isBrowser = body.args.scenario === "browser_https";
+        return invocation(functionName, computeIdentity(
+          isBrowser ? BROWSER_RUN_ID : ASYNC_RUN_ID,
+          isBrowser ? BROWSER_RECEIPT_ID : ASYNC_RECEIPT_ID,
+          isBrowser ? ["browser", "shell"] : ["shell"],
+          "queued",
+          true,
+        ), callReceiptId);
+      }
+      assert.equal(body.args.action, "status");
+      const isBrowser = body.args.run_id === BROWSER_RUN_ID;
+      statusScenarios.push(isBrowser ? "browser_https" : "async_echo");
+      const proof = {
+        schema_version: 1,
+        scenario: "async_echo",
+        verified: true,
+        marker_sha256: digest(Buffer.from(MARKER)),
+        marker_length: Buffer.byteLength(MARKER),
+      };
+      return invocation(functionName, {
+        ...computeIdentity(
+          isBrowser ? BROWSER_RUN_ID : ASYNC_RUN_ID,
+          isBrowser ? BROWSER_RECEIPT_ID : ASYNC_RECEIPT_ID,
+          isBrowser ? ["browser", "shell"] : ["shell"],
+          "completed",
+          false,
+        ),
+        started_at: STARTED_AT,
+        finished_at: FINISHED_AT,
+        exit_code: isBrowser ? 1 : 0,
+        stdout: isBrowser ? "" : `${JSON.stringify(proof)}\n`,
+        stderr: isBrowser ? leakedStderr : "",
+        artifacts: [],
+      }, callReceiptId);
+    }
+    if (url.includes("/compute/runs?limit=100")) {
+      return jsonResponse({
+        runs: [
+          ownerRun(ASYNC_RUN_ID, COMPUTE_CERTIFICATION_FUNCTION),
+          {
+            ...ownerRun(BROWSER_RUN_ID, COMPUTE_CERTIFICATION_FUNCTION),
+            exitCode: 1,
+          },
+        ],
+        next_cursor: null,
+      });
+    }
+    throw new Error(`Unexpected failed certification request: ${method} ${url}`);
+  };
+
+  await assert.rejects(
+    runComputeCertificationSuite(config({ profile: "probe" }), {
+      fetchImpl,
+      pollIntervalMs: 1,
+      writeEvidence: async (path, value) => written.push({ path, value }),
+    }),
+    (error) =>
+      error.code === "SCENARIO_RUNTIME_FAILED" &&
+      error.stage === "scenario_browser_https",
+  );
+
+  assert.equal(enabled, false);
+  assert.deepEqual(statusScenarios, ["async_echo", "browser_https"]);
+  assert.equal(written.length, 2);
+  assert.deepEqual(written[0].value.run_ids, [ASYNC_RUN_ID, BROWSER_RUN_ID]);
+  const runtimeDiagnostic = written[1].value.failure.runtime_diagnostic;
+  const {
+    start_call_receipt_id: startCallReceiptId,
+    status_call_receipt_id: statusCallReceiptId,
+    ...stableDiagnostic
+  } = runtimeDiagnostic;
+  assert.deepEqual(stableDiagnostic, {
+    scenario: "browser_https",
+    run_id: BROWSER_RUN_ID,
+    receipt_id: BROWSER_RECEIPT_ID,
+    status: "completed",
+    exit_code: 1,
+    stdout_bytes: 0,
+    stdout_sha256: digest(Buffer.from("")),
+    stderr_bytes: Buffer.byteLength(leakedStderr),
+    stderr_sha256: digest(Buffer.from(leakedStderr)),
+    failure_class: "tls_certificate",
+    runtime_error_code: "ERR_CERT_AUTHORITY_INVALID",
+  });
+  assert.match(startCallReceiptId, /^[0-9a-f-]{36}$/u);
+  assert.match(statusCallReceiptId, /^[0-9a-f-]{36}$/u);
+  const serialized = JSON.stringify(written);
+  assert.equal(serialized.includes(OWNER_TOKEN), false);
+  assert.equal(serialized.includes("private-runtime-detail"), false);
 });
 
 test("fails closed when Cloudflare serves a version other than the pinned candidate", () => {
