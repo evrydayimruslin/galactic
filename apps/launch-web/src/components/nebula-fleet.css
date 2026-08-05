@@ -834,11 +834,11 @@ html[data-theme="light"] .nebula-root .neb-add-agent-card.copied-prompt {
 .neb-inline-panel.neb-settings-panel {
   position: relative;
   display: block;
-  width: min(812px, 100%);
+  width: min(812px, calc(100% - 6px));
   height: auto;
   min-height: 0;
   overflow: visible;
-  margin: 0 auto 90px;
+  margin: 0 auto 90px 6px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -1242,7 +1242,7 @@ html[data-theme="light"] .nebula-root .neb-add-agent-card.copied-prompt {
   .neb-mobile-back { display: flex; align-items: center; gap: 5px; margin: 2px 0 18px; padding: 0; border: 0; background: none; color: var(--ink-2); cursor: pointer; font-family: var(--mono) !important; font-size: 12.5px; }
   .neb-provider-head { align-items: flex-start; flex-direction: column; }.neb-provider-editor { grid-template-columns: 1fr; }.neb-plan-card { align-items: flex-start; flex-direction: column; gap: 14px; }
   .neb-compute-tool-grid, .neb-compute-limit-grid, .neb-compute-secret-destination, .neb-compute-authority-rule { grid-template-columns: 1fr; }.neb-compute-secret-destination { padding-left: 34px; }.neb-compute-run-grid { grid-template-columns: 1fr 1fr; }
-  .neb-inline-panel.neb-settings-panel { width: 100%; margin: 0 auto 56px; padding: 0; }
+  .neb-inline-panel.neb-settings-panel { margin-bottom: 56px; padding: 0; }
   .neb-settings-screen h1 { font-size: 31px; }
   .neb-settings-groups { margin-top: 0; }
   .neb-settings-row { grid-template-columns: minmax(0, 1fr) auto; gap: 5px 12px; }

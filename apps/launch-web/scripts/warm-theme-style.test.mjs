@@ -112,6 +112,16 @@ describe("warm theme design contracts", () => {
     );
   });
 
+  it("aligns the Settings panel with the hero text inset", () => {
+    expect(css).toContain(".neb-hero { padding: 8px 6px 44px; }");
+    expect(css).toMatch(
+      /\.neb-inline-panel\.neb-settings-panel \{[\s\S]*?width: min\(812px, calc\(100% - 6px\)\);[\s\S]*?margin: 0 auto 90px 6px;/,
+    );
+    expect(css).toContain(
+      ".neb-inline-panel.neb-settings-panel { margin-bottom: 56px; padding: 0; }",
+    );
+  });
+
   it("matches hero titles to Agent card ink at a lighter serif weight", () => {
     expect(css).toContain("font-weight: 500 600;");
     expect(css).toMatch(
