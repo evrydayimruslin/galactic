@@ -128,6 +128,17 @@ const OWNER_STATUSES = new Set([
 const OWNER_SETTLED_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
+// A cold synchronous Compute call may legitimately consume the 195-second
+// startup budget, its reviewed command timeout, and bounded teardown before
+// the function endpoint can return. Keep the ordinary control-plane timeout
+// short, but give the three synchronous certification starts the full public
+// request envelope.
+const DEFAULT_SYNCHRONOUS_START_REQUEST_TIMEOUT_MS = 5 * 60 * 1_000;
+const SYNCHRONOUS_CERTIFICATION_SCENARIOS = new Set([
+  "sync_toolchain",
+  "exit_23",
+  "raw_tcp_denied",
+]);
 const DEFAULT_SCENARIO_TIMEOUT_MS = 20 * 60 * 1_000;
 const DEFAULT_CLEANUP_TIMEOUT_MS = 5 * 60 * 1_000;
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
@@ -169,6 +180,16 @@ export class ComputeCertificationSuiteError extends Error {
     this.httpStatus = httpStatus;
     this.runtimeDiagnostic = runtimeDiagnostic;
   }
+}
+
+export function computeCertificationStartRequestTimeoutMs(
+  scenario,
+  requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+  synchronousRequestTimeoutMs = DEFAULT_SYNCHRONOUS_START_REQUEST_TIMEOUT_MS,
+) {
+  return SYNCHRONOUS_CERTIFICATION_SCENARIOS.has(scenario)
+    ? Math.max(requestTimeoutMs, synchronousRequestTimeoutMs)
+    : requestTimeoutMs;
 }
 
 function fail(code, message, options) {
@@ -364,6 +385,7 @@ async function request({
   stage,
   bytes = false,
   acceptedError = null,
+  timeoutMs = context.requestTimeoutMs,
 }) {
   let response;
   try {
@@ -381,7 +403,7 @@ async function request({
         ...(body === undefined ? {} : { "Content-Type": "application/json" }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: AbortSignal.timeout(context.requestTimeoutMs),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch {
     fail("REQUEST_FAILED", `${label} request failed.`, { stage });
@@ -563,7 +585,14 @@ async function writeSettings(
   return view;
 }
 
-async function invokeFunction(context, functionName, args, label, stage) {
+async function invokeFunction(
+  context,
+  functionName,
+  args,
+  label,
+  stage,
+  { timeoutMs = context.requestTimeoutMs } = {},
+) {
   const payload = record(await request({
     context,
     path: `/api/launch/agents/${context.agentId}/functions/${functionName}/run`,
@@ -571,6 +600,7 @@ async function invokeFunction(context, functionName, args, label, stage) {
     body: { args },
     label,
     stage,
+    timeoutMs,
   }), `${label} response`);
   if (
     payload.success !== true ||
@@ -585,13 +615,14 @@ async function invokeFunction(context, functionName, args, label, stage) {
   };
 }
 
-async function invokeFixture(context, args, label, stage) {
+async function invokeFixture(context, args, label, stage, options) {
   return await invokeFunction(
     context,
     COMPUTE_CERTIFICATION_FUNCTION,
     args,
     label,
     stage,
+    options,
   );
 }
 
@@ -1396,6 +1427,13 @@ async function runScenario(context, config, scenario, producer, dependencies) {
     scenarioStartArgs(scenario, config, producer),
     `${scenario} start`,
     "compute_start",
+    {
+      timeoutMs: computeCertificationStartRequestTimeoutMs(
+        scenario,
+        context.requestTimeoutMs,
+        context.synchronousStartRequestTimeoutMs,
+      ),
+    },
   );
   const started = validateStartedResult(startedCall.result, scenario);
   const observedStates = [started.status];
@@ -2261,6 +2299,8 @@ export async function runComputeCertificationSuite(
     sleep = sleepMs,
     now = Date.now,
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+    synchronousStartRequestTimeoutMs =
+      DEFAULT_SYNCHRONOUS_START_REQUEST_TIMEOUT_MS,
     scenarioTimeoutMs = DEFAULT_SCENARIO_TIMEOUT_MS,
     cleanupTimeoutMs = DEFAULT_CLEANUP_TIMEOUT_MS,
     pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
@@ -2307,6 +2347,7 @@ export async function runComputeCertificationSuite(
     apiVersionId,
     apiVersionOverride,
     requestTimeoutMs,
+    synchronousStartRequestTimeoutMs,
     activeRunIds: new Set(),
     startedRunIds: [],
   };
