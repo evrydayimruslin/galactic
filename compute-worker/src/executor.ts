@@ -80,6 +80,10 @@ export interface ExecuteDependencies {
   sandboxForRun?: (env: Env, runId: string) => ComputeSandboxStub;
   now?: () => number;
   finalizationDelay?: (milliseconds: number) => Promise<void>;
+  fixedLengthStream?: (length: number) => {
+    readable: ReadableStream<Uint8Array>;
+    writable: WritableStream<Uint8Array>;
+  };
   /** Set only by the per-run Durable Object cancellation coordinator. */
   externalAbortSignal?: AbortSignal;
 }
@@ -647,12 +651,60 @@ export function boundedArtifactStream(
   }));
 }
 
+function workerFixedLengthStream(length: number): {
+  readable: ReadableStream<Uint8Array>;
+  writable: WritableStream<Uint8Array>;
+} {
+  const stream = new FixedLengthStream(length);
+  return {
+    readable: stream.readable,
+    // FixedLengthStream accepts every ArrayBufferView, including Uint8Array.
+    writable: stream.writable as WritableStream<Uint8Array>,
+  };
+}
+
+async function putBoundedArtifact(
+  bucket: Env["COMPUTE_ARTIFACTS"],
+  objectKey: string,
+  source: ReadableStream<Uint8Array>,
+  expectedBytes: number,
+  maximumBytes: number,
+  options: Parameters<Env["COMPUTE_ARTIFACTS"]["put"]>[2],
+  fixedLengthStream: NonNullable<ExecuteDependencies["fixedLengthStream"]>,
+): Promise<void> {
+  // R2 rejects arbitrary transformed ReadableStreams because they no longer
+  // carry a known length. Preserve the post-measurement mutation guard, then
+  // bridge it through the Workers runtime's byte-exact FixedLengthStream so
+  // R2 receives authoritative length metadata without buffering the artifact.
+  const fixed = fixedLengthStream(expectedBytes);
+  const transferAbort = new AbortController();
+  const pump = boundedArtifactStream(source, expectedBytes, maximumBytes)
+    .pipeTo(fixed.writable, { signal: transferAbort.signal });
+  let upload = Promise.resolve();
+  try {
+    upload = bucket.put(objectKey, fixed.readable, options).then(() => undefined);
+    await Promise.all([pump, upload]);
+  } catch (error) {
+    // If either side fails, stop the other before compensating the pending
+    // metadata row or destroying the body. An upload can reject without ever
+    // reading its body, so cancel an unlocked readable to release backpressure
+    // before waiting for the aborted pipe to unwind.
+    const readableCancellation = fixed.readable.locked
+      ? Promise.resolve()
+      : fixed.readable.cancel(error).catch(() => undefined);
+    transferAbort.abort(error);
+    await Promise.allSettled([pump, upload, readableCancellation]);
+    throw error;
+  }
+}
+
 async function captureOutputs(
   env: Env,
   session: ComputeExecutionSession,
   run: ClaimedComputeRun,
   client: ControlPlaneClient,
   leaseId: string,
+  fixedLengthStream: NonNullable<ExecuteDependencies["fixedLengthStream"]>,
 ): Promise<CaptureResult> {
   const outputs: ComputeOutputArtifact[] = [];
   const warnings: string[] = [];
@@ -767,20 +819,23 @@ async function captureOutputs(
       throw new Error("output artifact reservation is not writable");
     }
     try {
-      const stream = boundedArtifactStream(
+      await putBoundedArtifact(
+        env.COMPUTE_ARTIFACTS,
+        objectKey,
         await session.readFileStream(uploadPath),
         size,
         perArtifactLimit,
-      );
-      await env.COMPUTE_ARTIFACTS.put(objectKey, stream, {
-        httpMetadata: { contentType: mediaType },
-        sha256,
-        customMetadata: {
-          run_id: run.run_id,
-          agent_id: run.agent_id,
+        {
+          httpMetadata: { contentType: mediaType },
           sha256,
+          customMetadata: {
+            run_id: run.run_id,
+            agent_id: run.agent_id,
+            sha256,
+          },
         },
-      });
+        fixedLengthStream,
+      );
       const committed = await client.commitOutput(leaseId, output);
       if (
         committed.state !== "ready" || committed.sha256 !== sha256 ||
@@ -1378,6 +1433,7 @@ export async function executeComputeRun(
     if (execution.signal.aborted) {
       throw new Error(String(execution.signal.reason ?? "compute execution aborted"));
     }
+    phase = "artifacts";
     // Explicit Sandbox sessions are long-lived shells. A successful user
     // command can still terminate that shell (browser process trees have done
     // this in production), while the container filesystem remains available.
@@ -1403,6 +1459,7 @@ export async function executeComputeRun(
       run,
       client,
       lease.lease_id,
+      dependencies.fixedLengthStream ?? workerFixedLengthStream,
     );
     if (execution.signal.aborted) {
       throw new Error(String(execution.signal.reason ?? "compute execution aborted"));
