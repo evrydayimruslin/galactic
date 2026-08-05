@@ -69,7 +69,7 @@ Deno.test("fixed Compute certification fixture passes the upload safety scan", a
     import.meta.url,
   );
   const files = await Promise.all(
-    ["index.ts", "manifest.json"].map(async (name) => ({
+    ["index.ts", "galactic.yaml"].map(async (name) => ({
       name,
       content: await Deno.readTextFile(new URL(name, fixtureUrl)),
     })),

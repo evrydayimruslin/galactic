@@ -10,6 +10,7 @@ import {
   reviewedFixtureProfile,
   validatePromotedComputeFixture,
   validateReviewedComputeManifest,
+  validateReviewedComputeSource,
   validateReviewedFixtureIdentity,
   validateStagedPromotion,
 } from "./interface-deploy-promotion.mjs";
@@ -22,10 +23,122 @@ const COMPUTE_FIXTURE_SOURCE = await readFile(
   new URL("../../examples/interface-demo/index.ts", import.meta.url),
   "utf8",
 );
-const CERTIFICATION_MANIFEST = JSON.parse(await readFile(
-  new URL("../../examples/compute-certification/manifest.json", import.meta.url),
+const CERTIFICATION_DOCUMENT = await readFile(
+  new URL("../../examples/compute-certification/galactic.yaml", import.meta.url),
   "utf8",
-));
+);
+const COMPUTE_AUTHORITY = {
+  level: "read",
+  effects: { "compute.execute": "free" },
+};
+const CERTIFICATION_MANIFEST = {
+  name: "Compute Certification",
+  version: "1.0.0",
+  description:
+    "Private release-only Agent for certifying Galactic Compute admission and isolation.",
+  type: "mcp",
+  entry: { functions: "index.ts" },
+  permissions: ["compute:exec"],
+  compute: {
+    profile: "developer-v1",
+    tools: ["browser", "shell"],
+    secrets: [],
+  },
+  functions: {
+    fixture_identity: {
+      description:
+        "Returns deterministic fixture identity and scenario metadata without starting Compute.",
+      parameters: {},
+      returns: {
+        type: "object",
+        description: "Fixed certification fixture metadata",
+      },
+      authority: { level: "read", effects: {} },
+    },
+    run_compute_certification: {
+      description:
+        "Starts, reads, or cancels one fixed Galactic Compute certification scenario.",
+      parameters: {
+        action: {
+          type: "string",
+          description: "Closed operation: start, status, or cancel",
+          required: true,
+          enum: ["start", "status", "cancel"],
+        },
+        scenario: {
+          type: "string",
+          description: "Reviewed scenario id; required only for start",
+          required: false,
+          enum: [
+            "sync_toolchain",
+            "async_echo",
+            "browser_https",
+            "artifact_producer",
+            "artifact_consumer",
+            "exit_23",
+            "timeout",
+            "cancellable",
+            "https_egress_boundaries",
+            "raw_tcp_denied",
+          ],
+        },
+        marker: {
+          type: "string",
+          description:
+            "Canonical public release marker; accepted only by async_echo",
+          required: false,
+        },
+        artifact_id: {
+          type: "string",
+          description:
+            "Existing Compute artifact UUID; accepted only by artifact_consumer",
+          required: false,
+        },
+        expected_sha256: {
+          type: "string",
+          description:
+            "Expected lowercase SHA-256; accepted only by artifact_consumer",
+          required: false,
+        },
+        run_id: {
+          type: "string",
+          description: "Compute run UUID; required only for status or cancel",
+          required: false,
+        },
+      },
+      returns: {
+        type: "object",
+        description:
+          "Raw public Compute start, status, or cancellation projection",
+      },
+      authority: COMPUTE_AUTHORITY,
+      spend: { compute: "free" },
+      uses_compute: true,
+    },
+    run_compute_policy_probe: {
+      description:
+        "Starts one fixed bounded Compute probe for managed-routine policy certification.",
+      parameters: {},
+      returns: {
+        type: "object",
+        description: "Raw public Compute start projection",
+      },
+      authority: COMPUTE_AUTHORITY,
+      spend: { compute: "free" },
+      uses_compute: true,
+    },
+  },
+  routines: [{
+    id: "compute_policy_probe",
+    label: "Compute policy certification",
+    description:
+      "Paused managed-routine target for certifying the Policy Pillar before Compute admission.",
+    handler: "run_compute_policy_probe",
+    default_schedule: { every_minutes: 60 },
+    config_schema: {},
+    default_config: {},
+  }],
+};
 const MANIFEST = {
   permissions: ["compute:exec"],
   compute: {
@@ -139,7 +252,7 @@ test("named certification promotion is closed over its exact directory and autho
   assert.equal(config.enabled, true);
   assert.equal(config.fixture.name, "compute-certification");
   assert.deepEqual(config.fixture.tools, ["browser", "shell"]);
-  assert.deepEqual(config.fixture.sourcePaths, ["index.ts", "manifest.json"]);
+  assert.deepEqual(config.fixture.sourcePaths, ["galactic.yaml", "index.ts"]);
   assert.throws(
     () =>
       reviewedPromotionConfig({
@@ -275,7 +388,14 @@ test("reviewed manifest fails closed on extra authority, tools, or secrets", () 
   }
 });
 
-test("certification manifest and deterministic identity are exact", () => {
+test("certification contract, compiled manifest, and deterministic identity are exact", () => {
+  assert.equal(
+    validateReviewedComputeSource(
+      CERTIFICATION_DOCUMENT,
+      "compute-certification",
+    ),
+    CERTIFICATION_DOCUMENT,
+  );
   assert.equal(
     validateReviewedComputeManifest(
       CERTIFICATION_MANIFEST,
@@ -304,6 +424,14 @@ test("certification manifest and deterministic identity are exact", () => {
   assert.equal(
     validateReviewedFixtureIdentity(identity, "compute-certification"),
     identity,
+  );
+  assert.throws(
+    () =>
+      validateReviewedComputeSource(
+        `${CERTIFICATION_DOCUMENT}\n# unreviewed drift\n`,
+        "compute-certification",
+      ),
+    /galactic\.yaml content drifted/u,
   );
   assert.throws(
     () =>

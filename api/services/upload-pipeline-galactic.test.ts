@@ -75,6 +75,58 @@ Deno.test({
 
 Deno.test({
   name:
+    "Compute certification fixture is an upload-safe current V2 qualified release",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const fixtureUrl = new URL(
+      "../../examples/compute-certification/",
+      import.meta.url,
+    );
+    const files = await Promise.all(
+      ["index.ts", "galactic.yaml"].map(async (name) => ({
+        name,
+        content: await Deno.readTextFile(new URL(name, fixtureUrl)),
+      })),
+    );
+
+    const pipeline = await processUploadPipeline(files, { strictBuild: true });
+
+    assertEquals(pipeline.agentDocument?.sourceKind, "galactic_yaml");
+    assertEquals(
+      pipeline.agentDocument?.documentDigest,
+      "a24790ca4a67e6e427a81a09681151f18b3210c5dc095517c7a0d4a2d5680c97",
+    );
+    assertEquals(pipeline.agentDocument?.cases, [{
+      id: "fixture-identity",
+      function: "fixture_identity",
+      input: {},
+      required: true,
+    }]);
+    assertEquals(pipeline.manifest?.permissions, ["compute:exec"]);
+    assertEquals(pipeline.manifest?.compute, {
+      profile: "developer-v1",
+      tools: ["browser", "shell"],
+      secrets: [],
+    });
+    assertEquals(
+      pipeline.agentDocument?.document?.spec.functions
+        .run_compute_certification?.authority,
+      {
+        level: "read",
+        effects: { "compute.execute": "free" },
+      },
+    );
+    assertEquals(
+      pipeline.manifest?.functions?.run_compute_policy_probe?.uses_compute,
+      true,
+    );
+    assert(pipeline.esmBundledCode);
+  },
+});
+
+Deno.test({
+  name:
     "upload pipeline resolves named re-exports and checks the prepared module graph",
   sanitizeOps: false,
   sanitizeResources: false,
