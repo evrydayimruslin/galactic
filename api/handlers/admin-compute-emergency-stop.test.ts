@@ -3,15 +3,58 @@ import { assertEquals } from "https://deno.land/std@0.210.0/assert/mod.ts";
 import {
   handleAdminComputeEmergencyStop,
   handleAdminComputeEmergencyStopRelease,
+  handleAdminComputeEmergencyStopStatus,
 } from "./admin-compute-emergency-stop.ts";
 import { handleAdmin } from "./admin.ts";
 import {
   authenticateComputeEmergencyStopOperator,
 } from "../services/compute-emergency-auth.ts";
+import {
+  authenticateComputeCertification,
+} from "../services/compute-certification-auth.ts";
 
 const OPERATION_ID = "11111111-1111-4111-8111-111111111111";
 const EMERGENCY_TOKEN = "emergency-stop-test-token-0123456789abcdef";
+const CERTIFICATION_TOKEN = "compute-certification-test-token-0123456789abcdef";
+const CERTIFICATION_OWNER_ID = "22222222-2222-4222-8222-222222222222";
+const CERTIFICATION_AGENT_ID = "33333333-3333-4333-8333-333333333333";
+const CERTIFICATION_PRINCIPAL =
+  `${CERTIFICATION_OWNER_ID}/${CERTIFICATION_AGENT_ID}`;
 const OPERATOR_REFERENCE = `compute-emergency-stop:sha256:${"a".repeat(64)}`;
+const CUTOFF_AT = "2026-07-20T12:00:00.000Z";
+const CREATED_AT = "2026-07-20T11:59:59.000Z";
+const UPDATED_AT = "2026-07-20T12:01:00.000Z";
+const COMPLETED_AT = "2026-07-20T12:01:00.000Z";
+
+function completedStatus() {
+  return {
+    schemaVersion: 1 as const,
+    latchState: "completed" as const,
+    operationId: OPERATION_ID,
+    cutoffAt: CUTOFF_AT,
+    targetCount: 2,
+    terminalizedCount: 2,
+    pendingTargetCount: 0 as const,
+    createdAt: CREATED_AT,
+    updatedAt: UPDATED_AT,
+    completedAt: COMPLETED_AT,
+  };
+}
+
+function clearStatus() {
+  return {
+    schemaVersion: 1 as const,
+    latchState: "clear" as const,
+    operationId: null,
+    cutoffAt: null,
+    targetCount: null,
+    terminalizedCount: null,
+    pendingTargetCount: null,
+    createdAt: null,
+    updatedAt: null,
+    completedAt: null,
+  };
+}
 
 function request(
   body: Record<string, unknown>,
@@ -103,7 +146,10 @@ Deno.test("authorized admin Compute emergency stop reaches the durable RPC", asy
   let fenced = false;
   let operatorReference: string | null = null;
   globalThis.fetch = (async (input, init) => {
-    const outbound = new Request(input, init);
+    const outbound = new Request(
+      input as RequestInfo | URL,
+      init as RequestInit | undefined,
+    );
     const url = new URL(outbound.url);
     if (url.pathname === "/rest/v1/rpc/check_rate_limit") {
       return Response.json(true);
@@ -206,6 +252,20 @@ Deno.test("emergency operator identity is credential-derived and fail-closed", a
     ),
     { status: "unavailable" },
   );
+  for (
+    const collision of [
+      { COMPUTE_CERTIFICATION_TOKEN: EMERGENCY_TOKEN },
+      { SUPABASE_SERVICE_ROLE_KEY: EMERGENCY_TOKEN },
+    ]
+  ) {
+    assertEquals(
+      await authenticateComputeEmergencyStopOperator(
+        request({}, { Authorization: `Bearer ${EMERGENCY_TOKEN}` }),
+        { COMPUTE_EMERGENCY_STOP_TOKEN: EMERGENCY_TOKEN, ...collision },
+      ),
+      { status: "unavailable" },
+    );
+  }
 });
 
 Deno.test("request JSON cannot self-assert the emergency audit actor", async () => {
@@ -223,4 +283,418 @@ Deno.test("request JSON cannot self-assert the emergency audit actor", async () 
     (await response.json() as { code: string }).code,
     "COMPUTE_EMERGENCY_STOP_INVALID",
   );
+});
+
+Deno.test("admin Compute emergency-stop status is minimal, exact, and private", async () => {
+  const response = await handleAdminComputeEmergencyStopStatus({
+    env: { COMPUTE_ENABLED: "0" },
+    readStatus: () => Promise.resolve(completedStatus()),
+  });
+  assertEquals(response.status, 200);
+  assertEquals(response.headers.get("Cache-Control"), "private, no-store");
+  assertEquals(response.headers.get("Pragma"), "no-cache");
+  assertEquals(response.headers.get("Vary"), "Authorization");
+  assertEquals(response.headers.get("X-Content-Type-Options"), "nosniff");
+  assertEquals(await response.json(), {
+    schema_version: 1,
+    admission_state: "disabled",
+    latch_state: "completed",
+    operation_id: OPERATION_ID,
+    cutoff_at: CUTOFF_AT,
+    target_count: 2,
+    terminalized_count: 2,
+    pending_target_count: 0,
+    created_at: CREATED_AT,
+    updated_at: UPDATED_AT,
+    completed_at: COMPLETED_AT,
+  });
+});
+
+Deno.test("admin Compute emergency-stop status reports malformed flags without normalizing them", async () => {
+  const response = await handleAdminComputeEmergencyStopStatus({
+    env: { COMPUTE_ENABLED: " 0" },
+    readStatus: () => Promise.resolve(clearStatus()),
+  });
+  assertEquals(response.status, 200);
+  assertEquals(await response.json(), {
+    schema_version: 1,
+    admission_state: "invalid",
+    latch_state: "clear",
+    operation_id: null,
+    cutoff_at: null,
+    target_count: null,
+    terminalized_count: null,
+    pending_target_count: null,
+    created_at: null,
+    updated_at: null,
+    completed_at: null,
+  });
+});
+
+Deno.test("admin Compute emergency-stop status sanitizes persistence failures", async () => {
+  const response = await handleAdminComputeEmergencyStopStatus({
+    env: { COMPUTE_ENABLED: "0" },
+    readStatus: () => Promise.reject(new Error("secret database detail")),
+  });
+  assertEquals(response.status, 503);
+  assertEquals(response.headers.get("Cache-Control"), "private, no-store");
+  assertEquals(await response.json(), {
+    error: "Compute emergency-stop status is unavailable.",
+    code: "COMPUTE_EMERGENCY_STOP_STATUS_UNAVAILABLE",
+  });
+});
+
+Deno.test("admin Compute emergency-stop status authenticates before persistence", async () => {
+  const previousEnv = globalThis.__env;
+  const previousFetch = globalThis.fetch;
+  globalThis.__env = {
+    ...(previousEnv ?? {}),
+    SUPABASE_URL: "https://supabase.test",
+    SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
+    COMPUTE_EMERGENCY_STOP_TOKEN: EMERGENCY_TOKEN,
+    COMPUTE_ENABLED: "0",
+  } as typeof globalThis.__env;
+  let fetchCalls = 0;
+  globalThis.fetch = (() => {
+    fetchCalls += 1;
+    return Promise.reject(new Error("persistence must not be reached"));
+  }) as typeof fetch;
+  try {
+    const response = await handleAdmin(
+      new Request(
+        "https://example.com/api/admin/compute/emergency-stop",
+        {
+          method: "GET",
+          headers: { Authorization: "Bearer service-role-key" },
+        },
+      ),
+    );
+    assertEquals(response.status, 401);
+    assertEquals(fetchCalls, 0);
+    assertEquals(response.headers.get("Cache-Control"), "private, no-store");
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalThis.__env = previousEnv;
+  }
+});
+
+Deno.test("certification credential can read Compute emergency-stop status", async () => {
+  const previousEnv = globalThis.__env;
+  const previousFetch = globalThis.fetch;
+  const authEnv = {
+    SUPABASE_URL: "https://supabase.test",
+    SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
+    COMPUTE_EMERGENCY_STOP_TOKEN: EMERGENCY_TOKEN,
+    COMPUTE_CERTIFICATION_TOKEN: CERTIFICATION_TOKEN,
+    COMPUTE_CERTIFICATION_PRINCIPAL: CERTIFICATION_PRINCIPAL,
+    COMPUTE_ENABLED: "0",
+  };
+  globalThis.__env = {
+    ...(previousEnv ?? {}),
+    ...authEnv,
+  } as typeof globalThis.__env;
+  const paths: string[] = [];
+  let rateLimitKey: unknown = null;
+  globalThis.fetch = (async (input, init) => {
+    const outbound = new Request(
+      input as RequestInfo | URL,
+      init as RequestInit | undefined,
+    );
+    const path = new URL(outbound.url).pathname;
+    paths.push(path);
+    if (path === "/rest/v1/rpc/check_rate_limit") {
+      const payload = await outbound.json() as Record<string, unknown>;
+      rateLimitKey = payload.p_user_id;
+      return Response.json(true);
+    }
+    if (path === "/rest/v1/rpc/get_compute_emergency_stop_status") {
+      return Response.json({
+        schema_version: 1,
+        latch_state: "clear",
+        operation_id: null,
+        cutoff_at: null,
+        target_count: null,
+        terminalized_count: null,
+        pending_target_count: null,
+        created_at: null,
+        updated_at: null,
+        completed_at: null,
+      });
+    }
+    throw new Error(`Unexpected fetch ${outbound.url}`);
+  }) as typeof fetch;
+  try {
+    const statusRequest = new Request(
+      "https://example.com/api/admin/compute/emergency-stop",
+      {
+        method: "GET",
+        headers: { Authorization: `Bearer ${CERTIFICATION_TOKEN}` },
+      },
+    );
+    const response = await handleAdmin(statusRequest);
+    assertEquals(response.status, 200);
+    assertEquals(response.headers.get("Cache-Control"), "private, no-store");
+    assertEquals(response.headers.get("Pragma"), "no-cache");
+    assertEquals(response.headers.get("Vary"), "Authorization");
+    assertEquals(paths, [
+      "/rest/v1/rpc/check_rate_limit",
+      "/rest/v1/rpc/get_compute_emergency_stop_status",
+    ]);
+
+    const authorization = await authenticateComputeCertification(
+      statusRequest,
+      authEnv,
+    );
+    assertEquals(authorization.status, "authorized");
+    assertEquals(
+      rateLimitKey,
+      authorization.status === "authorized" ? authorization.rateLimitKey : null,
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalThis.__env = previousEnv;
+  }
+});
+
+Deno.test("certification credential can read OFF status without a canary principal", async () => {
+  const previousEnv = globalThis.__env;
+  const previousFetch = globalThis.fetch;
+  globalThis.__env = {
+    ...(previousEnv ?? {}),
+    SUPABASE_URL: "https://supabase.test",
+    SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
+    COMPUTE_EMERGENCY_STOP_TOKEN: EMERGENCY_TOKEN,
+    COMPUTE_CERTIFICATION_TOKEN: CERTIFICATION_TOKEN,
+    COMPUTE_CERTIFICATION_PRINCIPAL: "",
+    COMPUTE_ENABLED: "0",
+  } as typeof globalThis.__env;
+  const paths: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    const outbound = new Request(
+      input as RequestInfo | URL,
+      init as RequestInit | undefined,
+    );
+    const path = new URL(outbound.url).pathname;
+    paths.push(path);
+    if (path === "/rest/v1/rpc/check_rate_limit") {
+      return Response.json(true);
+    }
+    if (path === "/rest/v1/rpc/get_compute_emergency_stop_status") {
+      return Response.json({
+        schema_version: 1,
+        latch_state: "clear",
+        operation_id: null,
+        cutoff_at: null,
+        target_count: null,
+        terminalized_count: null,
+        pending_target_count: null,
+        created_at: null,
+        updated_at: null,
+        completed_at: null,
+      });
+    }
+    throw new Error(`Unexpected fetch ${outbound.url}`);
+  }) as typeof fetch;
+  try {
+    const response = await handleAdmin(
+      new Request("https://example.com/api/admin/compute/emergency-stop", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${CERTIFICATION_TOKEN}` },
+      }),
+    );
+    assertEquals(response.status, 200);
+    assertEquals(paths, [
+      "/rest/v1/rpc/check_rate_limit",
+      "/rest/v1/rpc/get_compute_emergency_stop_status",
+    ]);
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalThis.__env = previousEnv;
+  }
+});
+
+Deno.test("certification credential cannot stop or release Compute", async () => {
+  const previousEnv = globalThis.__env;
+  const previousFetch = globalThis.fetch;
+  globalThis.__env = {
+    ...(previousEnv ?? {}),
+    SUPABASE_URL: "https://supabase.test",
+    SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
+    COMPUTE_EMERGENCY_STOP_TOKEN: EMERGENCY_TOKEN,
+    COMPUTE_CERTIFICATION_TOKEN: CERTIFICATION_TOKEN,
+    COMPUTE_CERTIFICATION_PRINCIPAL: CERTIFICATION_PRINCIPAL,
+    COMPUTE_ENABLED: "0",
+  } as typeof globalThis.__env;
+  let fetchCalls = 0;
+  globalThis.fetch = (() => {
+    fetchCalls += 1;
+    return Promise.reject(
+      new Error("mutation persistence must not be reached"),
+    );
+  }) as typeof fetch;
+  try {
+    const stopResponse = await handleAdmin(request({
+      reason: "containment",
+      confirm: "STOP_ALL_COMPUTE",
+    }, { Authorization: `Bearer ${CERTIFICATION_TOKEN}` }));
+    assertEquals(stopResponse.status, 401);
+
+    const releaseResponse = await handleAdmin(
+      new Request(
+        `https://example.com/api/admin/compute/emergency-stop/${OPERATION_ID}/release`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${CERTIFICATION_TOKEN}`,
+            "Content-Type": "application/json",
+            "Idempotency-Key": OPERATION_ID,
+          },
+          body: JSON.stringify({
+            reason: "recovery matrix passed",
+            confirm: "RELEASE_COMPUTE_STOP",
+          }),
+        },
+      ),
+    );
+    assertEquals(releaseResponse.status, 401);
+    assertEquals(fetchCalls, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalThis.__env = previousEnv;
+  }
+});
+
+Deno.test("invalid or non-isolated credentials cannot read Compute emergency-stop status", async () => {
+  const previousEnv = globalThis.__env;
+  const previousFetch = globalThis.fetch;
+  globalThis.__env = {
+    ...(previousEnv ?? {}),
+    SUPABASE_URL: "https://supabase.test",
+    SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
+    COMPUTE_EMERGENCY_STOP_TOKEN: EMERGENCY_TOKEN,
+    COMPUTE_CERTIFICATION_TOKEN: CERTIFICATION_TOKEN,
+    COMPUTE_CERTIFICATION_PRINCIPAL: CERTIFICATION_PRINCIPAL,
+    COMPUTE_ENABLED: "0",
+  } as typeof globalThis.__env;
+  let fetchCalls = 0;
+  globalThis.fetch = (() => {
+    fetchCalls += 1;
+    return Promise.reject(new Error("persistence must not be reached"));
+  }) as typeof fetch;
+  try {
+    const response = await handleAdmin(
+      new Request(
+        "https://example.com/api/admin/compute/emergency-stop",
+        {
+          method: "GET",
+          headers: {
+            Authorization:
+              "Bearer invalid-compute-status-token-0123456789abcdef",
+          },
+        },
+      ),
+    );
+    assertEquals(response.status, 401);
+    assertEquals(response.headers.get("Cache-Control"), "private, no-store");
+    assertEquals(fetchCalls, 0);
+
+    globalThis.__env = {
+      ...globalThis.__env,
+      COMPUTE_EMERGENCY_STOP_TOKEN: CERTIFICATION_TOKEN,
+    } as typeof globalThis.__env;
+    const collisionResponse = await handleAdmin(
+      new Request(
+        "https://example.com/api/admin/compute/emergency-stop",
+        {
+          method: "GET",
+          headers: { Authorization: `Bearer ${CERTIFICATION_TOKEN}` },
+        },
+      ),
+    );
+    assertEquals(collisionResponse.status, 503);
+    assertEquals(
+      collisionResponse.headers.get("Cache-Control"),
+      "private, no-store",
+    );
+    assertEquals(fetchCalls, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalThis.__env = previousEnv;
+  }
+});
+
+Deno.test("authorized admin Compute emergency-stop status reads the sanitized RPC", async () => {
+  const previousEnv = globalThis.__env;
+  const previousFetch = globalThis.fetch;
+  globalThis.__env = {
+    ...(previousEnv ?? {}),
+    SUPABASE_URL: "https://supabase.test",
+    SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
+    COMPUTE_EMERGENCY_STOP_TOKEN: EMERGENCY_TOKEN,
+    COMPUTE_CERTIFICATION_TOKEN: CERTIFICATION_TOKEN,
+    COMPUTE_CERTIFICATION_PRINCIPAL: CERTIFICATION_PRINCIPAL,
+    COMPUTE_ENABLED: "0",
+  } as typeof globalThis.__env;
+  const paths: string[] = [];
+  globalThis.fetch = ((input, init) => {
+    const outbound = new Request(
+      input as RequestInfo | URL,
+      init as RequestInit | undefined,
+    );
+    const path = new URL(outbound.url).pathname;
+    paths.push(path);
+    if (path === "/rest/v1/rpc/check_rate_limit") {
+      return Promise.resolve(Response.json(true));
+    }
+    if (path === "/rest/v1/rpc/get_compute_emergency_stop_status") {
+      return Promise.resolve(Response.json({
+        schema_version: 1,
+        latch_state: "clear",
+        operation_id: null,
+        cutoff_at: null,
+        target_count: null,
+        terminalized_count: null,
+        pending_target_count: null,
+        created_at: null,
+        updated_at: null,
+        completed_at: null,
+      }));
+    }
+    return Promise.reject(new Error(`Unexpected fetch ${outbound.url}`));
+  }) as typeof fetch;
+  try {
+    const response = await handleAdmin(
+      new Request(
+        "https://example.com/api/admin/compute/emergency-stop",
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${EMERGENCY_TOKEN}`,
+            "x-forwarded-for": "203.0.113.19",
+          },
+        },
+      ),
+    );
+    assertEquals(response.status, 200);
+    assertEquals(response.headers.get("Cache-Control"), "private, no-store");
+    assertEquals(await response.json(), {
+      schema_version: 1,
+      admission_state: "disabled",
+      latch_state: "clear",
+      operation_id: null,
+      cutoff_at: null,
+      target_count: null,
+      terminalized_count: null,
+      pending_target_count: null,
+      created_at: null,
+      updated_at: null,
+      completed_at: null,
+    });
+    assertEquals(paths, [
+      "/rest/v1/rpc/get_compute_emergency_stop_status",
+    ]);
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalThis.__env = previousEnv;
+  }
 });

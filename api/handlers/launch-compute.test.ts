@@ -392,7 +392,11 @@ Deno.test('launch Compute PUT rejects values, unconfirmed authority, manifest es
 });
 
 Deno.test('launch Compute run pagination and cancellation are strict and projected', async () => {
-  let pageInput: { limit: number; cursor: string | null } | null = null;
+  let pageInput: {
+    limit: number;
+    cursor: string | null;
+    activeOnly: boolean;
+  } | null = null;
   let cancelledRunId: string | null = null;
   let downloadInput: {
     runId: string;
@@ -404,7 +408,11 @@ Deno.test('launch Compute run pagination and cancellation are strict and project
   (run as unknown as Record<string, unknown>).argv = ['secret-bearing-command'];
   const routeService = service({
     listRuns: (input) => {
-      pageInput = { limit: input.limit, cursor: input.cursor };
+      pageInput = {
+        limit: input.limit,
+        cursor: input.cursor,
+        activeOnly: input.activeOnly ?? false,
+      };
       return Promise.resolve({ runs: [run], nextCursor: 'next_page' });
     },
     cancelRun: (input) => {
@@ -424,7 +432,7 @@ Deno.test('launch Compute run pagination and cancellation are strict and project
 
   const list = await handleLaunchComputeRoute(
     computeRequest(
-      `/api/launch/agents/${AGENT_ID}/compute/runs?limit=25&cursor=page_1`,
+      `/api/launch/agents/${AGENT_ID}/compute/runs?limit=25&cursor=page_1&active=true`,
     ),
     `/api/launch/agents/${AGENT_ID}/compute/runs`,
     {
@@ -434,7 +442,11 @@ Deno.test('launch Compute run pagination and cancellation are strict and project
     },
   );
   assertEquals(list.status, 200);
-  assertEquals(pageInput, { limit: 25, cursor: 'page_1' });
+  assertEquals(pageInput, {
+    limit: 25,
+    cursor: 'page_1',
+    activeOnly: true,
+  });
   const listText = await list.text();
   assert(!listText.includes('secret-bearing-command'));
   assert(!listText.includes('public-r2.example'));
@@ -466,7 +478,14 @@ Deno.test('launch Compute run pagination and cancellation are strict and project
   );
 
   for (
-    const query of ['?limit=0', '?cursor=%2A', '?limit=1&limit=2', '?other=1']
+    const query of [
+      '?limit=0',
+      '?cursor=%2A',
+      '?limit=1&limit=2',
+      '?active=false',
+      '?active=1',
+      '?other=1',
+    ]
   ) {
     const response = await handleLaunchComputeRoute(
       computeRequest(`/api/launch/agents/${AGENT_ID}/compute/runs${query}`),

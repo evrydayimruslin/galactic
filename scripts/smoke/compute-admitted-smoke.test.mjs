@@ -64,9 +64,6 @@ function ownerRun(status) {
   const terminal = ["completed", "failed", "cancelled"].includes(status);
   return {
     runId: RUN_ID,
-    receiptId: COMPUTE_RECEIPT_ID,
-    receiptUrl: null,
-    billingMode: "subscription_capacity",
     status,
     agentId: AGENT_ID,
     agentName: "Interface Demo",
@@ -76,9 +73,6 @@ function ownerRun(status) {
       ? null
       : "2026-07-25T12:00:02.000Z",
     finishedAt: terminal ? "2026-07-25T12:00:03.000Z" : null,
-    usage: terminal
-      ? { reserved: 0.5, actual: 0.25, trueUp: -0.25, unit: "Light" }
-      : { reserved: 0.5, actual: null, trueUp: null, unit: "Light" },
     exitCode: status === "completed" ? 0 : null,
     infraFailure: null,
     artifacts: [],
@@ -106,6 +100,8 @@ function smokeConfig(overrides = {}) {
 function happyFetch({
   statuses = ["queued", "settlement_pending", "completed"],
   statusArtifacts,
+  terminalAdmission = false,
+  exposePrivateAccounting = false,
 } = {}) {
   const calls = [];
   let enabled = false;
@@ -165,10 +161,10 @@ function happyFetch({
           success: true,
           functionName: COMPUTE_SMOKE_FUNCTION,
           result: {
-            async: true,
+            async: !terminalAdmission,
             run_id: RUN_ID,
             receipt_id: COMPUTE_RECEIPT_ID,
-            status: "queued",
+            status: terminalAdmission ? "completed" : "queued",
             profile: "developer-v1",
             tools: ["shell"],
             created_at: "2026-07-25T12:00:01.000Z",
@@ -210,7 +206,18 @@ function happyFetch({
     ) {
       const status = statuses[Math.min(runPoll, statuses.length - 1)];
       runPoll += 1;
-      return jsonResponse({ runs: [ownerRun(status)], next_cursor: null });
+      const projected = ownerRun(status);
+      if (exposePrivateAccounting) {
+        projected.receiptId = COMPUTE_RECEIPT_ID;
+        projected.billingMode = "wallet";
+        projected.usage = {
+          reserved: 1,
+          actual: 1,
+          trueUp: 0,
+          unit: "Light",
+        };
+      }
+      return jsonResponse({ runs: [projected], next_cursor: null });
     }
     throw new Error(`unexpected test request: ${call.method} ${url}`);
   };
@@ -362,6 +369,40 @@ test("proves admission, execution, settlement, exact output, and disabled cleanu
       maxArtifacts: 5,
     },
   });
+});
+
+test("accepts the truthful terminal fast-path for an async request", async () => {
+  const { fetchImpl } = happyFetch({
+    terminalAdmission: true,
+    statuses: ["completed"],
+  });
+  const evidence = await runAdmittedComputeSmoke(smokeConfig(), {
+    fetchImpl,
+    sleep: async () => {},
+    writeEvidence: async () => {},
+  });
+
+  assert.equal(evidence.verified, true);
+  assert.deepEqual(evidence.observed_states, ["completed"]);
+});
+
+test("fails if the owner route exposes private accounting", async () => {
+  const { fetchImpl } = happyFetch({
+    statuses: ["completed"],
+    exposePrivateAccounting: true,
+  });
+  await assert.rejects(
+    runAdmittedComputeSmoke(smokeConfig(), {
+      fetchImpl,
+      sleep: async () => {},
+      writeEvidence: async () => {},
+    }),
+    (error) => {
+      assert.equal(error.code, "INVALID_COMPLETION");
+      assert.match(error.message, /private accounting/u);
+      return true;
+    },
+  );
 });
 
 test("rejects a completed status response with output artifacts", async () => {

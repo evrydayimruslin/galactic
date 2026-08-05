@@ -1,9 +1,11 @@
 import {
   assert,
   assertEquals,
+  assertRejects,
 } from "https://deno.land/std@0.210.0/assert/mod.ts";
 
 import {
+  getRoutineMonitorDetail,
   listRoutineMonitor,
   updateRoutineMonitorStatus,
 } from "./routine-monitoring.ts";
@@ -155,7 +157,18 @@ Deno.test("routine monitoring: pause and resume controls return refreshed detail
     }
     if (url.includes("/routine_capabilities")) return jsonResponse([]);
     if (url.includes("/routine_dashboard_bindings")) return jsonResponse([]);
-    if (url.includes("/routine_runs")) return jsonResponse([]);
+    if (url.includes("/routine_runs")) {
+      const headers = new Headers(init?.headers);
+      if (headers.get("Prefer") === "count=exact") {
+        return new Response("[]", {
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Range": "*/0",
+          },
+        });
+      }
+      return jsonResponse([]);
+    }
     return jsonResponse([]);
   }) as typeof fetch;
 
@@ -165,12 +178,111 @@ Deno.test("routine monitoring: pause and resume controls return refreshed detail
     });
 
     assertEquals(detail.routine.status, "paused");
+    assertEquals(detail.routine.active_run_count, 0);
     assert(
       calls.some((call) =>
         call.method === "PATCH" &&
         call.url.includes("/user_routines") &&
         (call.body as { status?: string } | null)?.status === "paused"
       ),
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.__env = originalEnv;
+  }
+});
+
+Deno.test("routine monitoring: detail exposes an exact owner-scoped active run count", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalEnv = globalThis.__env;
+  let countRequest: { url: string; headers: Headers } | null = null;
+  globalThis.__env = {
+    ...(originalEnv || {}),
+    SUPABASE_URL: "https://supabase.example",
+    SUPABASE_SERVICE_ROLE_KEY: "service-key",
+  };
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input.toString();
+    if (url.includes("/user_routines")) {
+      return jsonResponse([routineRow({ status: "paused" })]);
+    }
+    if (
+      url.includes("/routine_capabilities") ||
+      url.includes("/routine_dashboard_bindings")
+    ) {
+      return jsonResponse([]);
+    }
+    if (url.includes("/routine_runs")) {
+      const headers = new Headers(init?.headers);
+      if (headers.get("Prefer") === "count=exact") {
+        countRequest = { url, headers };
+        return new Response("[]", {
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Range": "0-0/7",
+          },
+        });
+      }
+      return jsonResponse([]);
+    }
+    throw new Error(`Unexpected routine detail request: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const detail = await getRoutineMonitorDetail("user-1", "routine-1");
+    assert(detail);
+    assertEquals(detail.routine.active_run_count, 7);
+    assert(countRequest);
+    const countUrl = new URL(countRequest.url);
+    assertEquals(countUrl.searchParams.get("user_id"), "eq.user-1");
+    assertEquals(countUrl.searchParams.get("routine_id"), "eq.routine-1");
+    assertEquals(countUrl.searchParams.get("status"), "in.(queued,running)");
+    assertEquals(countRequest.headers.get("Range"), "0-0");
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.__env = originalEnv;
+  }
+});
+
+Deno.test("routine monitoring: detail fails closed without an exact active run total", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalEnv = globalThis.__env;
+  globalThis.__env = {
+    ...(originalEnv || {}),
+    SUPABASE_URL: "https://supabase.example",
+    SUPABASE_SERVICE_ROLE_KEY: "service-key",
+  };
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input.toString();
+    if (url.includes("/user_routines")) {
+      return jsonResponse([routineRow({ status: "paused" })]);
+    }
+    if (
+      url.includes("/routine_capabilities") ||
+      url.includes("/routine_dashboard_bindings")
+    ) {
+      return jsonResponse([]);
+    }
+    if (url.includes("/routine_runs")) {
+      const headers = new Headers(init?.headers);
+      if (headers.get("Prefer") === "count=exact") {
+        return new Response("[]", {
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Range": "not-a-range/1",
+          },
+        });
+      }
+      return jsonResponse([]);
+    }
+    throw new Error(`Unexpected routine detail request: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    await assertRejects(
+      () => getRoutineMonitorDetail("user-1", "routine-1"),
+      Error,
+      "Active routine run count is unavailable",
     );
   } finally {
     globalThis.fetch = originalFetch;

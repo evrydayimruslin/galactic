@@ -1,0 +1,2222 @@
+name: Compute Canary Rollout
+
+# Restore the already-deployed Galactic Compute digest by changing only the
+# five API admission/certification-policy vars. Every mutating dispatch captures or uploads
+# its own exact admission-OFF rollback version before promotion. Historical
+# Compute Deploy evidence certifies only the Compute Worker/image pair and is
+# never accepted as rollback authority.
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Staged admission transition to execute.
+        required: true
+        default: staging_canary
+        type: choice
+        options:
+          - staging_canary
+          - production_canary
+          - production_global
+          - revert_off
+      revert_target:
+        description: Target for revert_off; ignored by every other stage.
+        required: true
+        default: production
+        type: choice
+        options:
+          - staging
+          - production
+      confirmation:
+        description: Exact typed confirmation documented in the runbook.
+        required: true
+        type: string
+      reason:
+        description: Printable 8-240 character audit reason.
+        required: true
+        type: string
+      compute_release_run_id:
+        description: Successful preserve_off Compute Deploy run certifying the live digest.
+        required: true
+        type: string
+      predecessor_rollout_run_id:
+        description: Prior successful rollout stage run; optional only for staging_canary or emergency revert recovery.
+        required: false
+        default: ''
+        type: string
+      recovery_source_sha:
+        description: Exact ancestor source SHA for revert recovery after the live API source has moved.
+        required: false
+        default: ''
+        type: string
+      completed_stop_operation_id:
+        description: Exact completed emergency-stop UUID to release while admission is OFF.
+        required: false
+        default: ''
+        type: string
+      completed_stop_release_confirmation:
+        description: Type release-completed-stop:<UUID> to release the completed latch.
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+jobs:
+  rollout:
+    name: ${{ inputs.stage }} (${{ (inputs.stage == 'staging_canary' || (inputs.stage == 'revert_off' && inputs.revert_target == 'staging')) && 'staging' || 'production' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: ${{ (inputs.stage == 'staging_canary' || (inputs.stage == 'revert_off' && inputs.revert_target == 'staging')) && 'staging' || 'production' }}
+    concurrency:
+      # This is the same lock used by API Deploy, Compute Deploy, and the
+      # emergency admission-disable workflow.
+      group: api-${{ (inputs.stage == 'staging_canary' || (inputs.stage == 'revert_off' && inputs.revert_target == 'staging')) && 'staging' || 'production' }}-deploy
+      cancel-in-progress: false
+    env:
+      EVIDENCE_DIR: ${{ github.workspace }}/compute-rollout-evidence
+      REQUESTED_STAGE: ${{ inputs.stage }}
+      REQUESTED_TARGET: ${{ (inputs.stage == 'staging_canary' || (inputs.stage == 'revert_off' && inputs.revert_target == 'staging')) && 'staging' || 'production' }}
+      ROLLOUT_CONFIRMATION: ${{ inputs.confirmation }}
+      ROLLOUT_REASON: ${{ inputs.reason }}
+      COMPUTE_RELEASE_RUN_ID_INPUT: ${{ inputs.compute_release_run_id }}
+      PREDECESSOR_RUN_ID_INPUT: ${{ inputs.predecessor_rollout_run_id }}
+      RECOVERY_SOURCE_SHA_INPUT: ${{ inputs.recovery_source_sha }}
+      COMPLETED_STOP_OPERATION_ID_INPUT: ${{ inputs.completed_stop_operation_id }}
+      COMPLETED_STOP_CONFIRMATION_INPUT: ${{ inputs.completed_stop_release_confirmation }}
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            api/package-lock.json
+            compute-worker/package-lock.json
+
+      - name: Validate request and configure the exact target
+        id: request
+        shell: bash
+        env:
+          REVERT_TARGET_INPUT: ${{ inputs.revert_target }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$EVIDENCE_DIR"
+          chmod 700 "$EVIDENCE_DIR"
+
+          case "$REQUESTED_STAGE" in
+            staging_canary)
+              expected_target=staging
+              expected_confirmation=rollout-staging-canary
+              expected_ref=refs/heads/main
+              predecessor_required=false
+              certification_profile=staging-full
+              ;;
+            production_canary)
+              expected_target=production
+              expected_confirmation=rollout-production-canary
+              expected_ref=tag
+              predecessor_required=true
+              certification_profile=production-canary
+              ;;
+            production_global)
+              expected_target=production
+              expected_confirmation=rollout-production-global
+              expected_ref=tag
+              predecessor_required=true
+              certification_profile=production-global
+              ;;
+            revert_off)
+              expected_target="$REVERT_TARGET_INPUT"
+              expected_confirmation="revert-$REVERT_TARGET_INPUT-off"
+              if [ "$REVERT_TARGET_INPUT" = "staging" ]; then
+                expected_ref=refs/heads/main
+              else
+                expected_ref=tag
+              fi
+              predecessor_required=false
+              if [ "$REVERT_TARGET_INPUT" = "staging" ]; then
+                certification_profile=staging-full
+              else
+                certification_profile=production-global
+              fi
+              ;;
+            *)
+              echo "Unsupported rollout stage." >&2
+              exit 1
+              ;;
+          esac
+          [ "$REQUESTED_TARGET" = "$expected_target" ] || {
+            echo "Stage/target resolution is inconsistent." >&2
+            exit 1
+          }
+          [ "$ROLLOUT_CONFIRMATION" = "$expected_confirmation" ] || {
+            echo "confirmation must be exactly $expected_confirmation" >&2
+            exit 1
+          }
+          if ! [[ "$COMPUTE_RELEASE_RUN_ID_INPUT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "compute_release_run_id must be a positive run ID." >&2
+            exit 1
+          fi
+          if [ "$predecessor_required" = "true" ]; then
+            if ! [[ "$PREDECESSOR_RUN_ID_INPUT" =~ ^[1-9][0-9]*$ ]]; then
+              echo "This stage requires a positive predecessor_rollout_run_id." >&2
+              exit 1
+            fi
+          elif [ "$REQUESTED_STAGE" = "staging_canary" ] &&
+               [ -n "$PREDECESSOR_RUN_ID_INPUT" ]; then
+            echo "staging_canary must not claim a predecessor run." >&2
+            exit 1
+          elif [ -n "$PREDECESSOR_RUN_ID_INPUT" ] &&
+               ! [[ "$PREDECESSOR_RUN_ID_INPUT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "predecessor_rollout_run_id must be a positive run ID when supplied." >&2
+            exit 1
+          fi
+          if [ -n "$RECOVERY_SOURCE_SHA_INPUT" ]; then
+            [ "$REQUESTED_STAGE" = "revert_off" ] || {
+              echo "recovery_source_sha is valid only for revert_off." >&2
+              exit 1
+            }
+            [[ "$RECOVERY_SOURCE_SHA_INPUT" =~ ^[0-9a-f]{40}$ ]] || {
+              echo "recovery_source_sha must be a full lowercase commit SHA." >&2
+              exit 1
+            }
+            git cat-file -e "$RECOVERY_SOURCE_SHA_INPUT^{commit}" 2>/dev/null || {
+              echo "recovery_source_sha is not present in this repository clone." >&2
+              exit 1
+            }
+            git merge-base --is-ancestor \
+              "$RECOVERY_SOURCE_SHA_INPUT" "$GITHUB_SHA" || {
+              echo "recovery_source_sha must be this ref or one of its ancestors." >&2
+              exit 1
+            }
+            upload_source_sha="$RECOVERY_SOURCE_SHA_INPUT"
+          else
+            upload_source_sha="$GITHUB_SHA"
+          fi
+          if [ "$expected_ref" = "tag" ]; then
+            case "$GITHUB_REF" in
+              refs/tags/v*) ;;
+              *)
+                echo "Production rollout stages must run from an immutable v* tag." >&2
+                exit 1
+                ;;
+            esac
+            resolved_tag_sha="$(git rev-parse "$GITHUB_REF^{commit}")"
+            [ "$resolved_tag_sha" = "$GITHUB_SHA" ] || {
+              echo "Production tag does not resolve to the workflow SHA." >&2
+              exit 1
+            }
+          elif [ "$GITHUB_REF" != "$expected_ref" ]; then
+            echo "Staging rollout stages must run from main." >&2
+            exit 1
+          fi
+
+          node - <<'NODE'
+          const reason = process.env.ROLLOUT_REASON ?? "";
+          if (
+            reason.length < 8 || reason.length > 240 ||
+            /[\u0000-\u001f\u007f]/u.test(reason)
+          ) {
+            console.error("reason must be 8-240 printable characters.");
+            process.exit(1);
+          }
+          NODE
+          operation_id="$COMPLETED_STOP_OPERATION_ID_INPUT"
+          release_confirmation="$COMPLETED_STOP_CONFIRMATION_INPUT"
+          if [ -n "$operation_id" ] || [ -n "$release_confirmation" ]; then
+            if ! [[ "$operation_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]; then
+              echo "completed_stop_operation_id must be a canonical UUID." >&2
+              exit 1
+            fi
+            [ "$release_confirmation" = "release-completed-stop:$operation_id" ] || {
+              echo "completed stop release confirmation is incorrect." >&2
+              exit 1
+            }
+          fi
+
+          if [ "$REQUESTED_TARGET" = "staging" ]; then
+            api_worker=ultralight-api-staging
+            compute_worker=galactic-compute-staging
+            wrangler_env=staging
+            compute_config=wrangler.staging.toml
+            image_repository=galactic-compute-staging
+            api_base=https://ultralight-api-staging.rgn4jz429m.workers.dev
+          else
+            api_worker=ultralight-api
+            compute_worker=galactic-compute
+            wrangler_env=
+            compute_config=wrangler.toml
+            image_repository=galactic-compute
+            api_base=https://api.connectgalactic.com
+          fi
+          {
+            echo "API_WORKER=$api_worker"
+            echo "COMPUTE_WORKER=$compute_worker"
+            echo "API_WRANGLER_ENV=$wrangler_env"
+            echo "COMPUTE_CONFIG=$compute_config"
+            echo "IMAGE_REPOSITORY=$image_repository"
+            echo "CONTAINER_APPLICATION=$compute_worker-computestandard"
+            echo "API_BASE=$api_base"
+            echo "API_UPLOAD_DIR=$GITHUB_WORKSPACE/api"
+            echo "API_UPLOAD_SOURCE_SHA=$upload_source_sha"
+            echo "COMPUTE_CERTIFICATION_PROFILE=$certification_profile"
+          } >> "$GITHUB_ENV"
+
+          reason_sha256="$(printf '%s' "$ROLLOUT_REASON" | sha256sum | cut -d ' ' -f 1)"
+          jq -n \
+            --arg stage "$REQUESTED_STAGE" \
+            --arg target "$REQUESTED_TARGET" \
+            --arg certification_profile "$certification_profile" \
+            --arg confirmation "$ROLLOUT_CONFIRMATION" \
+            --arg reason_sha256 "$reason_sha256" \
+            --arg compute_release_run_id "$COMPUTE_RELEASE_RUN_ID_INPUT" \
+            --arg predecessor_run_id "$PREDECESSOR_RUN_ID_INPUT" \
+            --arg recovery_source_sha "$RECOVERY_SOURCE_SHA_INPUT" \
+            --arg upload_source_sha "$upload_source_sha" \
+            --arg completed_stop_operation_id "$operation_id" \
+            '{
+              schema_version: 1,
+              stage: $stage,
+              target: $target,
+              certification_profile: $certification_profile,
+              confirmation: $confirmation,
+              reason_sha256: $reason_sha256,
+              compute_release_run_id: $compute_release_run_id,
+              predecessor_rollout_run_id:
+                (if $predecessor_run_id == "" then null else $predecessor_run_id end),
+              recovery_source_sha:
+                (if $recovery_source_sha == "" then null else $recovery_source_sha end),
+              upload_source_sha: $upload_source_sha,
+              completed_stop_operation_id:
+                (if $completed_stop_operation_id == "" then null else $completed_stop_operation_id end)
+            }' > "$EVIDENCE_DIR/request.json"
+
+      - name: Install pinned release dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix api ci
+          npm --prefix compute-worker ci
+          [ "$(node -p "require('./api/node_modules/wrangler/package.json').version")" = "4.112.0" ]
+          [ "$(node -p "require('./compute-worker/node_modules/wrangler/package.json').version")" = "4.112.0" ]
+          if [ -n "$RECOVERY_SOURCE_SHA_INPUT" ]; then
+            recovery_root="$RUNNER_TEMP/compute-recovery-source"
+            [ ! -e "$recovery_root" ] || {
+              echo "Recovery source path already exists." >&2
+              exit 1
+            }
+            mkdir -p "$recovery_root"
+            git archive "$RECOVERY_SOURCE_SHA_INPUT" |
+              tar -x -C "$recovery_root"
+            recovery_api="$recovery_root/api"
+            npm --prefix "$recovery_api" ci --ignore-scripts
+            [ "$(node -p \
+              "require('$recovery_api/node_modules/wrangler/package.json').version")" = \
+              "4.112.0" ] || {
+              echo "Recovery source does not pin the reviewed Wrangler version." >&2
+              exit 1
+            }
+            echo "API_UPLOAD_DIR=$recovery_api" >> "$GITHUB_ENV"
+          fi
+
+      - name: Enforce production hygiene and verify Compute release evidence
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          run_json="$RUNNER_TEMP/compute-release-run.json"
+          pull_json="$RUNNER_TEMP/compute-hygiene-pr-172.json"
+          artifact_dir="$RUNNER_TEMP/compute-release-evidence"
+
+          gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$COMPUTE_RELEASE_RUN_ID_INPUT" \
+            > "$run_json"
+          release_sha="$(jq -er '.head_sha' "$run_json")"
+          release_artifact="compute-$REQUESTED_TARGET-release-$release_sha"
+          mkdir -p "$artifact_dir"
+          gh run download "$COMPUTE_RELEASE_RUN_ID_INPUT" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$release_artifact" \
+            --dir "$artifact_dir"
+          node scripts/release/verify-compute-rollout-release-evidence.mjs \
+            "$artifact_dir" "$REQUESTED_TARGET" "$run_json" \
+            "$COMPUTE_RELEASE_RUN_ID_INPUT" \
+            > "$EVIDENCE_DIR/compute-release-verification.json"
+
+          gh api "repos/$GITHUB_REPOSITORY/pulls/172" > "$pull_json"
+          jq -e '
+            (.number == 172) and
+            (.state == "open" or .state == "closed")
+          ' "$pull_json" >/dev/null
+          jq '{
+            number,
+            state,
+            merged: (.merged_at != null),
+            merged_at,
+            updated_at,
+            head_sha: .head.sha
+          }' "$pull_json" > "$EVIDENCE_DIR/hygiene-pr-172.json"
+          if [ "$REQUESTED_TARGET" = "production" ] &&
+             [ "$REQUESTED_STAGE" != "revert_off" ] &&
+             [ "$(jq -r '.state' "$pull_json")" = "open" ]; then
+            echo "PR #172 must be merged or closed before production canary work." >&2
+            exit 1
+          fi
+
+          jq -r '
+            "environment_digest=" + .environment_digest,
+            "compute_version_id=" + .compute_version_id,
+            "compute_version_tag=" + .compute_version_tag
+          ' "$EVIDENCE_DIR/compute-release-verification.json" >> "$GITHUB_OUTPUT"
+
+      - name: Download and verify the predecessor stage
+        id: predecessor
+        if: >-
+          inputs.stage != 'staging_canary' &&
+          inputs.predecessor_rollout_run_id != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          run_json="$RUNNER_TEMP/predecessor-run.json"
+          artifacts_json="$RUNNER_TEMP/predecessor-artifacts.json"
+          predecessor_dir="$RUNNER_TEMP/predecessor-rollout"
+          gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$PREDECESSOR_RUN_ID_INPUT" \
+            > "$run_json"
+          gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$PREDECESSOR_RUN_ID_INPUT/artifacts?per_page=100" \
+            > "$artifacts_json"
+          run_attempt="$(jq -er '.run_attempt | tostring' "$run_json")"
+
+          case "$REQUESTED_STAGE" in
+            production_canary)
+              predecessor_stage=staging_canary
+              predecessor_target=staging
+              minimum_age=0
+              ;;
+            production_global)
+              predecessor_stage=production_canary
+              predecessor_target=production
+              minimum_age=86400
+              ;;
+            revert_off)
+              predecessor_target="$REQUESTED_TARGET"
+              suffix="-$predecessor_target-$PREDECESSOR_RUN_ID_INPUT-$run_attempt"
+              predecessor_stage="$(jq -er --arg suffix "$suffix" '
+                [.artifacts[] |
+                  select(.expired == false) |
+                  .name |
+                  select(startswith("compute-canary-rollout-") and endswith($suffix)) |
+                  sub("^compute-canary-rollout-"; "") |
+                  sub(($suffix + "$"); "")
+                ] |
+                if length == 1 then .[0]
+                else error("expected one predecessor rollout artifact")
+                end
+              ' "$artifacts_json")"
+              case "$predecessor_stage/$predecessor_target" in
+                staging_canary/staging|production_canary/production|production_global/production) ;;
+                *)
+                  echo "revert_off predecessor is not a same-target enabled rollout." >&2
+                  exit 1
+                  ;;
+              esac
+              minimum_age=0
+              ;;
+          esac
+          artifact_name="compute-canary-rollout-$predecessor_stage-$predecessor_target-$PREDECESSOR_RUN_ID_INPUT-$run_attempt"
+          mkdir -p "$predecessor_dir"
+          gh run download "$PREDECESSOR_RUN_ID_INPUT" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$artifact_name" \
+            --dir "$predecessor_dir"
+          node scripts/release/verify-compute-rollout-predecessor.mjs \
+            "$predecessor_dir" "$run_json" "$artifacts_json" \
+            "$PREDECESSOR_RUN_ID_INPUT" "$predecessor_stage" \
+            "$predecessor_target" "$GITHUB_SHA" "$minimum_age" \
+            > "$EVIDENCE_DIR/predecessor-verification.json"
+          cp "$predecessor_dir/rollout.json" "$EVIDENCE_DIR/predecessor-rollout.json"
+          cp "$predecessor_dir/final-state.json" "$EVIDENCE_DIR/predecessor-final-state.json"
+          {
+            echo "stage=$predecessor_stage"
+            echo "target=$predecessor_target"
+            echo "run_attempt=$run_attempt"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify the active production canary soak
+        id: active_soak
+        if: inputs.stage == 'production_global'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          predecessor="$EVIDENCE_DIR/predecessor-verification.json"
+          soak_root="$RUNNER_TEMP/compute-canary-soak"
+          download_root="$soak_root/probe-evidence"
+          mkdir -p "$download_root"
+
+          window_started_at="$(jq -er '.predecessor.workflow_completed_at' "$predecessor")"
+          production_canary_run_id="$(jq -er '.dispatch.workflow_run_id' "$predecessor")"
+          lookback_at="$(
+            date -u -d "$window_started_at - 1 day" +%Y-%m-%dT%H:%M:%SZ
+          )"
+
+          fetch_workflow_page_set() {
+            local workflow_file="$1"
+            local output="$2"
+            local endpoint="repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_file/runs"
+            if [ "$workflow_file" = "compute-probe.yml" ]; then
+              gh api --method GET --paginate "$endpoint" \
+                -f per_page=100 \
+                -f "created=>=$lookback_at" > "$output"
+              return
+            fi
+
+            # A protected-environment deployment can be created before the
+            # soak and approved much later. Fetch every retained deploy run so
+            # the local updated_at overlap fence cannot miss that transition.
+            gh api --method GET --paginate "$endpoint" \
+              -f per_page=100 > "$output"
+          }
+
+          normalize_workflow_query() {
+            local workflow_path="$1"
+            local raw_pages="$2"
+            local window_ended_at="$3"
+            local output="$4"
+            local selector
+            if [ "$workflow_path" = ".github/workflows/compute-probe.yml" ]; then
+              selector='select(.created_at >= $start and .created_at <= $end)'
+            else
+              selector='select(.created_at <= $end and .updated_at >= $start)'
+            fi
+            jq -s \
+              --arg path "$workflow_path" \
+              --arg start "$window_started_at" \
+              --arg end "$window_ended_at" \
+              --arg selector "$selector" '
+                [.[].workflow_runs[] |
+                  if $selector | contains("created_at >=")
+                  then select(.created_at >= $start and .created_at <= $end)
+                  else select(.created_at <= $end and .updated_at >= $start)
+                  end |
+                  {
+                    id: (.id | tostring),
+                    run_attempt: (.run_attempt | tostring),
+                    event,
+                    status,
+                    conclusion,
+                    head_branch,
+                    head_sha,
+                    created_at,
+                    run_started_at,
+                    updated_at
+                  }
+                ] |
+                sort_by(.created_at, (.id | tonumber)) |
+                {
+                  workflow_path: $path,
+                  total_count: length,
+                  workflow_runs: .
+                }
+              ' "$raw_pages" > "$output"
+          }
+
+          capture_run_inventory() {
+            local destination="$1"
+            local captured_at
+            captured_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            for workflow_file in api-deploy.yml compute-deploy.yml compute-probe.yml; do
+              fetch_workflow_page_set \
+                "$workflow_file" "$soak_root/$workflow_file-pages.json"
+              normalize_workflow_query \
+                ".github/workflows/$workflow_file" \
+                "$soak_root/$workflow_file-pages.json" \
+                "$captured_at" "$soak_root/$workflow_file-query.json"
+            done
+            jq -n \
+              --arg repository "$GITHUB_REPOSITORY" \
+              --arg window_started_at "$window_started_at" \
+              --arg captured_at "$captured_at" \
+              --slurpfile api "$soak_root/api-deploy.yml-query.json" \
+              --slurpfile compute "$soak_root/compute-deploy.yml-query.json" \
+              --slurpfile probe "$soak_root/compute-probe.yml-query.json" '
+                {
+                  schema_version: 1,
+                  kind: "galactic_compute_soak_run_inventory",
+                  repository: $repository,
+                  window_started_at: $window_started_at,
+                  window_ended_at: $captured_at,
+                  captured_at: $captured_at,
+                  queries: [$api[0], $compute[0], $probe[0]]
+                }
+              ' > "$destination"
+          }
+
+          fetch_repository_artifacts() {
+            local output="$1"
+            gh api --method GET --paginate \
+              "repos/$GITHUB_REPOSITORY/actions/artifacts" \
+              -f per_page=100 > "$output"
+          }
+
+          capture_run_inventory "$soak_root/preliminary-runs.json"
+          fetch_repository_artifacts "$soak_root/preliminary-artifact-pages.json"
+          jq -s \
+            --arg prefix "compute-probe-production-$production_canary_run_id-" \
+            --slurpfile runs "$soak_root/preliminary-runs.json" '
+              ($runs[0].queries[] |
+                select(.workflow_path == ".github/workflows/compute-probe.yml") |
+                .workflow_runs | map(.id)) as $probe_ids |
+              [.[].artifacts[] |
+                select(.expired == false) |
+                select(.name | startswith($prefix)) |
+                select((.workflow_run.id | tostring) as $id |
+                  $probe_ids | index($id))
+              ] |
+              sort_by(.created_at, .id)
+            ' "$soak_root/preliminary-artifact-pages.json" \
+            > "$soak_root/preliminary-artifacts.json"
+          jq -e \
+            --slurpfile runs "$soak_root/preliminary-runs.json" '
+              ($runs[0].queries[] |
+                select(.workflow_path == ".github/workflows/compute-probe.yml") |
+                .workflow_runs | length) as $expected |
+              length == $expected and
+              (map(.workflow_run.id) | unique | length) == $expected
+            ' "$soak_root/preliminary-artifacts.json" >/dev/null
+
+          jq -r '.[] | [.workflow_run.id, .name] | @tsv' \
+            "$soak_root/preliminary-artifacts.json" |
+            while IFS=$'\t' read -r probe_run_id artifact_name; do
+              destination="$download_root/$artifact_name"
+              mkdir -p "$destination"
+              gh run download "$probe_run_id" \
+                --repo "$GITHUB_REPOSITORY" \
+                --name "$artifact_name" \
+                --dir "$destination"
+            done
+
+          # Re-capture both inventories after every download. A probe that
+          # finishes during collection makes this dispatch fail closed and the
+          # operator can retry against the now-stable complete set.
+          capture_run_inventory "$EVIDENCE_DIR/soak-runs.json"
+          fetch_repository_artifacts "$soak_root/final-artifact-pages.json"
+          artifact_captured_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          jq -s \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg captured_at "$artifact_captured_at" \
+            --arg prefix "compute-probe-production-$production_canary_run_id-" \
+            --slurpfile runs "$EVIDENCE_DIR/soak-runs.json" '
+              ($runs[0].queries[] |
+                select(.workflow_path == ".github/workflows/compute-probe.yml") |
+                .workflow_runs) as $probe_runs |
+              (reduce $probe_runs[] as $run ({}; .[$run.id] = $run)) as $by_id |
+              [.[].artifacts[] |
+                select(.name | startswith($prefix)) |
+                (.workflow_run.id | tostring) as $run_id |
+                select($by_id[$run_id] != null) |
+                {
+                  id: (.id | tostring),
+                  name,
+                  workflow_run_id: $run_id,
+                  run_attempt: $by_id[$run_id].run_attempt,
+                  head_sha: .workflow_run.head_sha,
+                  size_in_bytes: (.size_in_bytes | tostring),
+                  expired,
+                  created_at,
+                  updated_at,
+                  expires_at
+                }
+              ] |
+              sort_by(.created_at, (.id | tonumber)) |
+              {
+                schema_version: 1,
+                kind: "galactic_compute_soak_artifact_inventory",
+                repository: $repository,
+                captured_at: $captured_at,
+                total_count: length,
+                artifacts: .
+              }
+            ' "$soak_root/final-artifact-pages.json" \
+            > "$EVIDENCE_DIR/soak-artifacts.json"
+
+          node scripts/release/verify-compute-canary-soak.mjs \
+            --predecessor "$predecessor" \
+            --runs "$EVIDENCE_DIR/soak-runs.json" \
+            --artifacts "$EVIDENCE_DIR/soak-artifacts.json" \
+            --evidence-dir "$download_root" \
+            --current-git-sha "$GITHUB_SHA" \
+            --current-workflow-run-id "$GITHUB_RUN_ID" \
+            > "$EVIDENCE_DIR/soak-verification.json"
+          jq -e \
+            --arg sha "$GITHUB_SHA" \
+            --arg canary_run "$production_canary_run_id" \
+            --arg current_run "$GITHUB_RUN_ID" '
+              .schema_version == 1 and
+              .kind == "galactic_compute_canary_soak_verification" and
+              .verified == true and
+              .target == "production" and
+              .candidate_sha == $sha and
+              .production_canary_workflow_run_id == $canary_run and
+              .current_workflow_run_id == $current_run and
+              .minimum_soak_seconds == 86400 and
+              .maximum_lifecycle_gap_seconds <= 2100 and
+              .maximum_browser_gap_seconds <= 4200 and
+              .probe_count > 0 and
+              .browser_probe_count > 0 and
+              .accounting_violations == 0 and
+              .reconciliation_violations == 0
+            ' "$EVIDENCE_DIR/soak-verification.json" >/dev/null
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Inspect and bind the exact live API/Compute pair
+        id: baseline
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          api_status="$RUNNER_TEMP/baseline-api-status.json"
+          compute_status="$RUNNER_TEMP/baseline-compute-status.json"
+          api_version="$RUNNER_TEMP/baseline-api-version.json"
+          compute_version="$RUNNER_TEMP/baseline-compute-version.json"
+          inspected="$RUNNER_TEMP/baseline-inspected.json"
+          baseline="$EVIDENCE_DIR/baseline-state.json"
+
+          pushd api >/dev/null
+          npx wrangler deployments status \
+            --config wrangler.toml --env "$API_WRANGLER_ENV" \
+            --name "$API_WORKER" --json > "$api_status"
+          npx wrangler deployments status \
+            --config wrangler.toml --env "$API_WRANGLER_ENV" \
+            --name "$COMPUTE_WORKER" --json > "$compute_status"
+          api_version_id="$(jq -er '
+            if (.versions | length) == 1 and
+               ((.versions[0].percentage | tonumber) == 100)
+            then .versions[0].version_id
+            else error("API is not one stable version at 100 percent")
+            end
+          ' "$api_status")"
+          compute_version_id="$(jq -er '
+            if (.versions | length) == 1 and
+               ((.versions[0].percentage | tonumber) == 100)
+            then .versions[0].version_id
+            else error("Compute is not one stable version at 100 percent")
+            end
+          ' "$compute_status")"
+          npx wrangler versions view "$api_version_id" \
+            --config wrangler.toml --env "$API_WRANGLER_ENV" \
+            --name "$API_WORKER" --json > "$api_version"
+          npx wrangler versions view "$compute_version_id" \
+            --config wrangler.toml --env "$API_WRANGLER_ENV" \
+            --name "$COMPUTE_WORKER" --json > "$compute_version"
+          popd >/dev/null
+
+          node scripts/release/verify-api-compute-rollout-state.mjs \
+            inspect "$REQUESTED_TARGET" "$api_status" "$api_version" \
+            "$compute_status" "$compute_version" > "$inspected"
+          policy="$(jq -er '.policy' "$inspected")"
+          if [ "$policy" = "off" ]; then
+            api_tag="$(jq -er '.annotations["workers/tag"]' "$api_version")"
+            node scripts/release/verify-api-compute-rollout-state.mjs \
+              capture-off "$REQUESTED_TARGET" "$api_status" "$api_version" \
+              "$compute_status" "$compute_version" "$api_tag" > "$baseline"
+          else
+            cp "$inspected" "$baseline"
+          fi
+
+          case "$REQUESTED_STAGE/$policy" in
+            staging_canary/off|production_canary/off|production_global/canary) ;;
+            revert_off/off|revert_off/canary|revert_off/global) ;;
+            *)
+              echo "Live admission policy is not a legal baseline for this stage." >&2
+              exit 1
+              ;;
+          esac
+          jq -ne \
+            --slurpfile state "$baseline" \
+            --slurpfile release "$EVIDENCE_DIR/compute-release-verification.json" '
+              ($state[0].environment_digest == $release[0].environment_digest) and
+              ($state[0].compute.version_id == $release[0].compute_version_id) and
+              ($state[0].compute.version_tag == $release[0].compute_version_tag)
+            ' </dev/null >/dev/null || {
+            echo "Live Compute does not match the cryptographically verified release evidence." >&2
+            exit 1
+          }
+          if [ "$REQUESTED_STAGE" = "production_global" ]; then
+            jq -ne \
+              --slurpfile current "$baseline" \
+              --slurpfile prior "$EVIDENCE_DIR/predecessor-final-state.json" '
+                def identity:
+                  {
+                    policy,
+                    canary_allowlist,
+                    certification_principal,
+                    environment_digest,
+                    api,
+                    compute
+                  };
+                ($current[0] | identity) == ($prior[0] | identity)
+              ' </dev/null >/dev/null || {
+              echo "Production canary drifted during its soak window." >&2
+              exit 1
+            }
+          elif [ "$REQUESTED_STAGE" = "production_canary" ]; then
+            jq -ne \
+              --slurpfile current "$baseline" \
+              --slurpfile prior "$EVIDENCE_DIR/predecessor-final-state.json" '
+                ($current[0].environment_digest == $prior[0].environment_digest) and
+                ($current[0].api.code_etag == $prior[0].api.code_etag) and
+                ($current[0].compute.code_etag == $prior[0].compute.code_etag)
+              ' </dev/null >/dev/null || {
+              echo "Production canary is not the staging-certified code/digest." >&2
+              exit 1
+            }
+          fi
+          {
+            echo "policy=$policy"
+            echo "api_version_id=$api_version_id"
+            echo "compute_version_id=$compute_version_id"
+            echo "environment_digest=$(jq -er '.environment_digest' "$baseline")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify exact container readiness
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ENVIRONMENT_DIGEST: ${{ steps.baseline.outputs.environment_digest }}
+        run: |
+          set -euo pipefail
+          container_list="$RUNNER_TEMP/baseline-container-list.json"
+          expected_image="registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/$IMAGE_REPOSITORY@$ENVIRONMENT_DIGEST"
+          pushd compute-worker >/dev/null
+          npx wrangler containers list \
+            --config "$COMPUTE_CONFIG" --json > "$container_list"
+          popd >/dev/null
+          node compute-worker/scripts/verify-container-readiness.mjs \
+            "$container_list" "$CONTAINER_APPLICATION" "$expected_image" \
+            > "$EVIDENCE_DIR/baseline-container-readiness.json"
+
+      - name: Preflight the emergency-stop latch
+        id: latch
+        shell: bash
+        env:
+          COMPUTE_EMERGENCY_STOP_TOKEN: ${{ secrets.COMPUTE_EMERGENCY_STOP_TOKEN }}
+          BASELINE_POLICY: ${{ steps.baseline.outputs.policy }}
+        run: |
+          set -euo pipefail
+          [ -n "$COMPUTE_EMERGENCY_STOP_TOKEN" ] || {
+            echo "The selected environment must provide COMPUTE_EMERGENCY_STOP_TOKEN." >&2
+            exit 1
+          }
+          status_file="$EVIDENCE_DIR/emergency-stop-before.json"
+          curl -fsS --retry 2 --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer $COMPUTE_EMERGENCY_STOP_TOKEN" \
+            -H "Accept: application/json" \
+            "$API_BASE/api/admin/compute/emergency-stop" > "$status_file"
+          if [ "$BASELINE_POLICY" = "off" ]; then
+            admission_state=disabled
+          else
+            admission_state=enabled
+          fi
+          latch_state="$(jq -er '.latch_state' "$status_file")"
+          operation_id="$(jq -r '.operation_id // ""' "$status_file")"
+          case "$latch_state" in
+            clear)
+              node scripts/release/verify-compute-emergency-stop-status.mjs \
+                "$status_file" "$admission_state" clear
+              if [ -n "$COMPLETED_STOP_OPERATION_ID_INPUT" ]; then
+                echo "No completed emergency-stop latch exists to release." >&2
+                exit 1
+              fi
+              ;;
+            active)
+              node scripts/release/verify-compute-emergency-stop-status.mjs \
+                "$status_file" "$admission_state" active "$operation_id"
+              echo "An active emergency stop blocks every rollout transition." >&2
+              exit 1
+              ;;
+            completed)
+              node scripts/release/verify-compute-emergency-stop-status.mjs \
+                "$status_file" "$admission_state" completed "$operation_id"
+              if [ "$REQUESTED_STAGE" = "revert_off" ]; then
+                if [ -n "$COMPLETED_STOP_OPERATION_ID_INPUT" ] &&
+                   [ "$operation_id" != "$COMPLETED_STOP_OPERATION_ID_INPUT" ]; then
+                  echo "Completed stop operation does not match the requested release." >&2
+                  exit 1
+                fi
+                echo "Completed latch will remain engaged until admission is OFF." \
+                  >> "$GITHUB_STEP_SUMMARY"
+              elif [ "$BASELINE_POLICY" != "off" ]; then
+                echo "Run revert_off before releasing a completed latch from an enabled state." >&2
+                exit 1
+              elif [ "$operation_id" != "$COMPLETED_STOP_OPERATION_ID_INPUT" ]; then
+                echo "Completed latch requires its exact operation ID and confirmation." >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Emergency-stop endpoint returned an unsupported latch state." >&2
+              exit 1
+              ;;
+          esac
+          {
+            echo "state=$latch_state"
+            echo "operation_id=$operation_id"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Release a completed latch while the live API is OFF
+        if: >-
+          steps.latch.outputs.state == 'completed' &&
+          steps.baseline.outputs.policy == 'off' &&
+          inputs.stage != 'revert_off'
+        shell: bash
+        env:
+          COMPUTE_EMERGENCY_STOP_TOKEN: ${{ secrets.COMPUTE_EMERGENCY_STOP_TOKEN }}
+        run: |
+          set -euo pipefail
+          request_file="$RUNNER_TEMP/emergency-stop-release-request.json"
+          response_file="$EVIDENCE_DIR/emergency-stop-release.json"
+          after_file="$EVIDENCE_DIR/emergency-stop-after-release.json"
+          idempotency_key="$(node -p "require('node:crypto').randomUUID()")"
+          jq -n --arg reason "$ROLLOUT_REASON" \
+            '{reason: $reason, confirm: "RELEASE_COMPUTE_STOP"}' \
+            > "$request_file"
+          curl -fsS --retry 2 --connect-timeout 10 --max-time 30 \
+            -X POST \
+            -H "Authorization: Bearer $COMPUTE_EMERGENCY_STOP_TOKEN" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
+            -H "Idempotency-Key: $idempotency_key" \
+            --data-binary "@$request_file" \
+            "$API_BASE/api/admin/compute/emergency-stop/$COMPLETED_STOP_OPERATION_ID_INPUT/release" \
+            > "$response_file"
+          node scripts/release/verify-compute-emergency-stop-status.mjs \
+            release "$response_file" "$COMPLETED_STOP_OPERATION_ID_INPUT"
+          curl -fsS --retry 2 --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer $COMPUTE_EMERGENCY_STOP_TOKEN" \
+            -H "Accept: application/json" \
+            "$API_BASE/api/admin/compute/emergency-stop" > "$after_file"
+          node scripts/release/verify-compute-emergency-stop-status.mjs \
+            "$after_file" disabled clear
+
+      - name: Resolve the fixed certification owner/Agent pair
+        id: canary_identity
+        if: inputs.stage != 'revert_off'
+        shell: bash
+        env:
+          ULTRALIGHT_TOKEN: ${{ (inputs.stage == 'staging_canary' && secrets.ULTRALIGHT_TOKEN_STAGING) || ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.ULTRALIGHT_TOKEN) }}
+          GALACTIC_SMOKE_APP_ID: ${{ (inputs.stage == 'staging_canary' && secrets.GALACTIC_SMOKE_APP_ID_STAGING) || ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.GALACTIC_SMOKE_APP_ID) }}
+        run: |
+          set -euo pipefail
+          for required in "$ULTRALIGHT_TOKEN" "$GALACTIC_SMOKE_APP_ID"; do
+            [ -n "$required" ] || {
+              echo "The selected environment is missing a canary identity credential." >&2
+              exit 1
+            }
+          done
+          identity="$EVIDENCE_DIR/canary-identity.json"
+          node scripts/smoke/resolve-compute-canary-identity.mjs \
+            --target "$REQUESTED_TARGET" --output "$identity"
+          jq -e \
+            --arg target "$REQUESTED_TARGET" \
+            --arg agent "$GALACTIC_SMOKE_APP_ID" '
+              .schema_version == 1 and
+              .kind == "galactic_compute_canary_identity" and
+              .target == $target and
+              .agent_id == ($agent | ascii_downcase) and
+              .allowlist_entry == (.owner_id + "/" + .agent_id)
+            ' "$identity" >/dev/null
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Refresh the fixed certification fixture
+        if: >-
+          inputs.stage != 'revert_off' &&
+          steps.canary_identity.outputs.verified == 'true'
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_STAGING_PROJECT_ID: ${{ (inputs.stage == 'staging_canary' && secrets.SUPABASE_STAGING_PROJECT_ID) || '' }}
+          SUPABASE_PRODUCTION_PROJECT_ID: ${{ ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.SUPABASE_PRODUCTION_PROJECT_ID) || '' }}
+          ULTRALIGHT_TOKEN: ${{ (inputs.stage == 'staging_canary' && secrets.ULTRALIGHT_TOKEN_STAGING) || ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.ULTRALIGHT_TOKEN) }}
+          GALACTIC_SMOKE_APP_ID: ${{ (inputs.stage == 'staging_canary' && secrets.GALACTIC_SMOKE_APP_ID_STAGING) || ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.GALACTIC_SMOKE_APP_ID) }}
+        run: |
+          set -euo pipefail
+          node scripts/smoke/with-staging-owner-session.mjs \
+            --target "$REQUESTED_TARGET" \
+            -- node scripts/smoke/interface-deploy-smoke.mjs \
+              --url "$API_BASE" \
+              --dir examples/compute-certification \
+              --promote-reviewed \
+              --reviewed-fixture compute-certification \
+              --reviewed-permission compute:exec \
+              --reviewed-function run_compute_certification \
+              --reviewed-compute-profile developer-v1 \
+              --reviewed-compute-tools browser,shell \
+              --reviewed-compute-secrets none \
+            | tee "$EVIDENCE_DIR/certification-fixture-refresh.txt"
+
+      - name: Upload and byte-verify rollback and desired policy versions
+        id: prepare
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          BASELINE_POLICY: ${{ steps.baseline.outputs.policy }}
+          ENVIRONMENT_DIGEST: ${{ steps.baseline.outputs.environment_digest }}
+        run: |
+          set -euo pipefail
+          baseline="$EVIDENCE_DIR/baseline-state.json"
+          rollback_anchor="$EVIDENCE_DIR/rollback-anchor.json"
+          candidate_state="$EVIDENCE_DIR/candidate-state.json"
+          short_sha="${API_UPLOAD_SOURCE_SHA:0:12}"
+
+          upload_policy() {
+            local label="$1"
+            local policy="$2"
+            local enabled="$3"
+            local mode="$4"
+            local allowlist="$5"
+            local certification_principal="$6"
+            local tag="$7"
+            local state_file="$8"
+            local upload_output="$RUNNER_TEMP/$label-upload.ndjson"
+            local uploaded_version="$RUNNER_TEMP/$label-version.json"
+            local dry_run_dir="$RUNNER_TEMP/$label-dry-run"
+
+            [ ! -e "$dry_run_dir" ] || {
+              echo "Dry-run output path already exists." >&2
+              exit 1
+            }
+            pushd "$API_UPLOAD_DIR" >/dev/null
+            npx wrangler versions upload \
+              --config wrangler.toml --env "$API_WRANGLER_ENV" \
+              --dry-run \
+              --var "COMPUTE_ENABLED:$enabled" \
+              --var "COMPUTE_ENVIRONMENT_DIGEST:$ENVIRONMENT_DIGEST" \
+              --var "COMPUTE_ROLLOUT_MODE:$mode" \
+              --var "COMPUTE_CANARY_ALLOWLIST:$allowlist" \
+              --var "COMPUTE_CERTIFICATION_PRINCIPAL:$certification_principal" \
+              --keep-vars --strict --outdir "$dry_run_dir" >&2
+            : > "$upload_output"
+            WRANGLER_OUTPUT_FILE_PATH="$upload_output" \
+              npx wrangler versions upload \
+                --config wrangler.toml --env "$API_WRANGLER_ENV" \
+                --tag "$tag" \
+                --message "Compute $label policy upload run $GITHUB_RUN_ID" \
+                --var "COMPUTE_ENABLED:$enabled" \
+                --var "COMPUTE_ENVIRONMENT_DIGEST:$ENVIRONMENT_DIGEST" \
+                --var "COMPUTE_ROLLOUT_MODE:$mode" \
+                --var "COMPUTE_CANARY_ALLOWLIST:$allowlist" \
+                --var "COMPUTE_CERTIFICATION_PRINCIPAL:$certification_principal" \
+                --keep-vars --strict \
+                | tee "$EVIDENCE_DIR/$label-upload.txt" >&2
+            local version_id
+            version_id="$(
+              node "$GITHUB_WORKSPACE/scripts/release/verify-api-compute-off-bridge.mjs" \
+                upload-output "$upload_output" "$API_WORKER" "$API_WRANGLER_ENV"
+            )"
+            npx wrangler versions view "$version_id" \
+              --config wrangler.toml --env "$API_WRANGLER_ENV" \
+              --name "$API_WORKER" --json > "$uploaded_version"
+            popd >/dev/null
+            node scripts/release/verify-api-compute-rollout-state.mjs \
+              uploaded "$REQUESTED_TARGET" "$policy" \
+              "$([ -n "$allowlist" ] && printf '%s' "$allowlist" || printf '%s' -)" \
+              "$([ -n "$certification_principal" ] && printf '%s' "$certification_principal" || printf '%s' -)" \
+              "$baseline" "$uploaded_version" "$version_id" "$tag" \
+              > "$state_file"
+            printf '%s' "$version_id"
+          }
+
+          if [ "$BASELINE_POLICY" = "off" ]; then
+            cp "$baseline" "$rollback_anchor"
+            rollback_version_id="$(jq -er '.api.version_id' "$rollback_anchor")"
+          else
+            rollback_tag="api-$short_sha-rollout-$GITHUB_RUN_ID-off"
+            rollback_version_id="$(
+              upload_policy rollback off 0 canary "" "" \
+                "$rollback_tag" "$rollback_anchor"
+            )"
+          fi
+
+          case "$REQUESTED_STAGE" in
+            staging_canary|production_canary)
+              allowlist="$(jq -er '.allowlist_entry' "$EVIDENCE_DIR/canary-identity.json")"
+              certification_principal="$allowlist"
+              candidate_tag="api-$short_sha-rollout-$GITHUB_RUN_ID-canary"
+              candidate_version_id="$(
+                upload_policy candidate canary 1 canary "$allowlist" \
+                  "$certification_principal" \
+                  "$candidate_tag" "$candidate_state"
+              )"
+              ;;
+            production_global)
+              certification_principal="$(jq -er '.allowlist_entry' "$EVIDENCE_DIR/canary-identity.json")"
+              candidate_tag="api-$short_sha-rollout-$GITHUB_RUN_ID-global"
+              candidate_version_id="$(
+                upload_policy candidate global 1 global "" \
+                  "$certification_principal" \
+                  "$candidate_tag" "$candidate_state"
+              )"
+              ;;
+            revert_off)
+              cp "$rollback_anchor" "$candidate_state"
+              candidate_version_id="$rollback_version_id"
+              ;;
+          esac
+          {
+            echo "rollback_version_id=$rollback_version_id"
+            echo "candidate_version_id=$candidate_version_id"
+            echo "noop=$([ "$REQUESTED_STAGE/$BASELINE_POLICY" = "revert_off/off" ] && echo true || echo false)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Re-fence every live dependency immediately before mutation
+        id: fence
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ENVIRONMENT_DIGEST: ${{ steps.baseline.outputs.environment_digest }}
+        run: |
+          set -euo pipefail
+          api_status="$RUNNER_TEMP/fence-api-status.json"
+          compute_status="$RUNNER_TEMP/fence-compute-status.json"
+          api_version="$RUNNER_TEMP/fence-api-version.json"
+          compute_version="$RUNNER_TEMP/fence-compute-version.json"
+          baseline="$EVIDENCE_DIR/baseline-state.json"
+          fence="$EVIDENCE_DIR/pre-promotion-fence.json"
+
+          pushd api >/dev/null
+          npx wrangler deployments status \
+            --config wrangler.toml --env "$API_WRANGLER_ENV" \
+            --name "$API_WORKER" --json > "$api_status"
+          npx wrangler deployments status \
+            --config wrangler.toml --env "$API_WRANGLER_ENV" \
+            --name "$COMPUTE_WORKER" --json > "$compute_status"
+          api_version_id="$(jq -er '.versions[0].version_id' "$api_status")"
+          compute_version_id="$(jq -er '.versions[0].version_id' "$compute_status")"
+          npx wrangler versions view "$api_version_id" \
+            --config wrangler.toml --env "$API_WRANGLER_ENV" \
+            --name "$API_WORKER" --json > "$api_version"
+          npx wrangler versions view "$compute_version_id" \
+            --config wrangler.toml --env "$API_WRANGLER_ENV" \
+            --name "$COMPUTE_WORKER" --json > "$compute_version"
+          popd >/dev/null
+          node scripts/release/verify-api-compute-rollout-state.mjs \
+            fence "$baseline" "$api_status" "$api_version" \
+            "$compute_status" "$compute_version" > "$fence"
+
+          container_list="$RUNNER_TEMP/fence-container-list.json"
+          expected_image="registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/$IMAGE_REPOSITORY@$ENVIRONMENT_DIGEST"
+          pushd compute-worker >/dev/null
+          npx wrangler containers list \
+            --config "$COMPUTE_CONFIG" --json > "$container_list"
+          popd >/dev/null
+          node compute-worker/scripts/verify-container-readiness.mjs \
+            "$container_list" "$CONTAINER_APPLICATION" "$expected_image" \
+            > "$EVIDENCE_DIR/pre-promotion-container-readiness.json"
+
+          # Re-read both no-traffic uploads against the unchanged live
+          # baseline; this closes version-retention and post-upload drift races.
+          verify_uploaded_again() {
+            local state_file="$1"
+            local policy="$2"
+            local allowlist="$3"
+            local certification_principal="$4"
+            local version_id
+            local version_tag
+            local version_file="$RUNNER_TEMP/recheck-$policy-version.json"
+            version_id="$(jq -er '.api.version_id' "$state_file")"
+            version_tag="$(jq -er '.api.version_tag' "$state_file")"
+            pushd api >/dev/null
+            npx wrangler versions view "$version_id" \
+              --config wrangler.toml --env "$API_WRANGLER_ENV" \
+              --name "$API_WORKER" --json > "$version_file"
+            popd >/dev/null
+            node scripts/release/verify-api-compute-rollout-state.mjs \
+              uploaded "$REQUESTED_TARGET" "$policy" \
+              "$([ -n "$allowlist" ] && printf '%s' "$allowlist" || printf '%s' -)" \
+              "$([ -n "$certification_principal" ] && printf '%s' "$certification_principal" || printf '%s' -)" \
+              "$baseline" "$version_file" "$version_id" "$version_tag" \
+              > "$RUNNER_TEMP/rechecked-$policy-state.json"
+            cmp --silent "$state_file" "$RUNNER_TEMP/rechecked-$policy-state.json"
+          }
+          if [ "$BASELINE_POLICY" != "off" ]; then
+            verify_uploaded_again \
+              "$EVIDENCE_DIR/rollback-anchor.json" off "" ""
+          fi
+          if [ "$REQUESTED_STAGE" != "revert_off" ]; then
+            candidate_policy="$(jq -er '.policy' "$EVIDENCE_DIR/candidate-state.json")"
+            candidate_allowlist="$(jq -r '.canary_allowlist | join(",")' "$EVIDENCE_DIR/candidate-state.json")"
+            candidate_certification_principal="$(jq -er '.certification_principal' "$EVIDENCE_DIR/candidate-state.json")"
+            verify_uploaded_again \
+              "$EVIDENCE_DIR/candidate-state.json" \
+              "$candidate_policy" "$candidate_allowlist" \
+              "$candidate_certification_principal"
+          fi
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Re-fence the emergency-stop latch immediately before mutation
+        id: latch_fence
+        if: steps.fence.outputs.verified == 'true'
+        shell: bash
+        env:
+          COMPUTE_EMERGENCY_STOP_TOKEN: ${{ secrets.COMPUTE_EMERGENCY_STOP_TOKEN }}
+          BASELINE_POLICY: ${{ steps.baseline.outputs.policy }}
+        run: |
+          set -euo pipefail
+          status_file="$EVIDENCE_DIR/emergency-stop-pre-promotion.json"
+          curl -fsS --retry 2 --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer $COMPUTE_EMERGENCY_STOP_TOKEN" \
+            -H "Accept: application/json" \
+            "$API_BASE/api/admin/compute/emergency-stop" > "$status_file"
+          unset COMPUTE_EMERGENCY_STOP_TOKEN
+          if [ "$BASELINE_POLICY" = "off" ]; then
+            admission_state=disabled
+          else
+            admission_state=enabled
+          fi
+          latch_state="$(jq -er '.latch_state' "$status_file")"
+          operation_id="$(jq -r '.operation_id // ""' "$status_file")"
+          if [ "$REQUESTED_STAGE" = "revert_off" ] &&
+             [ "$latch_state" = "completed" ]; then
+            node scripts/release/verify-compute-emergency-stop-status.mjs \
+              "$status_file" "$admission_state" completed "$operation_id"
+          else
+            node scripts/release/verify-compute-emergency-stop-status.mjs \
+              "$status_file" "$admission_state" clear
+          fi
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Promote the exact verified policy version at 100 percent
+        id: promote
+        if: >-
+          steps.prepare.outputs.noop != 'true' &&
+          steps.fence.outputs.verified == 'true' &&
+          steps.latch_fence.outputs.verified == 'true'
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CANDIDATE_VERSION_ID: ${{ steps.prepare.outputs.candidate_version_id }}
+        run: |
+          set -euo pipefail
+          deploy_output="$RUNNER_TEMP/promotion-output.ndjson"
+          : > "$deploy_output"
+          echo "attempted=true" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$CANDIDATE_VERSION_ID" \
+            > "$EVIDENCE_DIR/mutation-attempted"
+          pushd api >/dev/null
+          WRANGLER_OUTPUT_FILE_PATH="$deploy_output" \
+            npx wrangler versions deploy "$CANDIDATE_VERSION_ID@100%" \
+              --config wrangler.toml --env "$API_WRANGLER_ENV" \
+              --name "$API_WORKER" --yes \
+              --message "Compute $REQUESTED_STAGE promotion run $GITHUB_RUN_ID" \
+              | tee "$EVIDENCE_DIR/promotion.txt"
+          popd >/dev/null
+          node scripts/release/verify-api-compute-rollout-state.mjs \
+            deploy-output "$deploy_output" "$API_WORKER" \
+            "$API_WRANGLER_ENV" "$CANDIDATE_VERSION_ID" \
+            > "$EVIDENCE_DIR/promotion-output.json"
+          deployment_id="$(jq -er '.deployment_id' "$EVIDENCE_DIR/promotion-output.json")"
+          echo "deployment_id=$deployment_id" >> "$GITHUB_OUTPUT"
+
+      - name: Record an already-OFF revert as a no-op
+        id: noop
+        if: steps.prepare.outputs.noop == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "$EVIDENCE_DIR/baseline-state.json" \
+            "$EVIDENCE_DIR/promoted-state.json"
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the exact promoted API/Compute pair
+        id: verify_promotion
+        if: >-
+          steps.prepare.outputs.noop != 'true' &&
+          steps.promote.outcome == 'success' &&
+          steps.promote.outputs.attempted == 'true'
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CANDIDATE_VERSION_ID: ${{ steps.prepare.outputs.candidate_version_id }}
+          EXPECTED_DEPLOYMENT_ID: ${{ steps.promote.outputs.deployment_id }}
+          ENVIRONMENT_DIGEST: ${{ steps.baseline.outputs.environment_digest }}
+        run: |
+          set -euo pipefail
+          api_status="$RUNNER_TEMP/promoted-api-status.json"
+          compute_status="$RUNNER_TEMP/promoted-compute-status.json"
+          api_version="$RUNNER_TEMP/promoted-api-version.json"
+          compute_version="$RUNNER_TEMP/promoted-compute-version.json"
+          compute_version_id="$(jq -er '.compute.version_id' "$EVIDENCE_DIR/candidate-state.json")"
+          compute_deployment_id="$(jq -er '.compute.deployment_id' "$EVIDENCE_DIR/candidate-state.json")"
+
+          pushd api >/dev/null
+          stable=false
+          for attempt in {1..18}; do
+            if npx wrangler deployments status \
+                 --config wrangler.toml --env "$API_WRANGLER_ENV" \
+                 --name "$API_WORKER" --json > "$api_status" &&
+               npx wrangler deployments status \
+                 --config wrangler.toml --env "$API_WRANGLER_ENV" \
+                 --name "$COMPUTE_WORKER" --json > "$compute_status" &&
+               jq -e \
+                 --arg deployment "$EXPECTED_DEPLOYMENT_ID" \
+                 --arg version "$CANDIDATE_VERSION_ID" '
+                   .id == $deployment and
+                   (.versions | length) == 1 and
+                   ((.versions[0].percentage | tonumber) == 100) and
+                   .versions[0].version_id == $version
+                 ' "$api_status" >/dev/null &&
+               jq -e \
+                 --arg deployment "$compute_deployment_id" \
+                 --arg version "$compute_version_id" '
+                   .id == $deployment and
+                   (.versions | length) == 1 and
+                   ((.versions[0].percentage | tonumber) == 100) and
+                   .versions[0].version_id == $version
+                 ' "$compute_status" >/dev/null; then
+              stable=true
+              break
+            fi
+            sleep 5
+          done
+          [ "$stable" = "true" ] || {
+            echo "Candidate did not become the sole stable API deployment." >&2
+            exit 1
+          }
+          npx wrangler versions view "$CANDIDATE_VERSION_ID" \
+            --config wrangler.toml --env "$API_WRANGLER_ENV" \
+            --name "$API_WORKER" --json > "$api_version"
+          npx wrangler versions view "$compute_version_id" \
+            --config wrangler.toml --env "$API_WRANGLER_ENV" \
+            --name "$COMPUTE_WORKER" --json > "$compute_version"
+          popd >/dev/null
+
+          if [ "$REQUESTED_STAGE" = "revert_off" ]; then
+            node scripts/release/verify-api-compute-rollout-state.mjs \
+              reverted "$REQUESTED_TARGET" \
+              "$EVIDENCE_DIR/rollback-anchor.json" \
+              "$api_status" "$api_version" \
+              "$compute_status" "$compute_version" \
+              "$EXPECTED_DEPLOYMENT_ID" \
+              > "$EVIDENCE_DIR/promoted-state.json"
+          else
+            node scripts/release/verify-api-compute-rollout-state.mjs \
+              promoted "$REQUESTED_TARGET" \
+              "$EVIDENCE_DIR/candidate-state.json" \
+              "$api_status" "$api_version" \
+              "$compute_status" "$compute_version" \
+              "$EXPECTED_DEPLOYMENT_ID" \
+              > "$EVIDENCE_DIR/promoted-state.json"
+          fi
+
+          container_list="$RUNNER_TEMP/promoted-container-list.json"
+          expected_image="registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/$IMAGE_REPOSITORY@$ENVIRONMENT_DIGEST"
+          pushd compute-worker >/dev/null
+          npx wrangler containers list \
+            --config "$COMPUTE_CONFIG" --json > "$container_list"
+          popd >/dev/null
+          node compute-worker/scripts/verify-container-readiness.mjs \
+            "$container_list" "$CONTAINER_APPLICATION" "$expected_image" \
+            > "$EVIDENCE_DIR/promoted-container-readiness.json"
+
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the emergency-stop latch after promotion
+        id: verify_promotion_latch
+        if: >-
+          steps.prepare.outputs.noop != 'true' &&
+          steps.verify_promotion.outputs.verified == 'true'
+        shell: bash
+        env:
+          COMPUTE_EMERGENCY_STOP_TOKEN: ${{ secrets.COMPUTE_EMERGENCY_STOP_TOKEN }}
+        run: |
+          set -euo pipefail
+          status_file="$EVIDENCE_DIR/emergency-stop-after-promotion.json"
+          curl -fsS --retry 2 --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer $COMPUTE_EMERGENCY_STOP_TOKEN" \
+            -H "Accept: application/json" \
+            "$API_BASE/api/admin/compute/emergency-stop" > "$status_file"
+          unset COMPUTE_EMERGENCY_STOP_TOKEN
+          if [ "$REQUESTED_STAGE" = "revert_off" ]; then
+            latch_state="$(jq -er '.latch_state' "$status_file")"
+            operation_id="$(jq -r '.operation_id // ""' "$status_file")"
+            if [ "$latch_state" = "completed" ]; then
+              node scripts/release/verify-compute-emergency-stop-status.mjs \
+                "$status_file" disabled completed "$operation_id"
+            else
+              node scripts/release/verify-compute-emergency-stop-status.mjs \
+                "$status_file" disabled clear
+            fi
+          else
+            node scripts/release/verify-compute-emergency-stop-status.mjs \
+              "$status_file" enabled clear
+          fi
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Re-read latch after an already-OFF no-op
+        if: steps.prepare.outputs.noop == 'true'
+        shell: bash
+        env:
+          COMPUTE_EMERGENCY_STOP_TOKEN: ${{ secrets.COMPUTE_EMERGENCY_STOP_TOKEN }}
+        run: |
+          set -euo pipefail
+          status_file="$EVIDENCE_DIR/emergency-stop-after-promotion.json"
+          curl -fsS --retry 2 --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer $COMPUTE_EMERGENCY_STOP_TOKEN" \
+            -H "Accept: application/json" \
+            "$API_BASE/api/admin/compute/emergency-stop" > "$status_file"
+          latch_state="$(jq -er '.latch_state' "$status_file")"
+          operation_id="$(jq -r '.operation_id // ""' "$status_file")"
+          if [ "$latch_state" = "completed" ]; then
+            node scripts/release/verify-compute-emergency-stop-status.mjs \
+              "$status_file" disabled completed "$operation_id"
+          else
+            node scripts/release/verify-compute-emergency-stop-status.mjs \
+              "$status_file" disabled clear
+          fi
+
+      - name: Release a completed latch after revert_off
+        if: >-
+          inputs.stage == 'revert_off' &&
+          steps.latch.outputs.state == 'completed' &&
+          inputs.completed_stop_operation_id != ''
+        shell: bash
+        env:
+          COMPUTE_EMERGENCY_STOP_TOKEN: ${{ secrets.COMPUTE_EMERGENCY_STOP_TOKEN }}
+        run: |
+          set -euo pipefail
+          [ "$COMPLETED_STOP_OPERATION_ID_INPUT" = "${{ steps.latch.outputs.operation_id }}" ] || {
+            echo "Completed stop operation changed before release." >&2
+            exit 1
+          }
+          request_file="$RUNNER_TEMP/emergency-stop-post-revert-release-request.json"
+          response_file="$EVIDENCE_DIR/emergency-stop-post-revert-release.json"
+          after_file="$EVIDENCE_DIR/emergency-stop-post-revert-clear.json"
+          idempotency_key="$(node -p "require('node:crypto').randomUUID()")"
+          jq -n --arg reason "$ROLLOUT_REASON" \
+            '{reason: $reason, confirm: "RELEASE_COMPUTE_STOP"}' \
+            > "$request_file"
+          curl -fsS --retry 2 --connect-timeout 10 --max-time 30 \
+            -X POST \
+            -H "Authorization: Bearer $COMPUTE_EMERGENCY_STOP_TOKEN" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
+            -H "Idempotency-Key: $idempotency_key" \
+            --data-binary "@$request_file" \
+            "$API_BASE/api/admin/compute/emergency-stop/$COMPLETED_STOP_OPERATION_ID_INPUT/release" \
+            > "$response_file"
+          node scripts/release/verify-compute-emergency-stop-status.mjs \
+            release "$response_file" "$COMPLETED_STOP_OPERATION_ID_INPUT"
+          curl -fsS --retry 2 --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer $COMPUTE_EMERGENCY_STOP_TOKEN" \
+            -H "Accept: application/json" \
+            "$API_BASE/api/admin/compute/emergency-stop" > "$after_file"
+          node scripts/release/verify-compute-emergency-stop-status.mjs \
+            "$after_file" disabled clear
+
+      - name: Clean the fixed certification fixture after revert_off
+        if: inputs.stage == 'revert_off'
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_STAGING_PROJECT_ID: ${{ ((inputs.stage == 'revert_off' && inputs.revert_target == 'staging') && secrets.SUPABASE_STAGING_PROJECT_ID) || '' }}
+          SUPABASE_PRODUCTION_PROJECT_ID: ${{ ((inputs.stage == 'revert_off' && inputs.revert_target == 'production') && secrets.SUPABASE_PRODUCTION_PROJECT_ID) || '' }}
+          ULTRALIGHT_TOKEN: ${{ ((inputs.stage == 'revert_off' && inputs.revert_target == 'staging') && secrets.ULTRALIGHT_TOKEN_STAGING) || ((inputs.stage == 'revert_off' && inputs.revert_target == 'production') && secrets.ULTRALIGHT_TOKEN) || '' }}
+          GALACTIC_SMOKE_APP_ID: ${{ ((inputs.stage == 'revert_off' && inputs.revert_target == 'staging') && secrets.GALACTIC_SMOKE_APP_ID_STAGING) || ((inputs.stage == 'revert_off' && inputs.revert_target == 'production') && secrets.GALACTIC_SMOKE_APP_ID) || '' }}
+          COMPUTE_RELEASE_SHA: ${{ github.sha }}
+          COMPUTE_RELEASE_RUN_ID: ${{ github.run_id }}
+          COMPUTE_RELEASE_EVIDENCE_DIR: ${{ github.workspace }}/compute-rollout-evidence/revert-cleanup
+        run: |
+          set -euo pipefail
+          node scripts/smoke/with-staging-owner-session.mjs \
+            --target "$REQUESTED_TARGET" \
+            -- node scripts/smoke/compute-certification-suite.mjs --cleanup-only
+
+      - name: Run the deployed Compute certification suite
+        if: inputs.stage != 'revert_off'
+        id: certification_suite
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_STAGING_PROJECT_ID: ${{ (inputs.stage == 'staging_canary' && secrets.SUPABASE_STAGING_PROJECT_ID) || '' }}
+          SUPABASE_PRODUCTION_PROJECT_ID: ${{ ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.SUPABASE_PRODUCTION_PROJECT_ID) || '' }}
+          ULTRALIGHT_TOKEN: ${{ (inputs.stage == 'staging_canary' && secrets.ULTRALIGHT_TOKEN_STAGING) || ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.ULTRALIGHT_TOKEN) || '' }}
+          GALACTIC_SMOKE_APP_ID: ${{ (inputs.stage == 'staging_canary' && secrets.GALACTIC_SMOKE_APP_ID_STAGING) || ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.GALACTIC_SMOKE_APP_ID) || '' }}
+          COMPUTE_RELEASE_SHA: ${{ github.sha }}
+          COMPUTE_RELEASE_RUN_ID: ${{ github.run_id }}
+          COMPUTE_RELEASE_EVIDENCE_DIR: ${{ github.workspace }}/compute-rollout-evidence
+        run: |
+          set -euo pipefail
+          suite_file="$EVIDENCE_DIR/compute-certification-$REQUESTED_TARGET.json"
+          run_set_file="$EVIDENCE_DIR/compute-certification-run-ids-$REQUESTED_TARGET.json"
+          node scripts/smoke/with-staging-owner-session.mjs \
+            --target "$REQUESTED_TARGET" \
+            -- node scripts/smoke/compute-certification-suite.mjs \
+            2>&1 | tee "$EVIDENCE_DIR/compute-certification-suite.txt"
+          jq -e \
+            --arg target "$REQUESTED_TARGET" \
+            --arg profile "$COMPUTE_CERTIFICATION_PROFILE" \
+            --arg sha "$GITHUB_SHA" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg agent "$GALACTIC_SMOKE_APP_ID" '
+              .schema_version == 1 and
+              .kind == "galactic_compute_deployed_certification" and
+              .verified == true and
+              .target == $target and
+              .profile == $profile and
+              .candidate_sha == $sha and
+              .workflow_run_id == $run_id and
+              .agent_id == ($agent | ascii_downcase) and
+              .function_name == "run_compute_certification" and
+              (.scenarios | length) == 10 and
+              .operator_snapshot_required == true and
+              .cleanup.active_compute_runs_remaining == 0 and
+              .cleanup.active_routine_runs_remaining == 0 and
+              .cleanup.compute_policy_disabled == true and
+              .cleanup.policy_probe_paused_and_free == true
+            ' "$suite_file" >/dev/null
+          jq -e \
+            --arg target "$REQUESTED_TARGET" \
+            --arg sha "$GITHUB_SHA" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg agent "$GALACTIC_SMOKE_APP_ID" '
+              .schema_version == 1 and
+              .kind == "galactic_compute_certification_run_set" and
+              .target == $target and
+              .candidate_sha == $sha and
+              .workflow_run_id == $run_id and
+              .agent_id == ($agent | ascii_downcase) and
+              (.run_ids | length) == 11 and
+              (.run_ids | unique | length) == 11
+            ' "$run_set_file" >/dev/null
+          jq -ne \
+            --slurpfile suite "$suite_file" \
+            --slurpfile run_set "$run_set_file" \
+            --slurpfile identity "$EVIDENCE_DIR/canary-identity.json" '
+              $suite[0].agent_id == $identity[0].agent_id and
+              $run_set[0].agent_id == $identity[0].agent_id
+            ' </dev/null >/dev/null
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Read the least-privilege Compute certification snapshot
+        if: >-
+          inputs.stage != 'revert_off' &&
+          steps.certification_suite.outputs.verified == 'true'
+        id: certification_snapshot
+        shell: bash
+        env:
+          COMPUTE_CERTIFICATION_TOKEN: ${{ secrets.COMPUTE_CERTIFICATION_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [ -n "$COMPUTE_CERTIFICATION_TOKEN" ] || {
+            echo "The selected environment must provide COMPUTE_CERTIFICATION_TOKEN." >&2
+            exit 1
+          }
+          identity="$EVIDENCE_DIR/canary-identity.json"
+          run_set="$EVIDENCE_DIR/compute-certification-run-ids-$REQUESTED_TARGET.json"
+          request_file="$RUNNER_TEMP/compute-certification-snapshot-request.json"
+          response_file="$RUNNER_TEMP/compute-certification-snapshot-response.json"
+          snapshot_file="$EVIDENCE_DIR/compute-certification-snapshot-$REQUESTED_TARGET.json"
+          jq -n \
+            --slurpfile identity "$identity" \
+            --slurpfile run_set "$run_set" \
+            --arg target "$REQUESTED_TARGET" \
+            --arg sha "$GITHUB_SHA" \
+            --arg run_id "$GITHUB_RUN_ID" '
+              if
+                ($identity | length) == 1 and
+                ($run_set | length) == 1 and
+                $identity[0].target == $target and
+                $run_set[0].target == $target and
+                $run_set[0].candidate_sha == $sha and
+                $run_set[0].workflow_run_id == $run_id and
+                $identity[0].agent_id == $run_set[0].agent_id
+              then {
+                owner_id: $identity[0].owner_id,
+                agent_id: $identity[0].agent_id,
+                run_ids: $run_set[0].run_ids,
+                since: $run_set[0].since
+              }
+              else error("Certification identity/run-set binding failed")
+              end
+            ' > "$request_file"
+          curl --fail-with-body --silent --show-error \
+            --retry 2 --retry-all-errors \
+            --connect-timeout 10 --max-time 60 \
+            -X POST \
+            -H "Authorization: Bearer $COMPUTE_CERTIFICATION_TOKEN" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
+            --data-binary "@$request_file" \
+            "$API_BASE/api/admin/compute/certification" > "$response_file"
+          unset COMPUTE_CERTIFICATION_TOKEN
+          chmod 600 "$response_file"
+          mv "$response_file" "$snapshot_file"
+          jq -e \
+            --slurpfile identity "$identity" \
+            --slurpfile run_set "$run_set" '
+              .schema_version == 1 and
+              .owner_id == $identity[0].owner_id and
+              .agent_id == $identity[0].agent_id and
+              .requested_run_count == ($run_set[0].run_ids | length) and
+              .selected_run_count == ($run_set[0].run_ids | length)
+            ' "$snapshot_file" >/dev/null
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Verify combined deployed Compute certification evidence
+        if: >-
+          inputs.stage != 'revert_off' &&
+          steps.certification_snapshot.outputs.verified == 'true'
+        id: certification
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/release/verify-compute-certification-evidence.mjs \
+            --suite-evidence "$EVIDENCE_DIR/compute-certification-$REQUESTED_TARGET.json" \
+            --run-set "$EVIDENCE_DIR/compute-certification-run-ids-$REQUESTED_TARGET.json" \
+            --operator-snapshot "$EVIDENCE_DIR/compute-certification-snapshot-$REQUESTED_TARGET.json" \
+            --canary-identity "$EVIDENCE_DIR/canary-identity.json" \
+            --promoted-state "$EVIDENCE_DIR/promoted-state.json" \
+            --expected-target "$REQUESTED_TARGET" \
+            --expected-profile "$COMPUTE_CERTIFICATION_PROFILE" \
+            --expected-candidate-sha "$GITHUB_SHA" \
+            --expected-workflow-run-id "$GITHUB_RUN_ID" \
+            --output "$EVIDENCE_DIR/compute-certification-verification-$REQUESTED_TARGET.json"
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Final exact live fence after certification
+        id: final_fence
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ENVIRONMENT_DIGEST: ${{ steps.baseline.outputs.environment_digest }}
+        run: |
+          set -euo pipefail
+          api_status="$RUNNER_TEMP/final-api-status.json"
+          compute_status="$RUNNER_TEMP/final-compute-status.json"
+          api_version="$RUNNER_TEMP/final-api-version.json"
+          compute_version="$RUNNER_TEMP/final-compute-version.json"
+          expected_state="$EVIDENCE_DIR/promoted-state.json"
+
+          pushd api >/dev/null
+          npx wrangler deployments status \
+            --config wrangler.toml --env "$API_WRANGLER_ENV" \
+            --name "$API_WORKER" --json > "$api_status"
+          npx wrangler deployments status \
+            --config wrangler.toml --env "$API_WRANGLER_ENV" \
+            --name "$COMPUTE_WORKER" --json > "$compute_status"
+          api_version_id="$(jq -er '.versions[0].version_id' "$api_status")"
+          compute_version_id="$(jq -er '.versions[0].version_id' "$compute_status")"
+          npx wrangler versions view "$api_version_id" \
+            --config wrangler.toml --env "$API_WRANGLER_ENV" \
+            --name "$API_WORKER" --json > "$api_version"
+          npx wrangler versions view "$compute_version_id" \
+            --config wrangler.toml --env "$API_WRANGLER_ENV" \
+            --name "$COMPUTE_WORKER" --json > "$compute_version"
+          popd >/dev/null
+          node scripts/release/verify-api-compute-rollout-state.mjs \
+            fence "$expected_state" "$api_status" "$api_version" \
+            "$compute_status" "$compute_version" \
+            > "$EVIDENCE_DIR/final-state.json"
+
+          container_list="$RUNNER_TEMP/final-container-list.json"
+          expected_image="registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/$IMAGE_REPOSITORY@$ENVIRONMENT_DIGEST"
+          pushd compute-worker >/dev/null
+          npx wrangler containers list \
+            --config "$COMPUTE_CONFIG" --json > "$container_list"
+          popd >/dev/null
+          node compute-worker/scripts/verify-container-readiness.mjs \
+            "$container_list" "$CONTAINER_APPLICATION" "$expected_image" \
+            > "$EVIDENCE_DIR/final-container-readiness.json"
+
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Final emergency-stop latch fence after certification
+        id: final_latch_fence
+        if: steps.final_fence.outputs.verified == 'true'
+        shell: bash
+        env:
+          COMPUTE_EMERGENCY_STOP_TOKEN: ${{ secrets.COMPUTE_EMERGENCY_STOP_TOKEN }}
+        run: |
+          set -euo pipefail
+          status_file="$EVIDENCE_DIR/emergency-stop-final.json"
+          curl -fsS --retry 2 --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer $COMPUTE_EMERGENCY_STOP_TOKEN" \
+            -H "Accept: application/json" \
+            "$API_BASE/api/admin/compute/emergency-stop" > "$status_file"
+          unset COMPUTE_EMERGENCY_STOP_TOKEN
+          if [ "$REQUESTED_STAGE" = "revert_off" ]; then
+            latch_state="$(jq -er '.latch_state' "$status_file")"
+            operation_id="$(jq -r '.operation_id // ""' "$status_file")"
+            if [ "$latch_state" = "completed" ]; then
+              node scripts/release/verify-compute-emergency-stop-status.mjs \
+                "$status_file" disabled completed "$operation_id"
+            else
+              node scripts/release/verify-compute-emergency-stop-status.mjs \
+                "$status_file" disabled clear
+            fi
+          else
+            node scripts/release/verify-compute-emergency-stop-status.mjs \
+              "$status_file" enabled clear
+          fi
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Finalize immutable committed rollout evidence
+        id: finalize
+        if: >-
+          steps.final_fence.outputs.verified == 'true' &&
+          steps.final_latch_fence.outputs.verified == 'true' &&
+          (
+            inputs.stage != 'production_global' ||
+            steps.active_soak.outputs.verified == 'true'
+          ) &&
+          (
+            inputs.stage == 'revert_off' ||
+            steps.certification.outputs.verified == 'true'
+          )
+        shell: bash
+        run: |
+          set -euo pipefail
+          hash_file() {
+            sha256sum "$EVIDENCE_DIR/$1" | cut -d ' ' -f 1
+          }
+          generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          if [ "$REQUESTED_STAGE" = "production_canary" ]; then
+            soak_eligible_at="$(date -u -d "$generated_at + 86400 seconds" +%Y-%m-%dT%H:%M:%SZ)"
+          else
+            soak_eligible_at=
+          fi
+          rollback_sha="$(hash_file rollback-anchor.json)"
+          active_sha="$(hash_file final-state.json)"
+          release_sha="$(hash_file compute-release-verification.json)"
+
+          if [ -f "$EVIDENCE_DIR/canary-identity.json" ]; then
+            identity_json="$(jq -n \
+              --arg sha256 "$(hash_file canary-identity.json)" \
+              '{evidence_file: "canary-identity.json", sha256: $sha256}')"
+          else
+            identity_json=null
+          fi
+          certification_file="compute-certification-verification-$REQUESTED_TARGET.json"
+          if [ -f "$EVIDENCE_DIR/$certification_file" ]; then
+            certification_json="$(jq -n \
+              --arg file "$certification_file" \
+              --arg sha256 "$(hash_file "$certification_file")" \
+              '{evidence_file: $file, sha256: $sha256}')"
+          else
+            certification_json=null
+          fi
+          if [ -f "$EVIDENCE_DIR/predecessor-verification.json" ]; then
+            predecessor_json="$(jq -n \
+              --arg workflow_run_id "$PREDECESSOR_RUN_ID_INPUT" \
+              --arg stage "${{ steps.predecessor.outputs.stage }}" \
+              --arg target "${{ steps.predecessor.outputs.target }}" \
+              --arg sha256 "$(hash_file predecessor-verification.json)" \
+              '{
+                evidence_file: "predecessor-verification.json",
+                sha256: $sha256,
+                workflow_run_id: $workflow_run_id,
+                stage: $stage,
+                target: $target
+              }')"
+          else
+            predecessor_json=null
+          fi
+          if [ -f "$EVIDENCE_DIR/soak-verification.json" ]; then
+            active_soak_json="$(jq -n \
+              --arg sha256 "$(hash_file soak-verification.json)" \
+              --arg workflow_run_id "$PREDECESSOR_RUN_ID_INPUT" \
+              '{
+                evidence_file: "soak-verification.json",
+                sha256: $sha256,
+                production_canary_workflow_run_id: $workflow_run_id
+              }')"
+          else
+            active_soak_json=null
+          fi
+
+          jq -n \
+            --arg stage "$REQUESTED_STAGE" \
+            --arg target "$REQUESTED_TARGET" \
+            --arg generated_at "$generated_at" \
+            --arg soak_eligible_at "$soak_eligible_at" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg workflow_run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg git_sha "$GITHUB_SHA" \
+            --arg api_upload_source_sha "$API_UPLOAD_SOURCE_SHA" \
+            --arg compute_release_run_id "$COMPUTE_RELEASE_RUN_ID_INPUT" \
+            --arg compute_release_sha "$release_sha" \
+            --arg rollback_sha "$rollback_sha" \
+            --arg active_sha "$active_sha" \
+            --argjson canary_identity "$identity_json" \
+            --argjson deployed_certification "$certification_json" \
+            --argjson active_soak "$active_soak_json" \
+            --argjson predecessor "$predecessor_json" '
+              {
+                schema_version: 1,
+                kind: "galactic_compute_canary_rollout",
+                verified: true,
+                stage: $stage,
+                target: $target,
+                outcome: "committed",
+                generated_at: $generated_at,
+                soak_eligible_at:
+                  (if $soak_eligible_at == "" then null else $soak_eligible_at end),
+                dispatch: {
+                  repository: $repository,
+                  workflow_run_id: $workflow_run_id,
+                  run_attempt: $run_attempt,
+                  git_sha: $git_sha
+                },
+                api_upload_source_sha: $api_upload_source_sha,
+                compute_release: {
+                  evidence_file: "compute-release-verification.json",
+                  sha256: $compute_release_sha,
+                  workflow_run_id: $compute_release_run_id
+                },
+                rollback_anchor: {
+                  evidence_file: "rollback-anchor.json",
+                  sha256: $rollback_sha
+                },
+                active_state: {
+                  evidence_file: "final-state.json",
+                  sha256: $active_sha
+                },
+                canary_identity: $canary_identity,
+                deployed_certification: $deployed_certification,
+                active_soak: $active_soak,
+                predecessor: $predecessor
+              }
+            ' > "$EVIDENCE_DIR/rollout.json"
+          printf 'committed\n' > "$EVIDENCE_DIR/rollout-committed"
+
+          {
+            echo "## Galactic Compute $REQUESTED_STAGE"
+            echo
+            echo "- Target: $REQUESTED_TARGET"
+            echo "- Compute digest: ${{ steps.baseline.outputs.environment_digest }}"
+            echo "- Active API version: $(jq -r '.api.version_id' "$EVIDENCE_DIR/final-state.json")"
+            echo "- Active Compute version: $(jq -r '.compute.version_id' "$EVIDENCE_DIR/final-state.json")"
+            echo "- Admission policy: $(jq -r '.policy' "$EVIDENCE_DIR/final-state.json")"
+            if [ -n "$soak_eligible_at" ]; then
+              echo "- Finalize-based soak lower bound: $soak_eligible_at"
+              echo "- The active gate starts its authoritative 24-hour clock at successful workflow completion."
+            fi
+            echo "- No image, Compute Worker, queue, bucket, schema, or secret was changed."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore this dispatch's exact OFF anchor after any failure
+        id: compensate
+        if: >-
+          always() &&
+          steps.promote.outputs.attempted == 'true' &&
+          steps.finalize.outcome != 'success'
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ROLLBACK_VERSION_ID: ${{ steps.prepare.outputs.rollback_version_id }}
+          ENVIRONMENT_DIGEST: ${{ steps.baseline.outputs.environment_digest }}
+        run: |
+          set -euo pipefail
+          echo "attempted=true" >> "$GITHUB_OUTPUT"
+          api_status="$RUNNER_TEMP/compensated-api-status.json"
+          compute_status="$RUNNER_TEMP/compensated-compute-status.json"
+          api_version="$RUNNER_TEMP/compensated-api-version.json"
+          compute_version="$RUNNER_TEMP/compensated-compute-version.json"
+          compute_version_id="$(jq -er '.compute.version_id' "$EVIDENCE_DIR/rollback-anchor.json")"
+          compute_deployment_id="$(jq -er '.compute.deployment_id' "$EVIDENCE_DIR/rollback-anchor.json")"
+          restored=false
+
+          for promotion_attempt in 1 2 3; do
+            deploy_output="$RUNNER_TEMP/compensation-deploy-$promotion_attempt.ndjson"
+            : > "$deploy_output"
+            set +e
+            pushd api >/dev/null
+            WRANGLER_OUTPUT_FILE_PATH="$deploy_output" \
+              npx wrangler versions deploy "$ROLLBACK_VERSION_ID@100%" \
+                --config wrangler.toml --env "$API_WRANGLER_ENV" \
+                --name "$API_WORKER" --yes \
+                --message "Compute OFF compensation run $GITHUB_RUN_ID attempt $promotion_attempt" \
+                2>&1 | tee -a "$EVIDENCE_DIR/compensation-promotion.txt"
+            promotion_rc="${PIPESTATUS[0]}"
+            popd >/dev/null
+            set -e
+            if [ "$promotion_rc" -eq 0 ]; then
+              if ! node scripts/release/verify-api-compute-rollout-state.mjs \
+                  deploy-output "$deploy_output" "$API_WORKER" \
+                  "$API_WRANGLER_ENV" "$ROLLBACK_VERSION_ID" \
+                  > "$EVIDENCE_DIR/compensation-promotion-output-$promotion_attempt.json" \
+                  2> "$EVIDENCE_DIR/compensation-promotion-output-$promotion_attempt.err"; then
+                echo "Compensation output was ambiguous; checking authoritative live state." \
+                  >> "$GITHUB_STEP_SUMMARY"
+              fi
+            fi
+
+            for read_attempt in {1..12}; do
+              pushd api >/dev/null
+              api_ok=false
+              compute_ok=false
+              if npx wrangler deployments status \
+                   --config wrangler.toml --env "$API_WRANGLER_ENV" \
+                   --name "$API_WORKER" --json > "$api_status" &&
+                 jq -e --arg id "$ROLLBACK_VERSION_ID" '
+                   (.versions | length) == 1 and
+                   ((.versions[0].percentage | tonumber) == 100) and
+                   .versions[0].version_id == $id
+                 ' "$api_status" >/dev/null; then
+                api_ok=true
+              fi
+              if npx wrangler deployments status \
+                   --config wrangler.toml --env "$API_WRANGLER_ENV" \
+                   --name "$COMPUTE_WORKER" --json > "$compute_status" &&
+                 jq -e \
+                   --arg deployment "$compute_deployment_id" \
+                   --arg id "$compute_version_id" '
+                     .id == $deployment and
+                     (.versions | length) == 1 and
+                     ((.versions[0].percentage | tonumber) == 100) and
+                     .versions[0].version_id == $id
+                   ' "$compute_status" >/dev/null; then
+                compute_ok=true
+              fi
+              popd >/dev/null
+              if [ "$api_ok/$compute_ok" = "true/true" ]; then
+                restored=true
+                break 2
+              fi
+              sleep 5
+            done
+          done
+          [ "$restored" = "true" ] || {
+            echo "CRITICAL: this dispatch's exact OFF anchor could not be restored." >&2
+            exit 1
+          }
+
+          api_deployment_id="$(jq -er '.id' "$api_status")"
+          pushd api >/dev/null
+          npx wrangler versions view "$ROLLBACK_VERSION_ID" \
+            --config wrangler.toml --env "$API_WRANGLER_ENV" \
+            --name "$API_WORKER" --json > "$api_version"
+          npx wrangler versions view "$compute_version_id" \
+            --config wrangler.toml --env "$API_WRANGLER_ENV" \
+            --name "$COMPUTE_WORKER" --json > "$compute_version"
+          popd >/dev/null
+          node scripts/release/verify-api-compute-rollout-state.mjs \
+            reverted "$REQUESTED_TARGET" \
+            "$EVIDENCE_DIR/rollback-anchor.json" \
+            "$api_status" "$api_version" \
+            "$compute_status" "$compute_version" \
+            "$api_deployment_id" \
+            > "$EVIDENCE_DIR/compensated-state.json"
+
+          container_list="$RUNNER_TEMP/compensated-container-list.json"
+          expected_image="registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/$IMAGE_REPOSITORY@$ENVIRONMENT_DIGEST"
+          pushd compute-worker >/dev/null
+          npx wrangler containers list \
+            --config "$COMPUTE_CONFIG" --json > "$container_list"
+          popd >/dev/null
+          node compute-worker/scripts/verify-container-readiness.mjs \
+            "$container_list" "$CONTAINER_APPLICATION" "$expected_image" \
+            > "$EVIDENCE_DIR/compensated-container-readiness.json"
+
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the emergency-stop latch after OFF compensation
+        id: compensate_latch
+        if: >-
+          always() &&
+          steps.compensate.outputs.verified == 'true'
+        shell: bash
+        env:
+          COMPUTE_EMERGENCY_STOP_TOKEN: ${{ secrets.COMPUTE_EMERGENCY_STOP_TOKEN }}
+        run: |
+          set -euo pipefail
+          status_file="$EVIDENCE_DIR/emergency-stop-after-compensation.json"
+          curl -fsS --retry 2 --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer $COMPUTE_EMERGENCY_STOP_TOKEN" \
+            -H "Accept: application/json" \
+            "$API_BASE/api/admin/compute/emergency-stop" > "$status_file"
+          unset COMPUTE_EMERGENCY_STOP_TOKEN
+          latch_state="$(jq -er '.latch_state' "$status_file")"
+          operation_id="$(jq -r '.operation_id // ""' "$status_file")"
+          case "$latch_state" in
+            clear)
+              node scripts/release/verify-compute-emergency-stop-status.mjs \
+                "$status_file" disabled clear
+              ;;
+            active|completed)
+              node scripts/release/verify-compute-emergency-stop-status.mjs \
+                "$status_file" disabled "$latch_state" "$operation_id"
+              ;;
+            *)
+              echo "Compensation observed an invalid emergency-stop state." >&2
+              exit 1
+              ;;
+          esac
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Clean the fixed certification fixture after OFF compensation
+        id: compensate_fixture
+        if: >-
+          always() &&
+          steps.compensate.outputs.verified == 'true'
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_STAGING_PROJECT_ID: ${{ ((inputs.stage == 'staging_canary' || (inputs.stage == 'revert_off' && inputs.revert_target == 'staging')) && secrets.SUPABASE_STAGING_PROJECT_ID) || '' }}
+          SUPABASE_PRODUCTION_PROJECT_ID: ${{ ((inputs.stage == 'production_canary' || inputs.stage == 'production_global' || (inputs.stage == 'revert_off' && inputs.revert_target == 'production')) && secrets.SUPABASE_PRODUCTION_PROJECT_ID) || '' }}
+          ULTRALIGHT_TOKEN: ${{ ((inputs.stage == 'staging_canary' || (inputs.stage == 'revert_off' && inputs.revert_target == 'staging')) && secrets.ULTRALIGHT_TOKEN_STAGING) || ((inputs.stage == 'production_canary' || inputs.stage == 'production_global' || (inputs.stage == 'revert_off' && inputs.revert_target == 'production')) && secrets.ULTRALIGHT_TOKEN) || '' }}
+          GALACTIC_SMOKE_APP_ID: ${{ ((inputs.stage == 'staging_canary' || (inputs.stage == 'revert_off' && inputs.revert_target == 'staging')) && secrets.GALACTIC_SMOKE_APP_ID_STAGING) || ((inputs.stage == 'production_canary' || inputs.stage == 'production_global' || (inputs.stage == 'revert_off' && inputs.revert_target == 'production')) && secrets.GALACTIC_SMOKE_APP_ID) || '' }}
+          COMPUTE_RELEASE_SHA: ${{ github.sha }}
+          COMPUTE_RELEASE_RUN_ID: ${{ github.run_id }}
+          COMPUTE_RELEASE_EVIDENCE_DIR: ${{ github.workspace }}/compute-rollout-evidence/compensation-cleanup
+        run: |
+          set -euo pipefail
+          mkdir -p "$COMPUTE_RELEASE_EVIDENCE_DIR"
+          node scripts/smoke/with-staging-owner-session.mjs \
+            --target "$REQUESTED_TARGET" \
+            -- node scripts/smoke/compute-certification-suite.mjs --cleanup-only
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Write deterministic evidence manifest
+        id: manifest
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          if [ ! -f "$EVIDENCE_DIR/rollout.json" ]; then
+            jq -n \
+              --arg stage "$REQUESTED_STAGE" \
+              --arg target "$REQUESTED_TARGET" \
+              --arg workflow_run_id "$GITHUB_RUN_ID" \
+              --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+              --arg git_sha "$GITHUB_SHA" \
+              --arg off_restore "${{ steps.compensate.outcome }}" \
+              --arg latch_verification "${{ steps.compensate_latch.outcome }}" \
+              --arg fixture_cleanup "${{ steps.compensate_fixture.outcome }}" '
+                {
+                  schema_version: 1,
+                  kind: "galactic_compute_canary_rollout_failure",
+                  stage: $stage,
+                  target: $target,
+                  dispatch: {
+                    workflow_run_id: $workflow_run_id,
+                    run_attempt: $run_attempt,
+                    git_sha: $git_sha
+                  },
+                  compensation: {
+                    off_restore_outcome: $off_restore,
+                    latch_verification_outcome: $latch_verification,
+                    fixture_cleanup_outcome: $fixture_cleanup
+                  }
+                }
+              ' > "$EVIDENCE_DIR/failure.json"
+          fi
+          (
+            cd "$EVIDENCE_DIR"
+            find . -type f ! -name evidence.sha256 -print0 |
+              LC_ALL=C sort -z |
+              xargs -0 sha256sum
+          ) > "$EVIDENCE_DIR/evidence.sha256"
+
+      - name: Upload private rollout evidence
+        id: upload_evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: compute-canary-rollout-${{ inputs.stage }}-${{ (inputs.stage == 'staging_canary' || (inputs.stage == 'revert_off' && inputs.revert_target == 'staging')) && 'staging' || 'production' }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: compute-rollout-evidence
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Restore OFF if committed evidence was not published
+        id: unpublished_restore
+        if: >-
+          always() &&
+          steps.promote.outputs.attempted == 'true' &&
+          steps.finalize.outcome == 'success' &&
+          (
+            steps.manifest.outcome != 'success' ||
+            steps.upload_evidence.outcome != 'success'
+          )
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ROLLBACK_VERSION_ID: ${{ steps.prepare.outputs.rollback_version_id }}
+          ENVIRONMENT_DIGEST: ${{ steps.baseline.outputs.environment_digest }}
+        run: |
+          set -euo pipefail
+          api_status="$RUNNER_TEMP/unpublished-api-status.json"
+          compute_status="$RUNNER_TEMP/unpublished-compute-status.json"
+          api_version="$RUNNER_TEMP/unpublished-api-version.json"
+          compute_version="$RUNNER_TEMP/unpublished-compute-version.json"
+          compute_version_id="$(jq -er '.compute.version_id' "$EVIDENCE_DIR/rollback-anchor.json")"
+          compute_deployment_id="$(jq -er '.compute.deployment_id' "$EVIDENCE_DIR/rollback-anchor.json")"
+          restored=false
+
+          for promotion_attempt in 1 2 3; do
+            deploy_output="$RUNNER_TEMP/unpublished-deploy-$promotion_attempt.ndjson"
+            : > "$deploy_output"
+            set +e
+            pushd api >/dev/null
+            WRANGLER_OUTPUT_FILE_PATH="$deploy_output" \
+              npx wrangler versions deploy "$ROLLBACK_VERSION_ID@100%" \
+                --config wrangler.toml --env "$API_WRANGLER_ENV" \
+                --name "$API_WORKER" --yes \
+                --message "Unpublished evidence OFF restore run $GITHUB_RUN_ID attempt $promotion_attempt"
+            promotion_rc="$?"
+            popd >/dev/null
+            set -e
+            if [ "$promotion_rc" -eq 0 ]; then
+              node scripts/release/verify-api-compute-rollout-state.mjs \
+                deploy-output "$deploy_output" "$API_WORKER" \
+                "$API_WRANGLER_ENV" "$ROLLBACK_VERSION_ID" \
+                >/dev/null 2>&1 || true
+            fi
+
+            for read_attempt in {1..12}; do
+              pushd api >/dev/null
+              api_ok=false
+              compute_ok=false
+              if npx wrangler deployments status \
+                   --config wrangler.toml --env "$API_WRANGLER_ENV" \
+                   --name "$API_WORKER" --json > "$api_status" &&
+                 jq -e --arg id "$ROLLBACK_VERSION_ID" '
+                   (.versions | length) == 1 and
+                   ((.versions[0].percentage | tonumber) == 100) and
+                   .versions[0].version_id == $id
+                 ' "$api_status" >/dev/null; then
+                api_ok=true
+              fi
+              if npx wrangler deployments status \
+                   --config wrangler.toml --env "$API_WRANGLER_ENV" \
+                   --name "$COMPUTE_WORKER" --json > "$compute_status" &&
+                 jq -e \
+                   --arg deployment "$compute_deployment_id" \
+                   --arg id "$compute_version_id" '
+                     .id == $deployment and
+                     (.versions | length) == 1 and
+                     ((.versions[0].percentage | tonumber) == 100) and
+                     .versions[0].version_id == $id
+                   ' "$compute_status" >/dev/null; then
+                compute_ok=true
+              fi
+              popd >/dev/null
+              if [ "$api_ok/$compute_ok" = "true/true" ]; then
+                restored=true
+                break 2
+              fi
+              sleep 5
+            done
+          done
+          [ "$restored" = "true" ] || {
+            echo "CRITICAL: unpublished rollout evidence and OFF restore both failed." >&2
+            exit 1
+          }
+
+          api_deployment_id="$(jq -er '.id' "$api_status")"
+          pushd api >/dev/null
+          npx wrangler versions view "$ROLLBACK_VERSION_ID" \
+            --config wrangler.toml --env "$API_WRANGLER_ENV" \
+            --name "$API_WORKER" --json > "$api_version"
+          npx wrangler versions view "$compute_version_id" \
+            --config wrangler.toml --env "$API_WRANGLER_ENV" \
+            --name "$COMPUTE_WORKER" --json > "$compute_version"
+          popd >/dev/null
+          node scripts/release/verify-api-compute-rollout-state.mjs \
+            reverted "$REQUESTED_TARGET" \
+            "$EVIDENCE_DIR/rollback-anchor.json" \
+            "$api_status" "$api_version" \
+            "$compute_status" "$compute_version" \
+            "$api_deployment_id" >/dev/null
+
+          container_list="$RUNNER_TEMP/unpublished-container-list.json"
+          expected_image="registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/$IMAGE_REPOSITORY@$ENVIRONMENT_DIGEST"
+          pushd compute-worker >/dev/null
+          npx wrangler containers list \
+            --config "$COMPUTE_CONFIG" --json > "$container_list"
+          popd >/dev/null
+          node compute-worker/scripts/verify-container-readiness.mjs \
+            "$container_list" "$CONTAINER_APPLICATION" "$expected_image" \
+            >/dev/null
+
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the emergency-stop latch after unpublished-evidence OFF restore
+        id: unpublished_restore_latch
+        if: >-
+          always() &&
+          steps.unpublished_restore.outputs.verified == 'true'
+        shell: bash
+        env:
+          COMPUTE_EMERGENCY_STOP_TOKEN: ${{ secrets.COMPUTE_EMERGENCY_STOP_TOKEN }}
+        run: |
+          set -euo pipefail
+          status_file="$RUNNER_TEMP/unpublished-emergency-stop.json"
+          curl -fsS --retry 2 --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer $COMPUTE_EMERGENCY_STOP_TOKEN" \
+            -H "Accept: application/json" \
+            "$API_BASE/api/admin/compute/emergency-stop" > "$status_file"
+          unset COMPUTE_EMERGENCY_STOP_TOKEN
+          latch_state="$(jq -er '.latch_state' "$status_file")"
+          operation_id="$(jq -r '.operation_id // ""' "$status_file")"
+          if [ "$latch_state" = "clear" ]; then
+            node scripts/release/verify-compute-emergency-stop-status.mjs \
+              "$status_file" disabled clear
+          else
+            node scripts/release/verify-compute-emergency-stop-status.mjs \
+              "$status_file" disabled "$latch_state" "$operation_id"
+          fi
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+          echo "Committed evidence was not published; restored this dispatch's OFF anchor." \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Clean the fixed certification fixture after unpublished restore
+        if: >-
+          always() &&
+          inputs.stage != 'revert_off' &&
+          steps.unpublished_restore_latch.outputs.verified == 'true'
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_STAGING_PROJECT_ID: ${{ (inputs.stage == 'staging_canary' && secrets.SUPABASE_STAGING_PROJECT_ID) || '' }}
+          SUPABASE_PRODUCTION_PROJECT_ID: ${{ ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.SUPABASE_PRODUCTION_PROJECT_ID) || '' }}
+          ULTRALIGHT_TOKEN: ${{ (inputs.stage == 'staging_canary' && secrets.ULTRALIGHT_TOKEN_STAGING) || ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.ULTRALIGHT_TOKEN) || '' }}
+          GALACTIC_SMOKE_APP_ID: ${{ (inputs.stage == 'staging_canary' && secrets.GALACTIC_SMOKE_APP_ID_STAGING) || ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.GALACTIC_SMOKE_APP_ID) || '' }}
+          COMPUTE_RELEASE_SHA: ${{ github.sha }}
+          COMPUTE_RELEASE_RUN_ID: ${{ github.run_id }}
+          COMPUTE_RELEASE_EVIDENCE_DIR: ${{ github.workspace }}/compute-rollout-evidence/unpublished-cleanup
+        run: |
+          set -euo pipefail
+          mkdir -p "$COMPUTE_RELEASE_EVIDENCE_DIR"
+          node scripts/smoke/with-staging-owner-session.mjs \
+            --target "$REQUESTED_TARGET" \
+            -- node scripts/smoke/compute-certification-suite.mjs --cleanup-only

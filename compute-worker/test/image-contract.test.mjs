@@ -82,7 +82,9 @@ describe("developer-v1 image contract", () => {
     const cliEntry = repositoryFile("cli/bin/ultralight.js");
     const cliPackage = JSON.parse(repositoryFile("cli/package.json"));
     const toolchainPackage = JSON.parse(fixture("toolchain/package.json"));
-    expect(cliPackage.version).toBe("2.4.0");
+    expect(cliPackage.version).toMatch(
+      /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u,
+    );
     expect(toolchainPackage.dependencies).not.toHaveProperty("galacticconnection");
     expect(dockerfile).toContain("ARG DENO_VERSION=2.9.3");
     expect(dockerfile).toContain(
@@ -95,6 +97,16 @@ describe("developer-v1 image contract", () => {
       "deno --version | awk 'NR == 1 { print $2 }'",
     );
     expect(dockerfile).toContain("COPY cli/package.json cli/package-lock.json");
+    expect(dockerfile).not.toContain("ARG GALACTIC_CLI_VERSION");
+    expect(dockerfile).toContain(
+      'require("/opt/galactic/cli/package.json").version',
+    );
+    expect(dockerfile).toContain(
+      'ai.galactic.tool.galactic-cli.source="cli/package.json"',
+    );
+    expect(dockerfile).toContain(
+      "/opt/galactic/image-metadata/galactic-cli-version.txt",
+    );
     for (const packagedFile of cliPackage.files.filter(
       (path) => !path.endsWith("/"),
     )) {
@@ -104,6 +116,12 @@ describe("developer-v1 image contract", () => {
     expect(cliEntry).toContain("--cached-only");
     expect(cliEntry).toContain("--no-config");
     expect(smoke).toContain("deno galactic galacticconnection");
+    expect(smoke).toContain("require(process.argv[1])");
+    expect(smoke).toContain("EXPECTED_GALACTIC_CLI_VERSION");
+    expect(smoke).toContain(
+      "/opt/galactic/image-metadata/galactic-cli-version.txt",
+    );
+    expect(smoke).not.toContain("2.4.0");
     expect(smoke).toContain(
       'galactic budget --help | grep "conserved budget for the active Galactic Compute lease"',
     );
@@ -217,12 +235,35 @@ describe("developer-v1 image contract", () => {
     const stagingConfig = repositoryFile("compute-worker/wrangler.staging.toml");
     const buildScript = repositoryFile("compute-worker/scripts/build-image.sh");
     const workflow = repositoryFile(".github/workflows/compute-ci.yml");
+    const inputHasher = repositoryFile(
+      "compute-worker/scripts/hash-image-inputs.sh",
+    );
     const dockerignore = repositoryFile(".dockerignore");
     for (const config of [productionConfig, stagingConfig]) {
       expect(config).toContain('image_build_context = ".."');
     }
     expect(buildScript).toContain("--file images/standard/Dockerfile");
-    expect(workflow.match(/- '\.dockerignore'/g)).toHaveLength(2);
+    expect(workflow).toContain("workflow_dispatch: {}");
+    expect(workflow).toContain("pull_request:");
+    expect(workflow).toContain("push:");
+    expect(workflow).toContain("branches: [main]");
+    expect(workflow).toContain("- cli/**");
+    expect(workflow).toContain("- compute-worker/**");
+    const contractsJob = workflow.slice(
+      workflow.indexOf("  contracts:"),
+      workflow.indexOf("  image:"),
+    );
+    const imageJob = workflow.slice(workflow.indexOf("  image:"));
+    expect(contractsJob).toContain("npm run verify");
+    expect(contractsJob).toContain("Wrangler contract dry run (production)");
+    expect(contractsJob).not.toContain("docker build");
+    expect(contractsJob).not.toContain("image.spdx.json");
+    expect(imageJob).toContain("if: github.event_name == 'workflow_dispatch'");
+    expect(imageJob).toContain("needs: contracts");
+    expect(imageJob).toContain("docker build");
+    expect(imageJob).toContain("image.spdx.json");
+    expect(workflow).not.toContain("docker push");
+    expect(inputHasher).toContain(".dockerignore");
     expect(workflow).toContain("--file images/standard/Dockerfile");
     expect(dockerignore.trimStart()).toMatch(/^#/);
     expect(dockerignore).toContain("\n**\n");
@@ -408,10 +449,20 @@ describe("Compute release supply-chain contract", () => {
 
   it("keeps Cloudflare deploy credentials off untrusted build/install steps", () => {
     const workflow = repositoryFile(".github/workflows/compute-deploy.yml");
+    const rollout = repositoryFile(
+      ".github/workflows/compute-canary-rollout.yml",
+    );
     const jobHeader = workflow.slice(0, workflow.indexOf("    steps:"));
+    const rolloutJobHeader = rollout.slice(0, rollout.indexOf("    steps:"));
     const install = workflow.slice(
       workflow.indexOf("- name: Install dependencies"),
       workflow.indexOf("- name: Verify Compute and API integration"),
+    );
+    const rolloutInstall = rollout.slice(
+      rollout.indexOf("- name: Install pinned release dependencies"),
+      rollout.indexOf(
+        "- name: Enforce production hygiene and verify Compute release evidence",
+      ),
     );
     const imageBuild = workflow.slice(
       workflow.indexOf("- name: Build and smoke exact image"),
@@ -425,7 +476,11 @@ describe("Compute release supply-chain contract", () => {
     );
     expect(jobHeader).not.toContain("CLOUDFLARE_API_TOKEN");
     expect(jobHeader).not.toContain("CLOUDFLARE_ACCOUNT_ID");
+    expect(rolloutJobHeader).not.toContain("CLOUDFLARE_API_TOKEN");
+    expect(rolloutJobHeader).not.toContain("CLOUDFLARE_ACCOUNT_ID");
     expect(install).not.toContain("CLOUDFLARE_API_TOKEN");
+    expect(rolloutInstall).not.toContain("CLOUDFLARE_API_TOKEN");
+    expect(rolloutInstall).not.toContain("CLOUDFLARE_ACCOUNT_ID");
     expect(imageBuild).not.toContain("CLOUDFLARE_API_TOKEN");
     expect(sbom).not.toContain("CLOUDFLARE_API_TOKEN");
     expect(sbom).not.toContain("CLOUDFLARE_ACCOUNT_ID");
@@ -460,6 +515,7 @@ describe("Compute release supply-chain contract", () => {
       ".github/workflows/compute-ci.yml",
       ".github/workflows/compute-deploy.yml",
       ".github/workflows/compute-admission.yml",
+      ".github/workflows/compute-canary-rollout.yml",
       ".github/workflows/api-deploy.yml",
     ]) {
       const workflow = repositoryFile(path);
@@ -471,7 +527,7 @@ describe("Compute release supply-chain contract", () => {
     }
   });
 
-  it("keeps emergency admission disable manual, digest-bound, and source-immutable", () => {
+  it("blocks the historical-OFF admission workflow before repository or Cloudflare access", () => {
     const workflow = repositoryFile(
       ".github/workflows/compute-admission.yml",
     );
@@ -482,31 +538,27 @@ describe("Compute release supply-chain contract", () => {
     expect(triggers).toContain("workflow_dispatch:");
     expect(triggers).not.toContain("push:");
     expect(triggers).not.toContain("pull_request:");
-    expect(workflow).toContain("DISABLE GALACTIC COMPUTE");
-    expect(workflow).toContain("environment: ${{ inputs.target }}");
-    expect(workflow).not.toContain("required_reviewers");
-    expect(workflow).not.toContain("COMPUTE_ENABLED:1");
-    expect(workflow).not.toContain("inputs.action");
-    expect(workflow).toContain("RELEASE_ENVIRONMENT_DIGEST");
-    expect(workflow).toContain("CERTIFIED_OFF_API_VERSION_ID");
-    expect(workflow).toContain("CERTIFIED_COMPUTE_VERSION_ID");
-    expect(workflow).toContain("compute_release_run_id:");
-    expect(workflow).toContain("gh run download");
-    expect(workflow).toContain(
-      'versions deploy "$CERTIFIED_OFF_API_VERSION_ID@100%"',
+    expect(workflow).toContain("Compute Admission (Legacy - Blocked)");
+    const refusalAt = workflow.indexOf(
+      "Refuse superseded historical-OFF rollback path",
     );
-    expect(workflow).toContain(
-      "Promote certified OFF version after any ambiguous attempted change",
-    );
-    expect(workflow).not.toContain("api-compute-admission-disable.toml");
-    expect(workflow).toContain("persist-credentials: false");
-    expect(workflow).toContain("Upload admission audit evidence");
-    expect(workflow).toContain("source_rebuild_allowed: false");
-    expect(workflow).toContain("actual_smoke_sha256");
+    const checkoutAt = workflow.indexOf("actions/checkout@");
+    const cloudflareAt = workflow.indexOf("CLOUDFLARE_API_TOKEN");
+    expect(refusalAt).toBeGreaterThan(-1);
+    expect(refusalAt).toBeLessThan(checkoutAt);
+    expect(refusalAt).toBeLessThan(cloudflareAt);
+    const refusal = workflow.slice(refusalAt, checkoutAt);
+    expect(refusal).toContain("exit 1");
+    expect(refusal).toContain("Compute Canary Rollout");
+    expect(refusal).not.toContain("wrangler");
+    expect(refusal).not.toContain("gh run download");
   });
 
   it("certifies tagged API and Compute versions before admission", () => {
     const release = repositoryFile(".github/workflows/compute-deploy.yml");
+    const rollout = repositoryFile(
+      ".github/workflows/compute-canary-rollout.yml",
+    );
     const apiDeploy = repositoryFile(".github/workflows/api-deploy.yml");
     expect(release).toContain('--tag "compute-$GITHUB_SHA"');
     expect(release).toContain('--tag "api-$GITHUB_SHA-admission-off"');
@@ -517,8 +569,17 @@ describe("Compute release supply-chain contract", () => {
     expect(release).toContain("API is not one stable 100% version");
     expect(release).toContain("Compute is not one stable 100% version");
     expect(release).toContain('value("COMPUTE_ENABLED") == "0"');
-    expect(release).toContain('value("COMPUTE_ENABLED") == "1"');
     expect(release).toContain('value("COMPUTE_CANARY_ALLOWLIST") == ""');
+    expect(release).not.toContain("enable_global");
+    expect(release).not.toContain("--var COMPUTE_ENABLED:1");
+    expect(rollout).toContain(
+      "upload_policy candidate canary 1 canary",
+    );
+    expect(rollout).toContain(
+      'upload_policy candidate global 1 global ""',
+    );
+    expect(rollout).toContain("verify-compute-certification-evidence.mjs");
+    expect(rollout).toContain("COMPUTE_CERTIFICATION_PRINCIPAL");
     expect(apiDeploy.match(/--tag "api-\$GITHUB_SHA"/g)?.length).toBe(2);
     expect(apiDeploy.match(/persist-credentials: false/g)?.length).toBe(3);
     expect(apiDeploy).toContain(
@@ -549,9 +610,11 @@ describe("Compute release supply-chain contract", () => {
     const runbook = repositoryFile("docs/GALACTIC_COMPUTE_RUNBOOK.md");
     const devVars = repositoryFile("api/.dev.vars.example");
     expect(workflow).toContain("COMPUTE_EMERGENCY_STOP_TOKEN");
+    expect(workflow).toContain("COMPUTE_CERTIFICATION_TOKEN");
     expect(workflow).toContain("any(.[]; .name == $name)");
     expect(devVars).toContain("COMPUTE_JOB_TOKEN_PEPPER=");
     expect(devVars).toContain("COMPUTE_EMERGENCY_STOP_TOKEN=");
+    expect(devVars).toContain("COMPUTE_CERTIFICATION_TOKEN=");
     expect(runbook).toContain(
       "Authorization: Bearer ${COMPUTE_EMERGENCY_STOP_TOKEN}",
     );

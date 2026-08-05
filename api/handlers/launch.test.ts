@@ -1120,7 +1120,25 @@ function agentHomeFetchMock(
       return jsonResponse([]);
     }
     if (url.startsWith("https://supabase.test/rest/v1/routine_runs?")) {
-      return jsonResponse(options.runs?.() || [agentHomeRunRow()]);
+      const runs = options.runs?.() || [agentHomeRunRow()];
+      const headers = new Headers(
+        init?.headers ?? (input instanceof Request ? input.headers : undefined),
+      );
+      if (headers.get("Prefer") === "count=exact") {
+        const active = runs.filter((run) =>
+          run.status === "queued" || run.status === "running"
+        );
+        return new Response(JSON.stringify(active.slice(0, 1)), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Range": active.length === 0
+              ? "*/0"
+              : `0-0/${active.length}`,
+          },
+        });
+      }
+      return jsonResponse(runs);
     }
     if (url.startsWith("https://supabase.test/rest/v1/user_app_secrets?")) {
       if (url.includes("value_encrypted")) {
@@ -1647,6 +1665,22 @@ Deno.test("launch facade: openapi documents curated launch and MCP paths", async
     assertEquals(Boolean(spec.paths["/api/launch/api-keys"]), true);
     assertEquals(Boolean(spec.paths["/api/launch/api-keys/{id}"]), true);
     assertEquals(Boolean(spec.paths["/api/launch/handoffs"]), true);
+    const computeRuns = spec.paths[
+      "/api/launch/agents/{id}/compute/runs"
+    ] as {
+      get?: {
+        parameters?: Array<{
+          name?: string;
+          in?: string;
+          schema?: { enum?: string[] };
+        }>;
+      };
+    };
+    const activeComputeFilter = computeRuns.get?.parameters?.find((parameter) =>
+      parameter.name === "active"
+    );
+    assertEquals(activeComputeFilter?.in, "query");
+    assertEquals(activeComputeFilter?.schema?.enum, ["true"]);
     assertEquals(
       Boolean(spec.paths["/api/launch/agents/{id}/handoffs"]),
       true,
@@ -2132,6 +2166,7 @@ Deno.test("launch facade: owner routine overview is live, bounded, and secret-fr
           }>;
           blockers?: Array<{ code: string; capabilityIds?: string[] }>;
           autoPauseReason?: string | null;
+          activeRunCount?: number;
           recentRuns?: Array<{ errorCode?: string | null }>;
         } | null;
       };
@@ -2167,6 +2202,7 @@ Deno.test("launch facade: owner routine overview is live, bounded, and secret-fr
         "capability-1",
       ]);
       assertEquals(body.routine?.autoPauseReason, "consecutive_failures");
+      assertEquals(body.routine?.activeRunCount, 0);
       assertEquals(
         body.routine?.recentRuns?.[0]?.errorCode,
         "inbox_unavailable",
@@ -2177,7 +2213,7 @@ Deno.test("launch facade: owner routine overview is live, bounded, and secret-fr
       assertEquals(serialized.includes("metadata"), false);
       assertEquals(serialized.includes("secret_value"), false);
     },
-    async (input) => {
+    async (input, init) => {
       const url = input instanceof Request ? input.url : String(input);
       if (url === "https://supabase.test/auth/v1/user") {
         return jsonResponse({
@@ -2213,6 +2249,18 @@ Deno.test("launch facade: owner routine overview is live, bounded, and secret-fr
         return jsonResponse([]);
       }
       if (url.startsWith("https://supabase.test/rest/v1/routine_runs?")) {
+        const headers = new Headers(
+          init?.headers ??
+            (input instanceof Request ? input.headers : undefined),
+        );
+        if (headers.get("Prefer") === "count=exact") {
+          return new Response("[]", {
+            headers: {
+              "Content-Type": "application/json",
+              "Content-Range": "*/0",
+            },
+          });
+        }
         return jsonResponse([persistentRoutineRunRow()]);
       }
       return jsonResponse([]);

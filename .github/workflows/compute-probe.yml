@@ -1,0 +1,868 @@
+name: Compute Production Probe
+
+# This workflow is deliberately isolated from every rollout mutation secret.
+# It observes the exact production pair, runs the fixed canary fixture only
+# while canary admission is active, and publishes private soak evidence.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+    - cron: "7 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Probe profile to run.
+        required: true
+        default: lifecycle
+        type: choice
+        options:
+          - lifecycle
+          - browser
+      production_canary_run_id:
+        description: Optional exact production_canary rollout run; otherwise resolve the latest successful artifact.
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  probe:
+    name: Production ${{ github.event_name == 'schedule' && github.event.schedule == '7 * * * *' && 'browser' || inputs.mode || 'lifecycle' }} probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production-compute-probe
+    concurrency:
+      group: compute-production-probe
+      cancel-in-progress: false
+    env:
+      EVIDENCE_DIR: ${{ github.workspace }}/compute-probe-evidence
+      API_BASE: https://api.connectgalactic.com
+      API_WORKER: ultralight-api
+      COMPUTE_WORKER: galactic-compute
+      COMPUTE_CONFIG: wrangler.toml
+      CONTAINER_APPLICATION: galactic-compute-computestandard
+      IMAGE_REPOSITORY: galactic-compute
+
+    steps:
+      - name: Check out the workflow source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure the private rollout evidence path
+        shell: bash
+        run: echo "ROLLOUT_DIR=$RUNNER_TEMP/active-production-canary" >> "$GITHUB_ENV"
+
+      - name: Resolve the active production canary
+        id: resolve
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_CANARY_RUN_ID: ${{ github.event.inputs.production_canary_run_id || '' }}
+        run: |
+          set -euo pipefail
+          rm -rf "$ROLLOUT_DIR"
+          mkdir -p "$ROLLOUT_DIR"
+          run_id="$REQUESTED_CANARY_RUN_ID"
+
+          if [ -z "$run_id" ]; then
+            run_pages="$RUNNER_TEMP/successful-rollout-run-pages.json"
+            artifact_pages="$RUNNER_TEMP/rollout-artifact-pages.json"
+            gh api --method GET --paginate \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/compute-canary-rollout.yml/runs" \
+              -f event=workflow_dispatch -f status=success -f per_page=100 \
+              > "$run_pages"
+            gh api --method GET --paginate \
+              "repos/$GITHUB_REPOSITORY/actions/artifacts" \
+              -f per_page=100 > "$artifact_pages"
+            jq -s '[.[].workflow_runs[] |
+              select(.status == "completed" and .conclusion == "success") |
+              (.id | tostring)] | unique' "$run_pages" \
+              > "$RUNNER_TEMP/successful-rollout-run-ids.json"
+            run_id="$(
+              jq -sr \
+                --slurpfile successful "$RUNNER_TEMP/successful-rollout-run-ids.json" '
+                  [.[].artifacts[] |
+                    select(.expired == false) |
+                    select(.name | startswith(
+                      "compute-canary-rollout-production_canary-production-"
+                    )) |
+                    (.workflow_run.id | tostring) as $run_id |
+                    select($successful[0] | index($run_id))
+                  ] |
+                  sort_by(.created_at, .id) |
+                  (last.workflow_run.id // "")
+                ' "$artifact_pages"
+            )"
+          fi
+
+          if [ -z "$run_id" ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "run_id=" >> "$GITHUB_OUTPUT"
+            echo "run_attempt=" >> "$GITHUB_OUTPUT"
+            echo "git_sha=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [[ "$run_id" =~ ^[1-9][0-9]*$ ]] || {
+            echo "production_canary_run_id must be a positive workflow run id." >&2
+            exit 1
+          }
+
+          run_json="$ROLLOUT_DIR/workflow-run.json"
+          artifacts_json="$ROLLOUT_DIR/artifacts.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > "$run_json"
+          jq -e \
+            --arg run_id "$run_id" \
+            --arg repository "$GITHUB_REPOSITORY" '
+              (.id | type) == "number" and
+              (.id | tostring) == $run_id and
+              (.run_attempt | type) == "number" and
+              .run_attempt >= 1 and
+              (.run_attempt | floor) == .run_attempt and
+              .event == "workflow_dispatch" and
+              .status == "completed" and
+              .conclusion == "success" and
+              .path == ".github/workflows/compute-canary-rollout.yml" and
+              (.head_sha | type) == "string" and
+              (.head_sha | test("^[0-9a-f]{40}$")) and
+              (.head_branch | type) == "string" and
+              (.head_branch | test("^v[0-9A-Za-z][0-9A-Za-z._-]*$")) and
+              .repository.full_name == $repository and
+              .head_repository.full_name == $repository and
+              (.repository.id | type) == "number" and
+              .repository.id > 0 and
+              (.repository.id | floor) == .repository.id and
+              .head_repository.id == .repository.id
+            ' "$run_json" >/dev/null || {
+              echo "Selected production canary is not an exact successful same-repository release-tag dispatch." >&2
+              exit 1
+          }
+          run_attempt="$(jq -er '.run_attempt | tostring' "$run_json")"
+          git_sha="$(jq -er '.head_sha' "$run_json")"
+          head_branch="$(jq -er '.head_branch' "$run_json")"
+          tag_ref="refs/tags/$head_branch"
+          git show-ref --verify --quiet "$tag_ref" || {
+            echo "Selected production canary head is not an immutable repository tag." >&2
+            exit 1
+          }
+          resolved_tag_sha="$(git rev-parse "${tag_ref}^{commit}")"
+          [ "$resolved_tag_sha" = "$git_sha" ] || {
+            echo "Selected production canary tag does not resolve to its workflow SHA." >&2
+            exit 1
+          }
+          git merge-base --is-ancestor "$git_sha" "$GITHUB_SHA" || {
+            echo "Selected production canary tag is outside the trusted probe history." >&2
+            exit 1
+          }
+          gh api --method GET --paginate \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" \
+            -f per_page=100 > "$RUNNER_TEMP/canary-artifact-pages.json"
+          jq -s '{
+            total_count: ([.[].artifacts[]] | length),
+            artifacts: [.[].artifacts[]]
+          }' "$RUNNER_TEMP/canary-artifact-pages.json" > "$artifacts_json"
+          artifact_name="compute-canary-rollout-production_canary-production-$run_id-$run_attempt"
+          jq -e --arg name "$artifact_name" '
+            [.artifacts[] | select(.name == $name and .expired == false)] |
+            length == 1
+          ' "$artifacts_json" >/dev/null
+          gh run download "$run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$artifact_name" \
+            --dir "$ROLLOUT_DIR"
+          {
+            echo "found=true"
+            echo "run_id=$run_id"
+            echo "run_attempt=$run_attempt"
+            echo "git_sha=$git_sha"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check out the immutable canary source
+        if: steps.resolve.outputs.found == 'true'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ steps.resolve.outputs.git_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            api/package-lock.json
+            compute-worker/package-lock.json
+
+      - name: Configure the bounded probe
+        shell: bash
+        env:
+          DISPATCH_MODE: ${{ github.event.inputs.mode || '' }}
+          SCHEDULE_EXPRESSION: ${{ github.event.schedule || '' }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$EVIDENCE_DIR"
+          chmod 700 "$EVIDENCE_DIR"
+          if [ "$GITHUB_EVENT_NAME" = "schedule" ] &&
+             [ "$SCHEDULE_EXPRESSION" = "7 * * * *" ]; then
+            mode=browser
+            profile=probe
+          elif [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+            mode=lifecycle
+            profile=probe-lifecycle
+          else
+            mode="$DISPATCH_MODE"
+            case "$mode" in
+              lifecycle) profile=probe-lifecycle ;;
+              browser) profile=probe ;;
+              *) echo "Unsupported probe mode." >&2; exit 1 ;;
+            esac
+          fi
+          {
+            echo "PROBE_MODE=$mode"
+            echo "COMPUTE_CERTIFICATION_PROFILE=$profile"
+            echo "PROBE_DISPATCH_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_ENV"
+
+      - name: Install pinned probe dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix api ci
+          npm --prefix compute-worker ci
+          [ "$(node -p "require('./api/node_modules/wrangler/package.json').version")" = "4.112.0" ]
+          [ "$(node -p "require('./compute-worker/node_modules/wrangler/package.json').version")" = "4.112.0" ]
+
+      - name: Verify the production canary artifact when present
+        id: predecessor
+        if: steps.resolve.outputs.found == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/release/verify-compute-rollout-predecessor.mjs \
+            "$ROLLOUT_DIR" \
+            "$ROLLOUT_DIR/workflow-run.json" \
+            "$ROLLOUT_DIR/artifacts.json" \
+            "${{ steps.resolve.outputs.run_id }}" \
+            production_canary production \
+            "${{ steps.resolve.outputs.git_sha }}" 0 \
+            > "$EVIDENCE_DIR/predecessor-verification.json"
+          cp "$ROLLOUT_DIR/final-state.json" \
+            "$EVIDENCE_DIR/production-canary-final-state.json"
+          cp "$ROLLOUT_DIR/canary-identity.json" \
+            "$EVIDENCE_DIR/canary-identity.json"
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Inspect and bind the live production API/Compute pair
+        id: inspect
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.COMPUTE_PROBE_CLOUDFLARE_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          COMPUTE_CERTIFICATION_TOKEN: ${{ secrets.COMPUTE_CERTIFICATION_TOKEN }}
+        run: |
+          set -euo pipefail
+          for required in \
+            "$CLOUDFLARE_API_TOKEN" \
+            "$CLOUDFLARE_ACCOUNT_ID" \
+            "$COMPUTE_CERTIFICATION_TOKEN"; do
+            [ -n "$required" ] || {
+              echo "The probe environment is missing a read-only credential." >&2
+              exit 1
+            }
+          done
+          api_status="$RUNNER_TEMP/probe-api-status.json"
+          compute_status="$RUNNER_TEMP/probe-compute-status.json"
+          api_version="$RUNNER_TEMP/probe-api-version.json"
+          compute_version="$RUNNER_TEMP/probe-compute-version.json"
+          live_state="$EVIDENCE_DIR/live-state.json"
+
+          pushd api >/dev/null
+          npx wrangler deployments status \
+            --config wrangler.toml --name "$API_WORKER" --json \
+            > "$api_status"
+          npx wrangler deployments status \
+            --config wrangler.toml --name "$COMPUTE_WORKER" --json \
+            > "$compute_status"
+          api_version_id="$(jq -er '
+            if (.versions | length) == 1 and
+               ((.versions[0].percentage | tonumber) == 100)
+            then .versions[0].version_id
+            else error("API is not one stable version") end
+          ' "$api_status")"
+          compute_version_id="$(jq -er '
+            if (.versions | length) == 1 and
+               ((.versions[0].percentage | tonumber) == 100)
+            then .versions[0].version_id
+            else error("Compute is not one stable version") end
+          ' "$compute_status")"
+          npx wrangler versions view "$api_version_id" \
+            --config wrangler.toml --name "$API_WORKER" --json \
+            > "$api_version"
+          npx wrangler versions view "$compute_version_id" \
+            --config wrangler.toml --name "$COMPUTE_WORKER" --json \
+            > "$compute_version"
+          popd >/dev/null
+          node scripts/release/verify-api-compute-rollout-state.mjs \
+            inspect production "$api_status" "$api_version" \
+            "$compute_status" "$compute_version" > "$live_state"
+          policy="$(jq -er '.policy' "$live_state")"
+          case "$policy" in
+            off) expected_admission=disabled ;;
+            canary|global) expected_admission=enabled ;;
+            *) echo "Live production has an invalid Compute policy." >&2; exit 1 ;;
+          esac
+          if [ "$policy" = "canary" ]; then
+            [ "${{ steps.predecessor.outputs.verified }}" = "true" ] || {
+              echo "Canary admission has no verified production_canary artifact." >&2
+              exit 1
+            }
+            jq -ne \
+              --slurpfile live "$live_state" \
+              --slurpfile prior "$EVIDENCE_DIR/production-canary-final-state.json" '
+                def identity: {
+                  target, policy, canary_allowlist, certification_principal,
+                  environment_digest, api, compute
+                };
+                ($live[0] | identity) == ($prior[0] | identity)
+              ' </dev/null >/dev/null
+          elif [ "$policy" = "global" ]; then
+            [ "${{ steps.predecessor.outputs.verified }}" = "true" ] || {
+              echo "Global admission has no production_canary lineage." >&2
+              exit 1
+            }
+            jq -ne \
+              --slurpfile live "$live_state" \
+              --slurpfile prior "$EVIDENCE_DIR/production-canary-final-state.json" '
+                ($live[0].target == "production") and
+                ($live[0].policy == "global") and
+                ($live[0].canary_allowlist == []) and
+                ($live[0].certification_principal ==
+                  $prior[0].certification_principal) and
+                ($live[0].environment_digest ==
+                  $prior[0].environment_digest) and
+                ($live[0].compute == $prior[0].compute) and
+                ($live[0].api.worker == $prior[0].api.worker) and
+                ($live[0].api.code_etag == $prior[0].api.code_etag) and
+                ($live[0].api.compatibility_sha256 ==
+                  $prior[0].api.compatibility_sha256)
+              ' </dev/null >/dev/null
+          fi
+
+          expected_image="registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/$IMAGE_REPOSITORY@$(jq -er '.environment_digest' "$live_state")"
+          pushd compute-worker >/dev/null
+          npx wrangler containers list --config "$COMPUTE_CONFIG" --json \
+            > "$RUNNER_TEMP/probe-container-list.json"
+          popd >/dev/null
+          node compute-worker/scripts/verify-container-readiness.mjs \
+            "$RUNNER_TEMP/probe-container-list.json" \
+            "$CONTAINER_APPLICATION" "$expected_image" \
+            > "$EVIDENCE_DIR/container-readiness.json"
+
+          curl --fail-with-body --silent --show-error \
+            --retry 2 --retry-all-errors --connect-timeout 10 --max-time 60 \
+            -H "Authorization: Bearer $COMPUTE_CERTIFICATION_TOKEN" \
+            -H "Accept: application/json" \
+            "$API_BASE/api/admin/compute/emergency-stop" \
+            > "$EVIDENCE_DIR/initial-emergency-stop-status.json"
+          node scripts/release/verify-compute-emergency-stop-status.mjs \
+            "$EVIDENCE_DIR/initial-emergency-stop-status.json" \
+            "$expected_admission" clear >/dev/null
+          unset COMPUTE_CERTIFICATION_TOKEN
+
+          queue_rows="$EVIDENCE_DIR/queue-inventory.ndjson"
+          : > "$queue_rows"
+          page=1
+          while :; do
+            page_file="$RUNNER_TEMP/queue-page-$page.json"
+            curl --fail-with-body --silent --show-error \
+              --retry 2 --retry-all-errors --connect-timeout 10 --max-time 60 \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              -H "Accept: application/json" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/queues?page=$page&per_page=100" \
+              > "$page_file"
+            jq -e '.success == true and (.result | type == "array")' \
+              "$page_file" >/dev/null
+            jq -c '.result[]' "$page_file" >> "$queue_rows"
+            total_pages="$(jq -er '.result_info.total_pages // 1' "$page_file")"
+            [ "$page" -lt "$total_pages" ] || break
+            page=$((page + 1))
+          done
+          jq -s '
+            def one($name):
+              [.[] | select(.queue_name == $name)] |
+              if length == 1 and
+                 (.[0].queue_id | type == "string") and
+                 (.[0].queue_id | length) > 0
+              then .[0].queue_id
+              else error("expected one queue named " + $name) end;
+            {
+              dispatch: one("galactic-compute"),
+              compute_dlq: one("galactic-compute-dlq"),
+              reconciliation_dlq:
+                one("galactic-compute-reconciliation-dlq")
+            }
+          ' "$queue_rows" > "$EVIDENCE_DIR/queue-ids.json"
+
+          read_queue_metrics() {
+            local key="$1"
+            local destination="$2"
+            local queue_id
+            queue_id="$(jq -er --arg key "$key" '.[$key]' \
+              "$EVIDENCE_DIR/queue-ids.json")"
+            curl --fail-with-body --silent --show-error \
+              --retry 2 --retry-all-errors --connect-timeout 10 --max-time 60 \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              -H "Accept: application/json" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/queues/$queue_id/metrics" \
+              > "$destination"
+            jq -e '
+              .success == true and
+              (.result.backlog_count | type == "number") and
+              (.result.backlog_count >= 0) and
+              (.result.oldest_message_timestamp_ms | type == "number") and
+              (.result.oldest_message_timestamp_ms >= 0)
+            ' "$destination" >/dev/null
+          }
+          read_queue_metrics dispatch \
+            "$EVIDENCE_DIR/queue-baseline-dispatch.json"
+          read_queue_metrics compute_dlq \
+            "$EVIDENCE_DIR/queue-baseline-compute-dlq.json"
+          read_queue_metrics reconciliation_dlq \
+            "$EVIDENCE_DIR/queue-baseline-reconciliation-dlq.json"
+          jq -e '
+            .result.backlog_count == 0 and
+            .result.oldest_message_timestamp_ms == 0
+          ' "$EVIDENCE_DIR/queue-baseline-dispatch.json" >/dev/null
+          jq -n \
+            --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --slurpfile dispatch "$EVIDENCE_DIR/queue-baseline-dispatch.json" \
+            --slurpfile compute "$EVIDENCE_DIR/queue-baseline-compute-dlq.json" \
+            --slurpfile reconciliation "$EVIDENCE_DIR/queue-baseline-reconciliation-dlq.json" '
+              {
+                schema_version: 1,
+                kind: "galactic_compute_queue_health",
+                verified: false,
+                target: "production",
+                observed_at: $observed_at,
+                dispatch: {
+                  name: "galactic-compute",
+                  backlog: $dispatch[0].result.backlog_count,
+                  oldest_age_seconds: 0
+                },
+                compute_dlq: {
+                  name: "galactic-compute-dlq",
+                  baseline_count: $compute[0].result.backlog_count,
+                  final_count: $compute[0].result.backlog_count
+                },
+                reconciliation_dlq: {
+                  name: "galactic-compute-reconciliation-dlq",
+                  baseline_count: $reconciliation[0].result.backlog_count,
+                  final_count: $reconciliation[0].result.backlog_count
+                }
+              }
+            ' > "$EVIDENCE_DIR/queue-health.json"
+          {
+            echo "policy=$policy"
+            echo "expected_admission=$expected_admission"
+            echo "environment_digest=$(jq -er '.environment_digest' "$live_state")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run the deployed Compute probe suite
+        id: suite
+        if: steps.inspect.outputs.policy == 'canary'
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PRODUCTION_PROJECT_ID: ${{ secrets.SUPABASE_PRODUCTION_PROJECT_ID }}
+          ULTRALIGHT_TOKEN: ${{ secrets.ULTRALIGHT_TOKEN }}
+          GALACTIC_SMOKE_APP_ID: ${{ secrets.GALACTIC_SMOKE_APP_ID }}
+          COMPUTE_RELEASE_SHA: ${{ steps.resolve.outputs.git_sha }}
+          COMPUTE_RELEASE_RUN_ID: ${{ github.run_id }}
+          COMPUTE_RELEASE_EVIDENCE_DIR: ${{ github.workspace }}/compute-probe-evidence
+        run: |
+          set -euo pipefail
+          node scripts/smoke/with-staging-owner-session.mjs \
+            --target production \
+            -- node scripts/smoke/compute-certification-suite.mjs \
+            2>&1 | tee "$EVIDENCE_DIR/compute-probe-suite.txt"
+          suite="$EVIDENCE_DIR/compute-certification-production.json"
+          run_set="$EVIDENCE_DIR/compute-certification-run-ids-production.json"
+          case "$PROBE_MODE/$COMPUTE_CERTIFICATION_PROFILE" in
+            lifecycle/probe-lifecycle)
+              expected_scenarios=1
+              expected_scenario_names='["async_echo"]'
+              ;;
+            browser/probe)
+              expected_scenarios=2
+              expected_scenario_names='["async_echo","browser_https"]'
+              ;;
+            *)
+              echo "Probe mode/profile pairing is invalid." >&2
+              exit 1
+              ;;
+          esac
+          jq -e \
+            --arg profile "$COMPUTE_CERTIFICATION_PROFILE" \
+            --arg sha "${{ steps.resolve.outputs.git_sha }}" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --argjson scenarios "$expected_scenarios" \
+            --argjson scenario_names "$expected_scenario_names" '
+              .schema_version == 1 and
+              .kind == "galactic_compute_deployed_certification" and
+              .verified == true and .target == "production" and
+              .profile == $profile and .candidate_sha == $sha and
+              .workflow_run_id == $run_id and
+              (.scenarios | length) == $scenarios and
+              ([.scenarios[].scenario] == $scenario_names) and
+              .operator_snapshot_required == true and
+              .cleanup.active_compute_runs_remaining == 0 and
+              .cleanup.active_routine_runs_remaining == 0 and
+              .cleanup.compute_policy_disabled == true and
+              .cleanup.policy_probe_paused_and_free == true
+            ' "$suite" >/dev/null
+          jq -e --argjson scenarios "$expected_scenarios" '
+            .schema_version == 1 and
+            .kind == "galactic_compute_certification_run_set" and
+            (.run_ids | length) == $scenarios and
+            (.run_ids | unique | length) == $scenarios
+          ' "$run_set" >/dev/null
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Read the least-privilege Compute certification snapshot
+        id: snapshot
+        if: >-
+          steps.inspect.outputs.policy == 'canary' &&
+          steps.suite.outputs.verified == 'true'
+        shell: bash
+        env:
+          COMPUTE_CERTIFICATION_TOKEN: ${{ secrets.COMPUTE_CERTIFICATION_TOKEN }}
+        run: |
+          set -euo pipefail
+          identity="$EVIDENCE_DIR/canary-identity.json"
+          run_set="$EVIDENCE_DIR/compute-certification-run-ids-production.json"
+          request_file="$RUNNER_TEMP/compute-probe-snapshot-request.json"
+          snapshot="$EVIDENCE_DIR/operator-snapshot.json"
+          jq -n \
+            --slurpfile identity "$identity" \
+            --slurpfile run_set "$run_set" '
+              {
+                owner_id: $identity[0].owner_id,
+                agent_id: $identity[0].agent_id,
+                run_ids: $run_set[0].run_ids,
+                since: $run_set[0].since
+              }
+            ' > "$request_file"
+          curl --fail-with-body --silent --show-error \
+            --retry 2 --retry-all-errors --connect-timeout 10 --max-time 60 \
+            -X POST \
+            -H "Authorization: Bearer $COMPUTE_CERTIFICATION_TOKEN" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
+            --data-binary "@$request_file" \
+            "$API_BASE/api/admin/compute/certification" > "$snapshot"
+          unset COMPUTE_CERTIFICATION_TOKEN
+          jq -e \
+            --slurpfile identity "$identity" \
+            --slurpfile run_set "$run_set" '
+              .schema_version == 1 and
+              .owner_id == $identity[0].owner_id and
+              .agent_id == $identity[0].agent_id and
+              .requested_run_count == ($run_set[0].run_ids | length) and
+              .selected_run_count == ($run_set[0].run_ids | length) and
+              .latch_state == "clear" and
+              (.violations | length) == 0 and
+              (.health.violations | length) == 0
+            ' "$snapshot" >/dev/null
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Final exact live fence after probe
+        id: final_fence
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.COMPUTE_PROBE_CLOUDFLARE_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          COMPUTE_CERTIFICATION_TOKEN: ${{ secrets.COMPUTE_CERTIFICATION_TOKEN }}
+        run: |
+          set -euo pipefail
+          api_status="$RUNNER_TEMP/final-probe-api-status.json"
+          compute_status="$RUNNER_TEMP/final-probe-compute-status.json"
+          api_version="$RUNNER_TEMP/final-probe-api-version.json"
+          compute_version="$RUNNER_TEMP/final-probe-compute-version.json"
+          pushd api >/dev/null
+          npx wrangler deployments status \
+            --config wrangler.toml --name "$API_WORKER" --json \
+            > "$api_status"
+          npx wrangler deployments status \
+            --config wrangler.toml --name "$COMPUTE_WORKER" --json \
+            > "$compute_status"
+          api_version_id="$(jq -er '.versions[0].version_id' "$api_status")"
+          compute_version_id="$(jq -er '.versions[0].version_id' "$compute_status")"
+          npx wrangler versions view "$api_version_id" \
+            --config wrangler.toml --name "$API_WORKER" --json \
+            > "$api_version"
+          npx wrangler versions view "$compute_version_id" \
+            --config wrangler.toml --name "$COMPUTE_WORKER" --json \
+            > "$compute_version"
+          popd >/dev/null
+          node scripts/release/verify-api-compute-rollout-state.mjs \
+            inspect production "$api_status" "$api_version" \
+            "$compute_status" "$compute_version" \
+            > "$EVIDENCE_DIR/final-live-state.json"
+
+          expected_image="registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/$IMAGE_REPOSITORY@${{ steps.inspect.outputs.environment_digest }}"
+          pushd compute-worker >/dev/null
+          npx wrangler containers list --config "$COMPUTE_CONFIG" --json \
+            > "$RUNNER_TEMP/final-probe-container-list.json"
+          popd >/dev/null
+          node compute-worker/scripts/verify-container-readiness.mjs \
+            "$RUNNER_TEMP/final-probe-container-list.json" \
+            "$CONTAINER_APPLICATION" "$expected_image" \
+            > "$EVIDENCE_DIR/final-container-readiness.json"
+
+          curl --fail-with-body --silent --show-error \
+            --retry 2 --retry-all-errors --connect-timeout 10 --max-time 60 \
+            -H "Authorization: Bearer $COMPUTE_CERTIFICATION_TOKEN" \
+            -H "Accept: application/json" \
+            "$API_BASE/api/admin/compute/emergency-stop" \
+            > "$EVIDENCE_DIR/final-emergency-stop-status.json"
+          unset COMPUTE_CERTIFICATION_TOKEN
+          node scripts/release/verify-compute-emergency-stop-status.mjs \
+            "$EVIDENCE_DIR/final-emergency-stop-status.json" \
+            "${{ steps.inspect.outputs.expected_admission }}" clear >/dev/null
+
+          read_queue_metrics() {
+            local key="$1"
+            local destination="$2"
+            local queue_id
+            queue_id="$(jq -er --arg key "$key" '.[$key]' \
+              "$EVIDENCE_DIR/queue-ids.json")"
+            curl --fail-with-body --silent --show-error \
+              --retry 2 --retry-all-errors --connect-timeout 10 --max-time 60 \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              -H "Accept: application/json" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/queues/$queue_id/metrics" \
+              > "$destination"
+            jq -e '
+              .success == true and
+              (.result.backlog_count | type == "number") and
+              (.result.backlog_count >= 0) and
+              (.result.oldest_message_timestamp_ms | type == "number") and
+              (.result.oldest_message_timestamp_ms >= 0)
+            ' "$destination" >/dev/null
+          }
+          read_queue_metrics dispatch \
+            "$EVIDENCE_DIR/queue-final-dispatch.json"
+          read_queue_metrics compute_dlq \
+            "$EVIDENCE_DIR/queue-final-compute-dlq.json"
+          read_queue_metrics reconciliation_dlq \
+            "$EVIDENCE_DIR/queue-final-reconciliation-dlq.json"
+          jq -e '
+            .result.backlog_count == 0 and
+            .result.oldest_message_timestamp_ms == 0
+          ' "$EVIDENCE_DIR/queue-final-dispatch.json" >/dev/null
+          observed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          jq -n \
+            --arg observed_at "$observed_at" \
+            --slurpfile dispatch "$EVIDENCE_DIR/queue-final-dispatch.json" \
+            --slurpfile compute_baseline "$EVIDENCE_DIR/queue-baseline-compute-dlq.json" \
+            --slurpfile compute_final "$EVIDENCE_DIR/queue-final-compute-dlq.json" \
+            --slurpfile reconciliation_baseline "$EVIDENCE_DIR/queue-baseline-reconciliation-dlq.json" \
+            --slurpfile reconciliation_final "$EVIDENCE_DIR/queue-final-reconciliation-dlq.json" '
+              {
+                schema_version: 1,
+                kind: "galactic_compute_queue_health",
+                verified: true,
+                target: "production",
+                observed_at: $observed_at,
+                dispatch: {
+                  name: "galactic-compute",
+                  backlog: $dispatch[0].result.backlog_count,
+                  oldest_age_seconds: 0
+                },
+                compute_dlq: {
+                  name: "galactic-compute-dlq",
+                  baseline_count: $compute_baseline[0].result.backlog_count,
+                  final_count: $compute_final[0].result.backlog_count
+                },
+                reconciliation_dlq: {
+                  name: "galactic-compute-reconciliation-dlq",
+                  baseline_count:
+                    $reconciliation_baseline[0].result.backlog_count,
+                  final_count: $reconciliation_final[0].result.backlog_count
+                }
+              }
+            ' > "$EVIDENCE_DIR/queue-health.json"
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Compute probe evidence
+        id: verify
+        if: steps.final_fence.outputs.verified == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          common=(
+            --initial-live-state "$EVIDENCE_DIR/live-state.json"
+            --final-live-state "$EVIDENCE_DIR/final-live-state.json"
+            --container-readiness "$EVIDENCE_DIR/final-container-readiness.json"
+            --queue-health "$EVIDENCE_DIR/queue-health.json"
+            --emergency-stop-status "$EVIDENCE_DIR/final-emergency-stop-status.json"
+            --expected-repository "$GITHUB_REPOSITORY"
+            --expected-workflow-run-id "$GITHUB_RUN_ID"
+            --expected-run-attempt "$GITHUB_RUN_ATTEMPT"
+            --expected-git-sha "$GITHUB_SHA"
+            --output "$EVIDENCE_DIR/compute-canary-probe.json"
+          )
+          case "${{ steps.inspect.outputs.policy }}" in
+            canary)
+              [ "${{ steps.snapshot.outputs.verified }}" = "true" ] || {
+                echo "The admitted probe lacks its operator snapshot." >&2
+                exit 1
+              }
+              node scripts/release/verify-compute-probe-evidence.mjs \
+                "${common[@]}" \
+                --predecessor-verification \
+                  "$EVIDENCE_DIR/predecessor-verification.json" \
+                --suite-evidence \
+                  "$EVIDENCE_DIR/compute-certification-production.json" \
+                --run-set \
+                  "$EVIDENCE_DIR/compute-certification-run-ids-production.json" \
+                --operator-snapshot "$EVIDENCE_DIR/operator-snapshot.json" \
+                --expected-mode "$PROBE_MODE" \
+                --expected-outcome passed \
+                --started-at "$(jq -er '.started_at' \
+                  "$EVIDENCE_DIR/compute-certification-production.json")"
+              ;;
+            off)
+              node scripts/release/verify-compute-probe-evidence.mjs \
+                "${common[@]}" \
+                --expected-mode lifecycle \
+                --expected-outcome off_noop \
+                --started-at "$PROBE_DISPATCH_STARTED_AT"
+              ;;
+            global)
+              jq -ne \
+                --slurpfile initial "$EVIDENCE_DIR/live-state.json" \
+                --slurpfile final "$EVIDENCE_DIR/final-live-state.json" \
+                --slurpfile queue "$EVIDENCE_DIR/queue-health.json" '
+                  ($initial[0] == $final[0]) and
+                  ($final[0].policy == "global") and
+                  ($queue[0].verified == true) and
+                  ($queue[0].compute_dlq.baseline_count ==
+                    $queue[0].compute_dlq.final_count) and
+                  ($queue[0].reconciliation_dlq.baseline_count ==
+                    $queue[0].reconciliation_dlq.final_count)
+                ' </dev/null >/dev/null
+              jq -n \
+                --arg mode "$PROBE_MODE" \
+                --arg started_at "$PROBE_DISPATCH_STARTED_AT" \
+                --arg repository "$GITHUB_REPOSITORY" \
+                --arg workflow_run_id "$GITHUB_RUN_ID" \
+                --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+                --arg git_sha "$GITHUB_SHA" \
+                --arg rollout_run_id "${{ steps.resolve.outputs.run_id }}" \
+                --arg rollout_sha "${{ steps.resolve.outputs.git_sha }}" \
+                --slurpfile live "$EVIDENCE_DIR/final-live-state.json" \
+                --slurpfile queue "$EVIDENCE_DIR/queue-health.json" '
+                  {
+                    schema_version: 1,
+                    kind: "galactic_compute_production_global_observation",
+                    verified: true,
+                    outcome: "global_noop",
+                    mode: $mode,
+                    target: "production",
+                    started_at: $started_at,
+                    generated_at: $queue[0].observed_at,
+                    dispatch: {
+                      repository: $repository,
+                      workflow_run_id: $workflow_run_id,
+                      run_attempt: $run_attempt,
+                      git_sha: $git_sha
+                    },
+                    active_rollout: {
+                      workflow_run_id: $rollout_run_id,
+                      stage: "production_canary",
+                      target: "production",
+                      git_sha: $rollout_sha
+                    },
+                    live_state: $live[0],
+                    latch_state: "clear",
+                    lifecycle: null,
+                    accounting: null,
+                    browser_artifacts: null,
+                    health: {
+                      observed_at: $queue[0].observed_at,
+                      dispatch: $queue[0].dispatch,
+                      compute_dlq: $queue[0].compute_dlq,
+                      reconciliation_dlq: $queue[0].reconciliation_dlq
+                    }
+                  }
+                ' > "$EVIDENCE_DIR/compute-canary-probe.json"
+              ;;
+            *)
+              echo "Unsupported live policy." >&2
+              exit 1
+              ;;
+          esac
+          if [ "${{ steps.inspect.outputs.policy }}" = "global" ]; then
+            jq -e '
+              .schema_version == 1 and
+              .kind == "galactic_compute_production_global_observation" and
+              .outcome == "global_noop" and
+              .verified == true and .target == "production"
+            ' "$EVIDENCE_DIR/compute-canary-probe.json" >/dev/null
+          else
+            jq -e '
+              .schema_version == 1 and
+              .kind == "galactic_compute_production_probe" and
+              .verified == true and .target == "production"
+            ' "$EVIDENCE_DIR/compute-canary-probe.json" >/dev/null
+          fi
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Write deterministic probe evidence manifest
+        id: manifest
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          if [ ! -f "$EVIDENCE_DIR/compute-canary-probe.json" ]; then
+            jq -n \
+              --arg repository "$GITHUB_REPOSITORY" \
+              --arg workflow_run_id "$GITHUB_RUN_ID" \
+              --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+              --arg git_sha "$GITHUB_SHA" \
+              --arg mode "${PROBE_MODE:-unknown}" '
+                {
+                  schema_version: 1,
+                  kind: "galactic_compute_production_probe_failure",
+                  verified: false,
+                  mode: $mode,
+                  dispatch: {
+                    repository: $repository,
+                    workflow_run_id: $workflow_run_id,
+                    run_attempt: $run_attempt,
+                    git_sha: $git_sha
+                  }
+                }
+              ' > "$EVIDENCE_DIR/probe-failure.json"
+          fi
+          (
+            cd "$EVIDENCE_DIR"
+            find . -type f ! -name evidence.sha256 -print0 |
+              LC_ALL=C sort -z |
+              xargs -0 sha256sum
+          ) > "$EVIDENCE_DIR/evidence.sha256"
+
+      - name: Upload private probe evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: compute-probe-production-${{ steps.resolve.outputs.run_id || 'bootstrap' }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: compute-probe-evidence
+          if-no-files-found: error
+          retention-days: 30

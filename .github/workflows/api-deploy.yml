@@ -5,7 +5,8 @@ name: API Deploy
 # missing-Worker response, an explicit expiring repository policy, and an
 # all-deployable-version admission-off history can enter that path. Once bound,
 # every ordinary API deploy captures and exactly preserves the live Compute
-# policy/digest; only Compute Deploy or the emergency disable path may change it.
+# policy/digest/certification principal. Only Compute Canary Rollout or the
+# emergency disable path may change admission policy; Compute Deploy stays OFF.
 on:
   push:
     branches: [main]
@@ -133,7 +134,8 @@ jobs:
               --var COMPUTE_ENABLED:0 \
               --var COMPUTE_ENVIRONMENT_DIGEST:sha256:0000000000000000000000000000000000000000000000000000000000000000 \
               --var COMPUTE_ROLLOUT_MODE:canary \
-              --var COMPUTE_CANARY_ALLOWLIST:
+              --var COMPUTE_CANARY_ALLOWLIST: \
+              --var COMPUTE_CERTIFICATION_PRINCIPAL:
           done
 
       - name: Verify capacity Tail Worker
@@ -309,6 +311,7 @@ jobs:
             echo "PRESERVED_COMPUTE_ENVIRONMENT_DIGEST=$(jq -er '.environmentDigest' "$state")"
             echo "PRESERVED_COMPUTE_ROLLOUT_MODE=$(jq -er '.rolloutMode' "$state")"
             echo "PRESERVED_COMPUTE_CANARY_ALLOWLIST=$(jq -er '.canaryAllowlist' "$state")"
+            echo "PRESERVED_COMPUTE_CERTIFICATION_PRINCIPAL=$(jq -er '.certificationPrincipal' "$state")"
           } >> "$GITHUB_ENV"
           echo "Captured the exact live staging Compute policy for preservation." \
             >> "$GITHUB_STEP_SUMMARY"
@@ -532,6 +535,7 @@ jobs:
               --var COMPUTE_ENVIRONMENT_DIGEST:sha256:0000000000000000000000000000000000000000000000000000000000000000
               --var COMPUTE_ROLLOUT_MODE:canary
               --var COMPUTE_CANARY_ALLOWLIST:
+              --var COMPUTE_CERTIFICATION_PRINCIPAL:
             )
           else
             compute_args=(
@@ -539,6 +543,7 @@ jobs:
               --var "COMPUTE_ENVIRONMENT_DIGEST:$PRESERVED_COMPUTE_ENVIRONMENT_DIGEST"
               --var "COMPUTE_ROLLOUT_MODE:$PRESERVED_COMPUTE_ROLLOUT_MODE"
               --var "COMPUTE_CANARY_ALLOWLIST:$PRESERVED_COMPUTE_CANARY_ALLOWLIST"
+              --var "COMPUTE_CERTIFICATION_PRINCIPAL:$PRESERVED_COMPUTE_CERTIFICATION_PRINCIPAL"
             )
           fi
           echo "attempted=true" >> "$GITHUB_OUTPUT"
@@ -819,6 +824,7 @@ jobs:
             echo "PRESERVED_COMPUTE_ENVIRONMENT_DIGEST=$(jq -er '.environmentDigest' "$state")"
             echo "PRESERVED_COMPUTE_ROLLOUT_MODE=$(jq -er '.rolloutMode' "$state")"
             echo "PRESERVED_COMPUTE_CANARY_ALLOWLIST=$(jq -er '.canaryAllowlist' "$state")"
+            echo "PRESERVED_COMPUTE_CERTIFICATION_PRINCIPAL=$(jq -er '.certificationPrincipal' "$state")"
           } >> "$GITHUB_ENV"
           echo "Captured the exact live production Compute policy for preservation." \
             >> "$GITHUB_STEP_SUMMARY"
@@ -1020,6 +1026,7 @@ jobs:
               --var COMPUTE_ENVIRONMENT_DIGEST:sha256:0000000000000000000000000000000000000000000000000000000000000000
               --var COMPUTE_ROLLOUT_MODE:canary
               --var COMPUTE_CANARY_ALLOWLIST:
+              --var COMPUTE_CERTIFICATION_PRINCIPAL:
             )
           else
             compute_args=(
@@ -1027,6 +1034,7 @@ jobs:
               --var "COMPUTE_ENVIRONMENT_DIGEST:$PRESERVED_COMPUTE_ENVIRONMENT_DIGEST"
               --var "COMPUTE_ROLLOUT_MODE:$PRESERVED_COMPUTE_ROLLOUT_MODE"
               --var "COMPUTE_CANARY_ALLOWLIST:$PRESERVED_COMPUTE_CANARY_ALLOWLIST"
+              --var "COMPUTE_CERTIFICATION_PRINCIPAL:$PRESERVED_COMPUTE_CERTIFICATION_PRINCIPAL"
             )
           fi
           echo "attempted=true" >> "$GITHUB_OUTPUT"

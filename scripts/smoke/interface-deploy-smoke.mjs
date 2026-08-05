@@ -23,6 +23,7 @@
 //   GALACTIC_OWNER_ACCESS_TOKEN=<ephemeral account JWT> \
 //   node scripts/smoke/interface-deploy-smoke.mjs ... \
 //     --promote-reviewed \
+//     [--reviewed-fixture interface-demo] \
 //     --reviewed-permission compute:exec \
 //     --reviewed-function run_compute_smoke \
 //     --reviewed-compute-profile developer-v1 \
@@ -54,6 +55,7 @@ import {
   reviewedPromotionConfig,
   validatePromotedComputeFixture,
   validateReviewedComputeManifest,
+  validateReviewedFixtureIdentity,
   validateStagedPromotion,
 } from './interface-deploy-promotion.mjs';
 
@@ -100,6 +102,7 @@ const reviewedPromotion = reviewedPromotionConfig({
   ownerAccessToken,
   appId,
   allowCreate,
+  directory: dir,
 });
 // gx.test/gx.upload deliberately remain on the connected-builder credential:
 // that is what persists a verified test proof and enforces the staged-version
@@ -142,18 +145,37 @@ const files = [];
   }
 })(absDir);
 
-check(
-  'interface HTML in bundle',
-  files.some((f) => f.path.endsWith('.html')),
-  `collected: ${files.map((f) => f.path).join(', ')}`,
-);
+const interfaceRequired = !reviewedPromotion.enabled ||
+  reviewedPromotion.fixture.requiresInterface;
+if (interfaceRequired) {
+  check(
+    'interface HTML in bundle',
+    files.some((f) => f.path.endsWith('.html')),
+    `collected: ${files.map((f) => f.path).join(', ')}`,
+  );
+}
 
 if (reviewedPromotion.enabled) {
+  if (reviewedPromotion.fixture.sourcePaths) {
+    const sourcePaths = files.map((file) => file.path).sort();
+    const expectedPaths = [...reviewedPromotion.fixture.sourcePaths].sort();
+    if (
+      sourcePaths.length !== expectedPaths.length ||
+      sourcePaths.some((path, index) => path !== expectedPaths[index])
+    ) {
+      throw new Error(
+        `Reviewed ${reviewedPromotion.fixture.name} source paths drifted.`,
+      );
+    }
+  }
   const manifestFile = files.find((file) => file.path === 'manifest.json');
   if (!manifestFile) {
     throw new Error('Reviewed fixture promotion requires manifest.json.');
   }
-  validateReviewedComputeManifest(manifestFile.content);
+  validateReviewedComputeManifest(
+    manifestFile.content,
+    reviewedPromotion.fixture.name,
+  );
 }
 
 async function callTool(name, toolArgs, authorizationToken = toolToken) {
@@ -233,8 +255,12 @@ if (!reviewedState || reviewedState.plan.action === 'upload') {
   try {
     const tested = await callTool('gx.test', {
       files,
-      function_name: 'get_greeting',
-      test_args: { name: 'smoke' },
+      function_name: reviewedPromotion.enabled
+        ? reviewedPromotion.fixture.testFunctionName
+        : 'get_greeting',
+      test_args: reviewedPromotion.enabled
+        ? reviewedPromotion.fixture.testArgs
+        : { name: 'smoke' },
     });
     testAttestation = String(tested?.test_attestation || '');
     check(
@@ -265,7 +291,9 @@ if (!reviewedState || reviewedState.plan.action === 'upload') {
     const uploadArgs = {
       files,
       test_attestation: testAttestation,
-      name: 'Interface Demo (smoke)',
+      name: reviewedPromotion.enabled
+        ? reviewedPromotion.fixture.uploadName
+        : 'Interface Demo (smoke)',
       visibility: 'private',
     };
     if (appId) {
@@ -346,6 +374,28 @@ if (reviewedPromotion.enabled && id) {
         { label: 'Promoted fixture Compute ceiling' },
       ),
     ]);
+    let fixtureIdentity = null;
+    if (reviewedPromotion.fixture.requiresIdentityProbe) {
+      const invocation = await requestJson(
+        `/api/launch/agents/${encodeURIComponent(id)}/functions/${reviewedPromotion.fixture.testFunctionName}/run`,
+        {
+          method: 'POST',
+          body: { args: reviewedPromotion.fixture.testArgs },
+          label: 'Promoted fixture identity probe',
+        },
+      );
+      if (
+        invocation.success !== true ||
+        invocation.functionName !== reviewedPromotion.fixture.testFunctionName ||
+        invocation.error !== null
+      ) {
+        throw new Error('Promoted fixture identity probe did not succeed.');
+      }
+      fixtureIdentity = validateReviewedFixtureIdentity(
+        invocation.result,
+        reviewedPromotion.fixture.name,
+      );
+    }
     validatePromotedComputeFixture({
       app: liveApp,
       home: liveHome,
@@ -354,6 +404,8 @@ if (reviewedPromotion.enabled && id) {
       appId,
       version: reviewedState.plan.version,
       sourceHash: reviewedState.sourceHash,
+      fixtureName: reviewedPromotion.fixture.name,
+      identity: fixtureIdentity,
     });
     check(
       reviewedState.plan.action === 'reuse_live'
@@ -363,8 +415,11 @@ if (reviewedPromotion.enabled && id) {
       'Owner-session response did not identify the reviewed live version.',
     );
     check('live executable version verified', true);
-    check('live run_compute_smoke exposed', true);
-    check('live shell-only no-secret Compute ceiling verified', true);
+    check(`live ${reviewedPromotion.fixture.functionName} exposed`, true);
+    check(
+      `live ${reviewedPromotion.fixture.tools.join('+')} no-secret Compute ceiling verified`,
+      true,
+    );
   } catch (err) {
     check(
       'reviewed exact version promoted',
@@ -376,7 +431,7 @@ if (reviewedPromotion.enabled && id) {
 
 // 3. Launch facade exposes the interface (hash stamped + surfaced).
 let iface = null;
-if (id || slug) {
+if (interfaceRequired && (id || slug)) {
   try {
     const detail = await fetch(`${apiBase}/api/launch/agents/${slug || id}`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -413,7 +468,7 @@ if (iface?.url) {
 // unstamped manifest and drop the interface. Routine fixed-fixture runs prove
 // the verified idempotent redeploy path above without filling its three staged
 // version slots.
-if (id && !appId) {
+if (interfaceRequired && id && !appId) {
   try {
     const projection = await requestJson(
       `/api/apps/${encodeURIComponent(id)}`,
@@ -440,7 +495,7 @@ if (id && !appId) {
   } catch (err) {
     check('interface survives re-version', false, String(err?.message || err));
   }
-} else if (id) {
+} else if (interfaceRequired && id) {
   check(
     'verified redeploy preserves interface',
     Boolean(iface?.url),

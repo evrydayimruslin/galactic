@@ -1,8 +1,26 @@
 import type { Env } from "../../lib/env.ts";
+import { computePrivilegedCredentialsReady } from "../compute-credential-isolation.ts";
 
 const IMAGE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 const CANARY_ENTRY_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+type ComputeAdmissionFlagState = "enabled" | "disabled" | "invalid";
+
+/**
+ * Classify the admission flag without normalizing operator input. Only the two
+ * canonical bindings are actionable: every other value remains fail-closed.
+ */
+export function computeAdmissionFlagState(
+  env:
+    | Pick<Partial<Env>, "COMPUTE_ENABLED">
+    | null
+    | undefined,
+): ComputeAdmissionFlagState {
+  if (env?.COMPUTE_ENABLED === "1") return "enabled";
+  if (env?.COMPUTE_ENABLED === "0") return "disabled";
+  return "invalid";
+}
 
 export interface ComputeRuntimeConfig {
   enabled: boolean;
@@ -17,6 +35,8 @@ export interface ComputeRuntimeConfig {
     | "dispatch_queue"
     | "artifact_bucket"
     | "token_pepper"
+    | "privileged_credentials"
+    | "credential_isolation"
     | "rollout_policy"
   >;
 }
@@ -29,7 +49,7 @@ export interface ComputeRuntimeConfig {
 export function resolveComputeRuntimeConfig(
   env: Partial<Env> | null | undefined,
 ): ComputeRuntimeConfig {
-  const enabled = env?.COMPUTE_ENABLED === "1";
+  const enabled = computeAdmissionFlagState(env) === "enabled";
   const rawDigest = typeof env?.COMPUTE_ENVIRONMENT_DIGEST === "string"
     ? env.COMPUTE_ENVIRONMENT_DIGEST.trim().toLowerCase()
     : "";
@@ -46,14 +66,21 @@ export function resolveComputeRuntimeConfig(
     ).filter(Boolean)
     : [];
   const canaryAllowlist = Array.from(new Set(rawCanaries));
+  const certificationPrincipal = typeof env?.COMPUTE_CERTIFICATION_PRINCIPAL ===
+      "string"
+    ? env.COMPUTE_CERTIFICATION_PRINCIPAL.trim().toLowerCase()
+    : "";
   const missing: ComputeRuntimeConfig["missing"] = [];
   if (!enabled) missing.push("feature_flag");
   if (!environmentDigest) missing.push("environment_digest");
   if (
     !rolloutMode ||
+    !CANARY_ENTRY_PATTERN.test(certificationPrincipal) ||
     (rolloutMode === "canary" &&
       (canaryAllowlist.length === 0 ||
-        canaryAllowlist.some((entry) => !CANARY_ENTRY_PATTERN.test(entry))))
+        canaryAllowlist.some((entry) => !CANARY_ENTRY_PATTERN.test(entry)) ||
+        canaryAllowlist.length !== 1 ||
+        canaryAllowlist[0] !== certificationPrincipal))
   ) missing.push("rollout_policy");
   if (
     !env?.COMPUTE_PLANE ||
@@ -73,6 +100,11 @@ export function resolveComputeRuntimeConfig(
     typeof env?.COMPUTE_JOB_TOKEN_PEPPER !== "string" ||
     env.COMPUTE_JOB_TOKEN_PEPPER.length < 32
   ) missing.push("token_pepper");
+  const credentials = env
+    ? computePrivilegedCredentialsReady(env)
+    : { configured: false, isolated: true };
+  if (!credentials.configured) missing.push("privileged_credentials");
+  if (!credentials.isolated) missing.push("credential_isolation");
   return {
     enabled,
     environmentDigest,
@@ -93,7 +125,9 @@ export function requireComputeAdmissionConfig(
   const config = resolveComputeRuntimeConfig(env);
   if (!config.ready || !config.environmentDigest) {
     throw new Error(
-      `Galactic Compute admission is unavailable (${config.missing.join(",")}).`,
+      `Galactic Compute admission is unavailable (${
+        config.missing.join(",")
+      }).`,
     );
   }
   return config as ComputeRuntimeConfig & {

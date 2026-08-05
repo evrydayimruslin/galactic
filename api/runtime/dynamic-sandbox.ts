@@ -12,7 +12,15 @@
 // By the time app.js captures globalThis.ultralight, the SDK is ready.
 
 import type { ExecutionResult, RuntimeConfig } from "./sandbox.ts";
-import { COMPUTE_EXEC_PERMISSION } from "../../shared/contracts/compute.ts";
+import {
+  COMPUTE_ADMISSION_DISABLED_ACTION,
+  COMPUTE_ADMISSION_DISABLED_CODE,
+  COMPUTE_ADMISSION_DISABLED_HINT,
+  COMPUTE_ADMISSION_DISABLED_MESSAGE,
+  COMPUTE_EXEC_PERMISSION,
+  computePublicErrorDetails,
+  normalizeComputePublicError,
+} from "../../shared/contracts/compute.ts";
 import type { ResolvedCredential } from "../../shared/contracts/env.ts";
 import { getEnv } from "../lib/env.ts";
 import { isolateReuseEligibility } from "./isolate-reuse-eligibility.ts";
@@ -58,6 +66,12 @@ async function sha256HexLocal(input: string): Promise<string> {
   );
   return Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function randomHexLocal(byteLength = 32): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(byteLength)))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
 }
 
@@ -442,6 +456,7 @@ interface DynamicWorkerEntrypointExports {
       billingMode: "wallet" | "subscription_capacity";
       capacityAgentId: string;
       capacityReceiptId: string | null;
+      admissionDisabledProofKey: string;
     };
   }): unknown;
   AIBinding(input: {
@@ -791,6 +806,10 @@ export async function executeInDynamicSandbox(
       "compute.execute",
       COMPUTE_EXEC_PERMISSION,
     );
+    // Compute-capable and gx.test executions are categorically excluded from
+    // warm Loader reuse. Give only those generated modules fresh proof material;
+    // non-Compute modules retain deterministic bytes for reuse-key correctness.
+    const admissionDisabledProofKey = allowsCompute ? randomHexLocal() : "";
     const allowsNetworkHttp = exposesPermissionEffect(
       "network.http",
       "net:fetch",
@@ -962,65 +981,286 @@ function __ulAllowsAppCall(targetAppId, functionName) {
 
 // Workers RPC normalizes custom Error subclasses. The parent therefore returns
 // a by-value result envelope and this untrusted isolate reconstructs the public
-// SDK error locally. Only a closed COMPUTE_* code and a bounded public message
-// may cross this boundary.
-function __unwrapComputeRpc(envelope) {
+// SDK error locally. setup.js exports are in the same module graph as app.js,
+// so module privacy alone is NOT a provenance boundary. Admission-disabled is
+// promoted only after verifying a per-call HMAC emitted by the parent binding;
+// the WeakMap then keeps that verified result attached to one Error object.
+const __galacticComputeErrorRegistry = new WeakMap();
+const __galacticComputeErrorRegistryGet = WeakMap.prototype.get.bind(
+  __galacticComputeErrorRegistry,
+);
+const __galacticComputeErrorRegistrySet = WeakMap.prototype.set.bind(
+  __galacticComputeErrorRegistry,
+);
+const __galacticObjectFreeze = Object.freeze.bind(Object);
+const __galacticObjectDefineProperty = Object.defineProperty.bind(Object);
+const __galacticObjectCreate = Object.create.bind(Object);
+const __galacticObjectAssign = Object.assign.bind(Object);
+const __galacticObjectKeys = Object.keys.bind(Object);
+const __galacticArrayIsArray = Array.isArray.bind(Array);
+const __galacticHasOwn = Function.call.bind(Object.prototype.hasOwnProperty);
+const __galacticRegExpTest = Function.call.bind(RegExp.prototype.test);
+const __galacticNumberIsSafeInteger = Number.isSafeInteger.bind(Number);
+const __galacticStringCharCodeAt = Function.call.bind(
+  String.prototype.charCodeAt,
+);
+const __galacticStringReplace = Function.call.bind(String.prototype.replace);
+const __galacticStringReplaceAll = Function.call.bind(
+  String.prototype.replaceAll,
+);
+const __galacticComputeCodePattern = /^COMPUTE_[A-Z0-9_]{1,56}$/;
+const __GalacticComputeError = Error;
+const __GalacticUint8Array = Uint8Array;
+const __galacticString = String;
+const __galacticStringFromCharCode = String.fromCharCode.bind(String);
+const __galacticBase64Encode = btoa.bind(globalThis);
+const __galacticTextEncoder = new TextEncoder();
+const __galacticTextEncode = TextEncoder.prototype.encode.bind(
+  __galacticTextEncoder,
+);
+const __galacticSubtleImportKey = crypto.subtle.importKey.bind(crypto.subtle);
+const __galacticSubtleSign = crypto.subtle.sign.bind(crypto.subtle);
+const __galacticTrustedResponseJson = Response.json.bind(Response);
+const __galacticAdmissionDisabledCode = ${JSON.stringify(COMPUTE_ADMISSION_DISABLED_CODE)};
+const __galacticAdmissionDisabledMessage = ${JSON.stringify(COMPUTE_ADMISSION_DISABLED_MESSAGE)};
+const __galacticAdmissionDisabledHint = ${JSON.stringify(COMPUTE_ADMISSION_DISABLED_HINT)};
+const __galacticAdmissionDisabledAction = ${JSON.stringify(COMPUTE_ADMISSION_DISABLED_ACTION)};
+const __galacticAdmissionDisabledProofDomain = 'galactic-compute-admission-disabled-proof-v1';
+const __galacticAdmissionDisabledProofKey = ${JSON.stringify(admissionDisabledProofKey)};
+const __galacticAdmissionDisabledProofKeyPromise =
+  __galacticAdmissionDisabledProofKey
+    ? __galacticSubtleImportKey(
+      'raw',
+      __galacticTextEncode(__galacticAdmissionDisabledProofKey),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign'],
+    )
+    : null;
+
+function __galacticBase64Url(bytes) {
+  // HMAC-SHA256 is exactly 32 bytes. Avoid spread/iteration: tenant code runs
+  // before this verifier and may replace Uint8Array.prototype[Symbol.iterator]
+  // to make an attacker-selected proof appear equal to the real signature.
+  let binary = '';
+  for (let index = 0; index < 32; index += 1) {
+    binary += __galacticStringFromCharCode(bytes[index]);
+  }
+  const encoded = __galacticBase64Encode(binary);
+  return __galacticStringReplace(
+    __galacticStringReplaceAll(
+      __galacticStringReplaceAll(encoded, '+', '-'),
+      '/',
+      '_',
+    ),
+    /=+$/u,
+    '',
+  );
+}
+
+function __galacticConstantTimeStringEqual(left, right) {
+  if (typeof left !== 'string' || typeof right !== 'string') return false;
+  const length = left.length > right.length ? left.length : right.length;
+  let mismatch = left.length ^ right.length;
+  for (let index = 0; index < length; index += 1) {
+    mismatch |= (__galacticStringCharCodeAt(left, index) || 0) ^
+      (__galacticStringCharCodeAt(right, index) || 0);
+  }
+  return mismatch === 0;
+}
+
+async function __verifyAdmissionDisabledProof(proof, callIndex) {
+  if (
+    !__galacticAdmissionDisabledProofKeyPromise ||
+    typeof proof !== 'string' || proof.length !== 43 ||
+    typeof callIndex !== 'number' || !__galacticNumberIsSafeInteger(callIndex) ||
+    callIndex < 1 || callIndex > 1000000
+  ) return false;
+  const payload = __galacticAdmissionDisabledProofDomain + '\\0' +
+    __galacticAdmissionDisabledCode + '\\0' +
+    __galacticAdmissionDisabledMessage + '\\0' +
+    __galacticAdmissionDisabledHint + '\\0' +
+    __galacticAdmissionDisabledAction + '\\0' +
+    __galacticString(callIndex);
+  const signature = await __galacticSubtleSign(
+    'HMAC',
+    await __galacticAdmissionDisabledProofKeyPromise,
+    __galacticTextEncode(payload),
+  );
+  return __galacticConstantTimeStringEqual(
+    proof,
+    __galacticBase64Url(new __GalacticUint8Array(signature)),
+  );
+}
+
+async function __normalizeComputeRpcError(value, callIndex) {
+  if (!value || typeof value !== 'object' || __galacticArrayIsArray(value)) return null;
+  const keys = __galacticObjectKeys(value);
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index];
+    if (
+      key !== 'code' && key !== 'message' && key !== 'hint' &&
+      key !== 'action' && key !== 'proof'
+    ) {
+      return null;
+    }
+  }
+  if (
+    typeof value.code !== 'string' ||
+    !__galacticRegExpTest(__galacticComputeCodePattern, value.code) ||
+    typeof value.message !== 'string' ||
+    value.message.length === 0 || value.message.length > 1024
+  ) return null;
+
+  if (value.code === __galacticAdmissionDisabledCode) {
+    if (
+      keys.length !== 5 ||
+      value.message !== __galacticAdmissionDisabledMessage ||
+      value.hint !== __galacticAdmissionDisabledHint ||
+      value.action !== __galacticAdmissionDisabledAction ||
+      !(await __verifyAdmissionDisabledProof(value.proof, callIndex))
+    ) return null;
+    return __galacticObjectFreeze({
+      authenticated: true,
+      error: __galacticObjectFreeze({
+        code: __galacticAdmissionDisabledCode,
+        message: __galacticAdmissionDisabledMessage,
+        hint: __galacticAdmissionDisabledHint,
+        action: __galacticAdmissionDisabledAction,
+      }),
+    });
+  }
+  if (
+    keys.length !== 2 ||
+    __galacticHasOwn(value, 'hint') ||
+    __galacticHasOwn(value, 'action') ||
+    __galacticHasOwn(value, 'proof')
+  ) return null;
+  return __galacticObjectFreeze({
+    authenticated: false,
+    error: __galacticObjectFreeze({
+      code: value.code,
+      message: value.message,
+    }),
+  });
+}
+
+function __throwGalacticComputeError(value, authenticated) {
+  const expected = new __GalacticComputeError(
+    'galactic.compute failed (' + value.code + '): ' + value.message
+  );
+  __galacticObjectDefineProperty(expected, 'name', {
+    value: 'GalacticComputeError', enumerable: false,
+    configurable: false, writable: false,
+  });
+  const publicDetails = __galacticObjectFreeze({
+    code: value.code,
+    ...(value.hint ? { hint: value.hint } : {}),
+    ...(value.action ? { action: value.action } : {}),
+  });
+  __galacticObjectDefineProperty(expected, 'galacticDetails', {
+    value: publicDetails, enumerable: true,
+    configurable: false, writable: false,
+  });
+  if (authenticated) __galacticComputeErrorRegistrySet(expected, value);
+  throw expected;
+}
+
+export function __readAuthenticatedGalacticComputeError(error) {
+  if (
+    !error ||
+    (typeof error !== 'object' && typeof error !== 'function')
+  ) return null;
+  return __galacticComputeErrorRegistryGet(error) || null;
+}
+
+// app.js shares the isolate global and may replace Response.json. Keep wrapper
+// serialization on the implementation captured before app.js evaluates, or a
+// tenant could rewrite the authenticated error field after the WeakMap check.
+export function __galacticJsonResponse(value) {
+  // JSON serialization honors inherited toJSON. Tenant code can modify
+  // Object.prototype before wrapper.js returns, so copy every security-bearing
+  // envelope level onto null-prototype records with intrinsics captured before
+  // app.js evaluated. Nested tenant result/log values remain untrusted data but
+  // can no longer replace the top-level or error/compute records.
+  const envelope = __galacticObjectAssign(
+    __galacticObjectCreate(null),
+    value,
+  );
+  if (envelope.error && typeof envelope.error === 'object') {
+    const safeError = __galacticObjectAssign(
+      __galacticObjectCreate(null),
+      envelope.error,
+    );
+    if (safeError.compute && typeof safeError.compute === 'object') {
+      safeError.compute = __galacticObjectAssign(
+        __galacticObjectCreate(null),
+        safeError.compute,
+      );
+    }
+    envelope.error = safeError;
+  }
+  return __galacticTrustedResponseJson(envelope);
+}
+
+async function __unwrapComputeRpc(envelope, callIndex) {
   if (
     envelope && envelope.ok === true &&
-    Object.prototype.hasOwnProperty.call(envelope, 'value')
+    __galacticHasOwn(envelope, 'value')
   ) {
     return envelope.value;
   }
-  if (
-    envelope && envelope.ok === false && envelope.error &&
-    typeof envelope.error.code === 'string' &&
-    /^COMPUTE_[A-Z0-9_]{1,56}$/.test(envelope.error.code) &&
-    typeof envelope.error.message === 'string' &&
-    envelope.error.message.length > 0 &&
-    envelope.error.message.length <= 1024
-  ) {
-    var expected = new Error(
-      'galactic.compute failed (' + envelope.error.code + '): ' +
-      envelope.error.message
+  if (envelope && envelope.ok === false) {
+    var normalized = await __normalizeComputeRpcError(
+      envelope.error,
+      callIndex,
     );
-    expected.name = 'GalacticComputeError';
-    expected.galacticDetails = { code: envelope.error.code };
-    throw expected;
+    if (normalized) {
+      __throwGalacticComputeError(normalized.error, normalized.authenticated);
+    }
   }
-  var unavailable = new Error(
-    'galactic.compute failed (COMPUTE_CONTROL_PLANE_UNAVAILABLE): ' +
-    'Galactic Compute control plane is unavailable.'
-  );
-  unavailable.name = 'GalacticComputeError';
-  unavailable.galacticDetails = { code: 'COMPUTE_CONTROL_PLANE_UNAVAILABLE' };
-  throw unavailable;
+  __throwGalacticComputeError(__galacticObjectFreeze({
+    code: 'COMPUTE_CONTROL_PLANE_UNAVAILABLE',
+    message: 'Galactic Compute control plane is unavailable.',
+  }), false);
 }
 
 // Callable function object: galactic.compute(request), with status and
 // cancellation methods namespaced on the same capability. All three calls go
 // through the parent-isolate RPC binding. The body receives no user bearer,
 // platform key, control-plane credential, lease token, or billing receipt.
+let __galacticComputeCallIndex = 0;
 function __galacticCompute(request) {
   var e = __rpcEnv;
   if (!e || !e.COMPUTE) {
     return Promise.reject(new Error('galactic.compute unavailable: add "compute:exec" to manifest permissions and run with an authenticated user context.'));
   }
-  globalThis.__computeCallIndex = (globalThis.__computeCallIndex || 0) + 1;
-  return e.COMPUTE.call(request || {}, globalThis.__computeCallIndex).then(__unwrapComputeRpc);
+  __galacticComputeCallIndex += 1;
+  const callIndex = __galacticComputeCallIndex;
+  return __galacticPromiseThen(
+    e.COMPUTE.call(request || {}, callIndex),
+    function(envelope) { return __unwrapComputeRpc(envelope, callIndex); },
+  );
 }
 __galacticCompute.get = function(runId) {
   var e = __rpcEnv;
   if (!e || !e.COMPUTE) {
     return Promise.reject(new Error('galactic.compute.get unavailable: compute:exec permission and an authenticated user context are required.'));
   }
-  return e.COMPUTE.get(runId).then(__unwrapComputeRpc);
+  return __galacticPromiseThen(
+    e.COMPUTE.get(runId),
+    function(envelope) { return __unwrapComputeRpc(envelope, null); },
+  );
 };
 __galacticCompute.cancel = function(runId) {
   var e = __rpcEnv;
   if (!e || !e.COMPUTE) {
     return Promise.reject(new Error('galactic.compute.cancel unavailable: compute:exec permission and an authenticated user context are required.'));
   }
-  return e.COMPUTE.cancel(runId).then(__unwrapComputeRpc);
+  return __galacticPromiseThen(
+    e.COMPUTE.cancel(runId),
+    function(envelope) { return __unwrapComputeRpc(envelope, null); },
+  );
 };
 
 globalThis.ultralight = {
@@ -1290,6 +1530,8 @@ globalThis.galactic = globalThis.ultralight;
     const wrapperModule = `
 import {
   __drainGalacticPendingEffects,
+  __galacticJsonResponse,
+  __readAuthenticatedGalacticComputeError,
   __setGalacticRpcEnv,
 } from './setup.js';
 import * as appModule from './app.js';
@@ -1328,10 +1570,10 @@ export default {
     };
     // Reset the per-execution accumulators. Isolates may be warm-reused
     // (loader.get), so resetting per fetch keeps per-grant AI-cap accounting
-    // plus compute admission idempotency and the per-execution emit cap correct.
+    // plus the per-execution emit cap correct. Compute-capable executions are
+    // never warm-reused, so their admission index remains module-private.
     globalThis.__aiCostLight = 0;
     globalThis.__emitCount = 0;
-    globalThis.__computeCallIndex = 0;
     // Flight capture: bounded per-execution record of ai() exchanges (clipped
     // prompt/response), returned in the result envelope. Persistence is the
     // HOST's decision (manifest flight_recorder + routine context) — capture
@@ -1362,7 +1604,7 @@ export default {
         if (appModule.default && typeof appModule.default === 'object') {
           for (const k of Object.keys(appModule.default)) { if (typeof appModule.default[k] === 'function') available.push(k); }
         }
-        return Response.json({
+        return __galacticJsonResponse({
           success: false, functionInvoked, result: null, logs, aiCostLight: globalThis.__aiCostLight || 0, flight: globalThis.__flight,
           error: { type: 'FunctionNotFound', message: 'Function "' + fnName + '" not found. Available: ' + [...new Set(available)].join(', ') },
         });
@@ -1371,12 +1613,14 @@ export default {
       functionInvoked = true;
       const result = await targetFn(...fnArgs);
       await __drainGalacticPendingEffects();
-      return Response.json({ success: true, functionInvoked, result, logs, aiCostLight: globalThis.__aiCostLight || 0, flight: globalThis.__flight });
+      return __galacticJsonResponse({ success: true, functionInvoked, result, logs, aiCostLight: globalThis.__aiCostLight || 0, flight: globalThis.__flight });
     } catch (err) {
       await __drainGalacticPendingEffects();
-      return Response.json({
+      const __authenticatedComputeError =
+        __readAuthenticatedGalacticComputeError(err);
+      return __galacticJsonResponse({
         success: false, functionInvoked, result: null, logs, aiCostLight: globalThis.__aiCostLight || 0, flight: globalThis.__flight,
-        error: { type: err.name || err.constructor?.name || 'Error', message: err.message || String(err), ...(typeof err.code === 'string' ? { code: err.code } : {}), ...(err.galacticDetails ? { details: err.galacticDetails } : {}) },
+        error: { type: err.name || err.constructor?.name || 'Error', message: err.message || String(err), ...(typeof err.code === 'string' ? { code: err.code } : {}), ...(__authenticatedComputeError ? { compute: __authenticatedComputeError } : {}) },
       });
     }
     } finally {
@@ -1914,6 +2158,7 @@ export default {
               ? (config.capacityAgentId ?? "")
               : config.appId,
             capacityReceiptId: config.capacityReceiptId ?? null,
+            admissionDisabledProofKey,
           },
         });
       }
@@ -2051,6 +2296,8 @@ export default {
         message: string;
         code?: string;
         details?: unknown;
+        /** Present only when wrapper.js authenticated the Error via WeakMap. */
+        compute?: unknown;
       };
     };
     // Seal the exact invocation-owned session before deciding whether the
@@ -2059,7 +2306,16 @@ export default {
     const testRuntimeSnapshot = await snapshotTestRuntimeSession();
     const { blockedEffects, observedEffects } = testRuntimeSnapshot;
     const containmentError = gxTestContainmentError(blockedEffects);
-    const executionError = containmentError ?? data.error;
+    const authenticatedComputeError = !containmentError && data.success === false
+      ? normalizeComputePublicError(data.error?.compute)
+      : null;
+    const executionError = containmentError ?? (authenticatedComputeError
+      ? {
+        type: "GalacticComputeError",
+        message: authenticatedComputeError.message,
+        code: authenticatedComputeError.code,
+      }
+      : data.error);
 
     // Credits actually debited for in-sandbox AI calls this execution, from
     // the binding-side ledger. Drives both the receipt and the cross-Agent
@@ -2083,7 +2339,21 @@ export default {
     // Host-authoritative tally of galactic.db mutations this execution (null =
     // read-only wake). Consumed here the same way as the AI spend ledger.
     const flightDb = consumeDbDiff(config.executionId);
-    const diagnostic = executionError
+    const diagnostic = authenticatedComputeError
+      ? normalizeOperatorDiagnostic({
+        error: executionError,
+        provenance: "platform",
+        platform: {
+          code: authenticatedComputeError.code,
+          summary: authenticatedComputeError.message,
+          detail: authenticatedComputeError.hint ?? null,
+          retryable: authenticatedComputeError.action === "retry_later"
+            ? true
+            : null,
+        },
+        knownSecrets: [...knownSecrets, sandboxAuthToken],
+      })
+      : executionError
       ? normalizeOperatorDiagnostic({
         error: executionError,
         provenance: "developer",
@@ -2091,6 +2361,7 @@ export default {
       })
       : undefined;
     const errorCode = containmentError?.code ??
+      authenticatedComputeError?.code ??
       structuredOutputErrorCode(executionError?.code);
 
     return {
@@ -2124,6 +2395,13 @@ export default {
               knownSecrets,
             ),
             ...(errorCode ? { code: errorCode } : {}),
+            ...(authenticatedComputeError
+              ? {
+                details: computePublicErrorDetails(
+                  authenticatedComputeError,
+                ),
+              }
+              : {}),
           },
           diagnostic,
         }

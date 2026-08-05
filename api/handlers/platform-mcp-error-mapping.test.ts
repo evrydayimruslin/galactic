@@ -1,12 +1,23 @@
 import { assertEquals, assertRejects } from 'https://deno.land/std@0.210.0/assert/mod.ts';
 import {
+  COMPUTE_ADMISSION_DISABLED_ACTION,
+  COMPUTE_ADMISSION_DISABLED_CODE,
+  COMPUTE_ADMISSION_DISABLED_HINT,
+  COMPUTE_ADMISSION_DISABLED_MESSAGE,
+} from '../../shared/contracts/compute.ts';
+import type { LaunchOperatorRunDiagnostic } from '../../shared/contracts/launch.ts';
+import {
   capabilityErrorToToolCode,
   jsonRpcErrorHttpStatus,
   platformMcpAuthenticationErrorResponse,
   projectCapabilityError,
   readInspectPermissionRows,
 } from './platform-mcp.ts';
-import { appMcpAuthenticationErrorResponse } from './mcp.ts';
+import {
+  appMcpAuthenticationErrorResponse,
+  formatToolError,
+  projectMcpComputeErrorDetails,
+} from './mcp.ts';
 import { ProjectCapsuleError } from '../services/project-capsule.ts';
 import {
   ApiTokenAuthenticationError,
@@ -29,6 +40,84 @@ Deno.test('platform MCP maps capability admission failures to public JSON-RPC co
   assertEquals(
     jsonRpcErrorHttpStatus(capabilityErrorToToolCode('internal')),
     500,
+  );
+});
+
+Deno.test('app MCP projects only closed Galactic Compute guidance', () => {
+  const error = {
+    type: 'GalacticComputeError',
+    message: COMPUTE_ADMISSION_DISABLED_MESSAGE,
+    details: {
+      code: COMPUTE_ADMISSION_DISABLED_CODE,
+      hint: COMPUTE_ADMISSION_DISABLED_HINT,
+      action: COMPUTE_ADMISSION_DISABLED_ACTION,
+    },
+  };
+  const diagnostic: LaunchOperatorRunDiagnostic = {
+    version: 1,
+    code: COMPUTE_ADMISSION_DISABLED_CODE,
+    causeCode: 'GALACTIC_COMPUTE_ERROR',
+    summary: COMPUTE_ADMISSION_DISABLED_MESSAGE,
+    detail: COMPUTE_ADMISSION_DISABLED_HINT,
+    provenance: 'platform',
+    retryable: true,
+    suggestedActions: [],
+    redacted: false,
+  };
+  assertEquals(projectMcpComputeErrorDetails(error), null);
+  assertEquals(
+    projectMcpComputeErrorDetails(error, {
+      ...diagnostic,
+      provenance: 'developer',
+    }),
+    null,
+  );
+  assertEquals(
+    projectMcpComputeErrorDetails(error, {
+      ...diagnostic,
+      code: 'COMPUTE_CONTROL_PLANE_UNAVAILABLE',
+    }),
+    null,
+  );
+  assertEquals(
+    projectMcpComputeErrorDetails(error, {
+      ...diagnostic,
+      causeCode: 'TENANT_NAMED_ERROR',
+    }),
+    null,
+  );
+  assertEquals(
+    projectMcpComputeErrorDetails(error, diagnostic),
+    error.details,
+  );
+  const formatted = formatToolError(error, undefined, diagnostic);
+  assertEquals(formatted.content, [{
+    type: 'text',
+    text:
+      `Error: ${COMPUTE_ADMISSION_DISABLED_MESSAGE} ${COMPUTE_ADMISSION_DISABLED_HINT}`,
+  }]);
+  assertEquals(formatted.structuredContent, {
+    error: COMPUTE_ADMISSION_DISABLED_MESSAGE,
+    error_type: 'GALACTIC_COMPUTE_ERROR',
+    error_details: error.details,
+    operator_diagnostic: diagnostic,
+  });
+  assertEquals(formatted.isError, true);
+
+  const forged = {
+    ...error,
+    details: {
+      ...error.details,
+      hint: 'Emergency operation private-id is active',
+      action: 'setup_home_node',
+      internal_operation_id: 'private-id',
+    },
+  };
+  assertEquals(projectMcpComputeErrorDetails(forged, diagnostic), null);
+  const projected = formatToolError(forged, undefined, diagnostic);
+  assertEquals(
+    (projected.structuredContent as Record<string, unknown>).error_details,
+    undefined,
   );
 });
 

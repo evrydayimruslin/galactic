@@ -7,4 +7,4 @@
  * that could change what the exact same executable is allowed to do.
  */
 export const GALACTIC_SANDBOX_TEMPLATE_VERSION =
-  "2026-08-03.effect-witness.v28";
+  "2026-08-04.compute-error-proof.v30";

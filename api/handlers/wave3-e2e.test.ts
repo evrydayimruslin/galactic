@@ -35,6 +35,7 @@ import { resolveHttpTestRuntimeResponse } from "../src/bindings/http-test-runtim
 import type { VersionMetadata } from "../../shared/types/index.ts";
 import { buildVersionTrustMetadata } from "../services/trust.ts";
 import { runContainmentSmoke } from "../../scripts/smoke/gx-test-containment-smoke.mjs";
+import { dynamicSandboxSetupForFunctionHarness } from "../runtime/dynamic-sandbox-local-harness.ts";
 
 const OWNER_ID = "11111111-1111-4111-8111-111111111111";
 const COLLAB_ID = "22222222-2222-4222-8222-222222222222";
@@ -1076,18 +1077,11 @@ class Wave3Harness {
           execCtxHandle?: string;
         };
         // This in-memory harness executes setup.js through Function rather than
-        // Worker Loader's ESM runtime. Adapt only its two module exports so the
-        // production template can keep the RPC environment and effect tracker
-        // in module-private lexical state.
-        const setupForHarness = workerCode.modules["setup.js"]
-          .replace(
-            "export function __setGalacticRpcEnv",
-            "function __setGalacticRpcEnv",
-          )
-          .replace(
-            "export async function __drainGalacticPendingEffects",
-            "async function __drainGalacticPendingEffects",
-          );
+        // Worker Loader's ESM runtime. Remove trusted module export modifiers;
+        // helper additions must not make gx.test parse raw ESM as script code.
+        const setupForHarness = dynamicSandboxSetupForFunctionHarness(
+          workerCode.modules["setup.js"],
+        );
         const runtimeBridge = new Function(
           `${setupForHarness}
 return { __setGalacticRpcEnv, __drainGalacticPendingEffects };`,

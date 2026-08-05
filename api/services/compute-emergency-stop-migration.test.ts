@@ -6,6 +6,9 @@ import {
 const migration = await Deno.readTextFile(
   "../supabase/migrations/20260720120000_compute_emergency_stop.sql",
 );
+const statusMigration = await Deno.readTextFile(
+  "../supabase/migrations/20260804130000_compute_emergency_stop_status.sql",
+);
 
 Deno.test("Compute emergency-stop SQL keeps admission and body destruction fail closed", () => {
   assertStringIncludes(
@@ -87,4 +90,61 @@ Deno.test("Compute emergency-stop target paths use one operation-to-target lock 
   assertFalse(operationLock < 0);
   assertFalse(targetMutation < 0);
   assertFalse(operationLock > targetMutation);
+});
+
+Deno.test("Compute emergency-stop status projection is sanitized and service-role-only", () => {
+  assertStringIncludes(
+    statusMigration,
+    "CREATE OR REPLACE FUNCTION public.get_compute_emergency_stop_status()",
+  );
+  assertStringIncludes(statusMigration, "RETURNS jsonb");
+  assertStringIncludes(statusMigration, "STABLE");
+  assertStringIncludes(statusMigration, "SECURITY DEFINER");
+  assertStringIncludes(statusMigration, "'schema_version', 1");
+  assertStringIncludes(statusMigration, "'latch_state'");
+  for (
+    const projectedField of [
+      "operation_id",
+      "cutoff_at",
+      "target_count",
+      "terminalized_count",
+      "pending_target_count",
+      "created_at",
+      "updated_at",
+      "completed_at",
+    ]
+  ) {
+    assertStringIncludes(statusMigration, `'${projectedField}'`);
+  }
+  assertStringIncludes(
+    statusMigration,
+    "WHERE operation.status IN ('active', 'completed')",
+  );
+  assertStringIncludes(
+    statusMigration,
+    "operation.target_count - operation.terminalized_count",
+  );
+  assertStringIncludes(
+    statusMigration,
+    "FROM PUBLIC, anon, authenticated, service_role",
+  );
+  assertStringIncludes(
+    statusMigration,
+    "TO service_role",
+  );
+  assertStringIncludes(statusMigration, "NOTIFY pgrst, 'reload schema'");
+  for (
+    const privateField of [
+      "operator_reference",
+      "reason",
+      "request_hash",
+      "release_request_hash",
+      "release_operator_reference",
+      "release_reason",
+      "run_id",
+      "last_error_code",
+    ]
+  ) {
+    assertFalse(statusMigration.includes(`'${privateField}'`));
+  }
 });

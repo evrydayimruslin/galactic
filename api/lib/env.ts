@@ -118,6 +118,10 @@ export interface Env {
   COMPUTE_JOB_TOKEN_PEPPER: string;
   /** Dedicated public-edge credential for global Compute stop/release only. */
   COMPUTE_EMERGENCY_STOP_TOKEN: string;
+  /** Dedicated read-only bearer for bounded deployed Compute certification. */
+  COMPUTE_CERTIFICATION_TOKEN: string;
+  /** Exact `owner UUID/Agent UUID` principal readable by the certification bearer. */
+  COMPUTE_CERTIFICATION_PRINCIPAL: string;
   COMPUTE_ROLLOUT_MODE: string;
   /** Comma-separated exact `owner UUID/Agent UUID` pairs. */
   COMPUTE_CANARY_ALLOWLIST: string;

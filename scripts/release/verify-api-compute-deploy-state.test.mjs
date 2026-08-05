@@ -21,6 +21,7 @@ function version({
   digest = ZERO_DIGEST,
   rolloutMode = "canary",
   canaryAllowlist = "",
+  certificationPrincipal = enabled === "0" ? "" : canaryAllowlist,
   tag = `api-${SHA}`,
   target = "production",
 } = {}) {
@@ -41,6 +42,11 @@ function version({
       type: "plain_text",
       name: "COMPUTE_CANARY_ALLOWLIST",
       text: canaryAllowlist,
+    },
+    {
+      type: "plain_text",
+      name: "COMPUTE_CERTIFICATION_PRINCIPAL",
+      text: certificationPrincipal,
     },
     {
       type: "queue",
@@ -123,6 +129,7 @@ test("accepts a bound admission-off deployment", () => {
     environmentDigest: `sha256:${"b".repeat(64)}`,
     rolloutMode: "canary",
     canaryAllowlist: "",
+    certificationPrincipal: "",
   };
   assert.deepEqual(
     verifyApiComputeDeployState({
@@ -145,6 +152,7 @@ test("validates exact staging Compute resource targets", () => {
     environmentDigest: `sha256:${"c".repeat(64)}`,
     rolloutMode: "canary",
     canaryAllowlist: "",
+    certificationPrincipal: "",
   };
   assert.deepEqual(
     verifyApiComputeDeployState({
@@ -168,6 +176,8 @@ test("accepts and exactly preserves a global Compute policy", () => {
     environmentDigest: `sha256:${"d".repeat(64)}`,
     rolloutMode: "global",
     canaryAllowlist: "",
+    certificationPrincipal:
+      "11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222",
   };
   assert.deepEqual(
     verifyApiComputeDeployState({
@@ -179,6 +189,7 @@ test("accepts and exactly preserves a global Compute policy", () => {
         enabled: "1",
         digest: computeState.environmentDigest,
         rolloutMode: "global",
+        certificationPrincipal: computeState.certificationPrincipal,
       }),
       expectedTag: `api-${SHA}`,
       expectedState: computeState,
@@ -195,6 +206,7 @@ test("accepts and exactly preserves a canonical canary Compute policy", () => {
     environmentDigest: `sha256:${"e".repeat(64)}`,
     rolloutMode: "canary",
     canaryAllowlist: `${owner}/${agent}`,
+    certificationPrincipal: `${owner}/${agent}`,
   };
   assert.deepEqual(
     verifyApiComputeDeployState({
@@ -207,6 +219,7 @@ test("accepts and exactly preserves a canonical canary Compute policy", () => {
         digest: computeState.environmentDigest,
         rolloutMode: "canary",
         canaryAllowlist: computeState.canaryAllowlist,
+        certificationPrincipal: computeState.certificationPrincipal,
       }),
       expectedState: computeState,
     }),
@@ -226,6 +239,8 @@ test("rejects any deployed Compute policy drift from the captured state", () => 
           enabled: "1",
           digest: `sha256:${"f".repeat(64)}`,
           rolloutMode: "global",
+          certificationPrincipal:
+            "11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222",
         }),
         expectedTag: `api-${SHA}`,
         expectedState: {
@@ -233,6 +248,7 @@ test("rejects any deployed Compute policy drift from the captured state", () => 
           environmentDigest: `sha256:${"f".repeat(64)}`,
           rolloutMode: "canary",
           canaryAllowlist: "",
+          certificationPrincipal: "",
         },
       }),
     /does not exactly preserve the live state/u,

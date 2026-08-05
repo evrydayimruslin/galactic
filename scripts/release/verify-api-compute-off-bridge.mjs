@@ -9,6 +9,12 @@ const UUID =
 const DIGEST = /^sha256:[0-9a-f]{64}$/u;
 const ZERO_DIGEST = `sha256:${"0".repeat(64)}`;
 const CURRENT_SOURCE_TAG = /^api-[0-9a-f]{40}$/u;
+const ACTOR_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const CERTIFICATION_PRINCIPAL = new RegExp(
+  `^${ACTOR_UUID.source.slice(1, -1)}\/${ACTOR_UUID.source.slice(1, -1)}$`,
+  "u",
+);
 
 const TARGETS = {
   production: {
@@ -44,8 +50,7 @@ export function verifyWranglerVersionUploadOutput({
     typeof content !== "string" ||
     typeof expectedWorker !== "string" ||
     expectedWorker.length === 0 ||
-    typeof expectedEnvironment !== "string" ||
-    expectedEnvironment.length === 0
+    typeof expectedEnvironment !== "string"
   ) {
     fail("Wrangler version-upload output arguments are malformed");
   }
@@ -72,15 +77,24 @@ export function verifyWranglerVersionUploadOutput({
     );
   }
   const [session, upload] = records;
+  const commandLineArgs = session.command_line_args;
+  const environmentArgumentIndexes = Array.isArray(commandLineArgs)
+    ? commandLineArgs.flatMap((value, index) =>
+      value === "--env" ? [index] : []
+    )
+    : [];
   if (
     session.type !== "wrangler-session" ||
     session.version !== 1 ||
     typeof session.wrangler_version !== "string" ||
     session.wrangler_version.length === 0 ||
-    !Array.isArray(session.command_line_args) ||
-    !session.command_line_args.every((value) => typeof value === "string") ||
-    session.command_line_args[0] !== "versions" ||
-    session.command_line_args[1] !== "upload" ||
+    !Array.isArray(commandLineArgs) ||
+    !commandLineArgs.every((value) => typeof value === "string") ||
+    commandLineArgs[0] !== "versions" ||
+    commandLineArgs[1] !== "upload" ||
+    environmentArgumentIndexes.length !== 1 ||
+    commandLineArgs[environmentArgumentIndexes[0] + 1] !==
+      expectedEnvironment ||
     typeof session.timestamp !== "string" ||
     !Number.isFinite(Date.parse(session.timestamp))
   ) {
@@ -172,6 +186,20 @@ function plainValue(version, name, label) {
   return binding.text;
 }
 
+function optionalPlainValue(version, name, label) {
+  const values = bindingList(version, label).filter(
+    (binding) => binding?.name === name,
+  );
+  if (values.length === 0) return { present: false, value: null };
+  if (
+    values.length !== 1 || values[0]?.type !== "plain_text" ||
+    typeof values[0]?.text !== "string"
+  ) {
+    fail(`${label} must contain at most one ${name} plain_text binding`);
+  }
+  return { present: true, value: values[0].text };
+}
+
 function validDigest(value, label) {
   if (!DIGEST.test(value) || value === ZERO_DIGEST) {
     fail(`${label} must be a nonzero sha256 digest`);
@@ -191,35 +219,53 @@ function apiPolicy(version, label) {
     "COMPUTE_CANARY_ALLOWLIST",
     label,
   );
+  const certificationBinding = optionalPlainValue(
+    version,
+    "COMPUTE_CERTIFICATION_PRINCIPAL",
+    label,
+  );
+  const certificationPrincipal = certificationBinding.value;
+  if (
+    certificationPrincipal !== null && certificationPrincipal !== "" &&
+    !CERTIFICATION_PRINCIPAL.test(certificationPrincipal)
+  ) {
+    fail(`${label} certification principal is malformed`);
+  }
 
   if (
     enabled === "1" &&
     rolloutMode === "global" &&
-    canaryAllowlist === ""
+    canaryAllowlist === "" &&
+    (!certificationBinding.present || certificationPrincipal !== "")
   ) {
     return {
       mode: "global",
       enabled,
       rollout_mode: rolloutMode,
       canary_allowlist: canaryAllowlist,
+      certification_principal: certificationPrincipal,
+      certification_binding_present: certificationBinding.present,
       environment_digest: environmentDigest,
     };
   }
   if (
     enabled === "0" &&
     rolloutMode === "canary" &&
-    canaryAllowlist === ""
+    canaryAllowlist === "" &&
+    (certificationPrincipal === null || certificationPrincipal === "")
   ) {
     return {
       mode: "off",
       enabled,
       rollout_mode: rolloutMode,
       canary_allowlist: canaryAllowlist,
+      certification_principal: certificationPrincipal,
+      certification_binding_present: certificationBinding.present,
       environment_digest: environmentDigest,
     };
   }
   fail(
-    `${label} policy must be exactly global (1/global/empty) or OFF (0/canary/empty)`,
+    `${label} policy must be exactly global (1/global/empty with a canonical principal, or legacy missing principal) or OFF (0/canary/empty with no principal)`,
   );
 }
 
@@ -591,6 +637,9 @@ export function verifyUploadedBridge({
   if (policy.mode !== "off") {
     fail("uploaded API policy is not OFF");
   }
+  if (!policy.certification_binding_present) {
+    fail("uploaded API is missing the empty certification principal binding");
+  }
   if (policy.environment_digest !== current.environment_digest) {
     fail("uploaded API Compute digest does not match the current pair");
   }
@@ -671,7 +720,8 @@ export function verifyPromotedBridge({
   const policy = apiPolicy(apiVersion, "promoted API");
   if (
     policy.mode !== "off" ||
-    policy.environment_digest !== bridge.environment_digest
+    policy.environment_digest !== bridge.environment_digest ||
+    !policy.certification_binding_present
   ) {
     fail("promoted API does not retain the validated OFF policy and digest");
   }

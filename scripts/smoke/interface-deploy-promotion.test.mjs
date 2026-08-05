@@ -7,8 +7,10 @@ import {
   nextFixtureVersion,
   promotionAction,
   reviewedPromotionConfig,
+  reviewedFixtureProfile,
   validatePromotedComputeFixture,
   validateReviewedComputeManifest,
+  validateReviewedFixtureIdentity,
   validateStagedPromotion,
 } from "./interface-deploy-promotion.mjs";
 
@@ -20,6 +22,10 @@ const COMPUTE_FIXTURE_SOURCE = await readFile(
   new URL("../../examples/interface-demo/index.ts", import.meta.url),
   "utf8",
 );
+const CERTIFICATION_MANIFEST = JSON.parse(await readFile(
+  new URL("../../examples/compute-certification/manifest.json", import.meta.url),
+  "utf8",
+));
 const MANIFEST = {
   permissions: ["compute:exec"],
   compute: {
@@ -39,6 +45,19 @@ function reviewedArgs(overrides = {}) {
     "--reviewed-function": "run_compute_smoke",
     "--reviewed-compute-profile": "developer-v1",
     "--reviewed-compute-tools": "shell",
+    "--reviewed-compute-secrets": "none",
+    ...overrides,
+  }));
+}
+
+function certificationArgs(overrides = {}) {
+  return new Map(Object.entries({
+    "--promote-reviewed": true,
+    "--reviewed-fixture": "compute-certification",
+    "--reviewed-permission": "compute:exec",
+    "--reviewed-function": "run_compute_certification",
+    "--reviewed-compute-profile": "developer-v1",
+    "--reviewed-compute-tools": "browser,shell",
     "--reviewed-compute-secrets": "none",
     ...overrides,
   }));
@@ -107,6 +126,43 @@ test("reviewed promotion requires every exact authority acknowledgement", () => 
       }),
     /GALACTIC_OWNER_ACCESS_TOKEN/u,
   );
+});
+
+test("named certification promotion is closed over its exact directory and authority", () => {
+  const config = reviewedPromotionConfig({
+    args: certificationArgs(),
+    ownerAccessToken: "short-lived-owner-token",
+    appId: APP_ID,
+    allowCreate: false,
+    directory: "examples/compute-certification",
+  });
+  assert.equal(config.enabled, true);
+  assert.equal(config.fixture.name, "compute-certification");
+  assert.deepEqual(config.fixture.tools, ["browser", "shell"]);
+  assert.deepEqual(config.fixture.sourcePaths, ["index.ts", "manifest.json"]);
+  assert.throws(
+    () =>
+      reviewedPromotionConfig({
+        args: certificationArgs(),
+        ownerAccessToken: "short-lived-owner-token",
+        appId: APP_ID,
+        allowCreate: false,
+        directory: "examples/interface-demo",
+      }),
+    /requires --dir examples\/compute-certification/u,
+  );
+  assert.throws(
+    () =>
+      reviewedPromotionConfig({
+        args: certificationArgs({ "--reviewed-compute-tools": "shell" }),
+        ownerAccessToken: "short-lived-owner-token",
+        appId: APP_ID,
+        allowCreate: false,
+        directory: "examples/compute-certification",
+      }),
+    /--reviewed-compute-tools/u,
+  );
+  assert.throws(() => reviewedFixtureProfile("caller-controlled"), /Unknown/u);
 });
 
 test("reviewed builder upload chooses above every retained version", () => {
@@ -219,6 +275,62 @@ test("reviewed manifest fails closed on extra authority, tools, or secrets", () 
   }
 });
 
+test("certification manifest and deterministic identity are exact", () => {
+  assert.equal(
+    validateReviewedComputeManifest(
+      CERTIFICATION_MANIFEST,
+      "compute-certification",
+    ),
+    CERTIFICATION_MANIFEST,
+  );
+  const identity = {
+    fixture: "galactic-compute-certification",
+    schema_version: 1,
+    scenarios: [
+      "sync_toolchain",
+      "async_echo",
+      "browser_https",
+      "artifact_producer",
+      "artifact_consumer",
+      "exit_23",
+      "timeout",
+      "cancellable",
+      "https_egress_boundaries",
+      "raw_tcp_denied",
+    ],
+    deterministic_artifact_sha256:
+      "6ad9b8ea5280658dc4b229a2b6180d530c4d3824b541d218266ea6049e8b763b",
+  };
+  assert.equal(
+    validateReviewedFixtureIdentity(identity, "compute-certification"),
+    identity,
+  );
+  assert.throws(
+    () =>
+      validateReviewedComputeManifest({
+        ...CERTIFICATION_MANIFEST,
+        routines: [{ ...CERTIFICATION_MANIFEST.routines[0], handler: "other" }],
+      }, "compute-certification"),
+    /routine declaration drifted/u,
+  );
+  assert.throws(
+    () =>
+      validateReviewedComputeManifest({
+        ...CERTIFICATION_MANIFEST,
+        description: "Different reviewed fixture",
+      }, "compute-certification"),
+    /manifest content drifted/u,
+  );
+  assert.throws(
+    () =>
+      validateReviewedFixtureIdentity(
+        { ...identity, scenarios: [] },
+        "compute-certification",
+      ),
+    /identity scenarios/u,
+  );
+});
+
 test("promotion is bound to the exact staged tested candidate", () => {
   const snapshot = home({ live: "1.0.0" });
   assert.equal(
@@ -304,4 +416,73 @@ test("postcondition proves live executable, function, and disabled ceiling", () 
       home: home({ candidate: null, integrity: "unverified" }),
     })
   );
+});
+
+test("certification postcondition binds exact exports, ceiling, and identity", () => {
+  const identity = {
+    fixture: "galactic-compute-certification",
+    schema_version: 1,
+    scenarios: [
+      "sync_toolchain",
+      "async_echo",
+      "browser_https",
+      "artifact_producer",
+      "artifact_consumer",
+      "exit_23",
+      "timeout",
+      "cancellable",
+      "https_egress_boundaries",
+      "raw_tcp_denied",
+    ],
+    deterministic_artifact_sha256:
+      "6ad9b8ea5280658dc4b229a2b6180d530c4d3824b541d218266ea6049e8b763b",
+  };
+  const exports = [
+    "fixture_identity",
+    "run_compute_certification",
+    "run_compute_policy_probe",
+  ];
+  const base = {
+    app: {
+      id: APP_ID,
+      visibility: "private",
+      current_version: VERSION,
+      manifest: CERTIFICATION_MANIFEST,
+      exports,
+    },
+    home: home({ candidate: null }),
+    functions: {
+      agent: { id: APP_ID },
+      functions: exports.map((name) => ({ name })),
+    },
+    settings: {
+      settings: {
+        enabled: false,
+        manifestCeiling: {
+          enabled: true,
+          profile: "developer-v1",
+          tools: ["browser", "shell"],
+          secrets: [],
+        },
+      },
+    },
+    appId: APP_ID,
+    version: VERSION,
+    sourceHash: SOURCE_HASH,
+    fixtureName: "compute-certification",
+    identity,
+  };
+  assert.doesNotThrow(() => validatePromotedComputeFixture(base));
+  assert.throws(() =>
+    validatePromotedComputeFixture({
+      ...base,
+      app: { ...base.app, exports: exports.slice(1) },
+    }),
+  /export list/u);
+  assert.throws(() =>
+    validatePromotedComputeFixture({
+      ...base,
+      identity: { ...identity, deterministic_artifact_sha256: "0".repeat(64) },
+    }),
+  /identity drifted/u);
 });

@@ -71,6 +71,18 @@ function plainValue(version, name) {
   return values[0].text;
 }
 
+function optionalPlainValue(version, name) {
+  const values = namedBindings(version, name);
+  if (values.length === 0) return "";
+  if (
+    values.length !== 1 || values[0]?.type !== "plain_text" ||
+    typeof values[0]?.text !== "string"
+  ) {
+    fail(`expected at most one ${name} plain-text binding`);
+  }
+  return values[0].text;
+}
+
 function computePolicy(version) {
   const enabled = plainValue(version, "COMPUTE_ENABLED");
   const environmentDigest = plainValue(
@@ -79,6 +91,10 @@ function computePolicy(version) {
   );
   const rolloutMode = plainValue(version, "COMPUTE_ROLLOUT_MODE");
   const canaryAllowlist = plainValue(version, "COMPUTE_CANARY_ALLOWLIST");
+  const certificationPrincipal = optionalPlainValue(
+    version,
+    "COMPUTE_CERTIFICATION_PRINCIPAL",
+  );
 
   if (!["0", "1"].includes(enabled)) {
     fail("Compute admission flag is not canonical");
@@ -88,12 +104,15 @@ function computePolicy(version) {
   }
 
   if (enabled === "0") {
-    if (rolloutMode !== "canary" || canaryAllowlist !== "") {
-      fail("disabled Compute policy must be canary with an empty allowlist");
+    if (
+      rolloutMode !== "canary" || canaryAllowlist !== "" ||
+      certificationPrincipal !== ""
+    ) {
+      fail("disabled Compute policy must have empty admission and certification scope");
     }
   } else if (rolloutMode === "global") {
-    if (canaryAllowlist !== "") {
-      fail("global Compute policy must use an empty allowlist");
+    if (canaryAllowlist !== "" || !CANARY_ENTRY.test(certificationPrincipal)) {
+      fail("global Compute policy must bind one certification principal");
     }
   } else if (rolloutMode === "canary") {
     const entries = canaryAllowlist.split(",");
@@ -105,6 +124,11 @@ function computePolicy(version) {
     ) {
       fail("enabled canary Compute policy has a malformed allowlist");
     }
+    if (
+      entries.length !== 1 || certificationPrincipal !== entries[0]
+    ) {
+      fail("enabled canary Compute policy must bind its certification principal");
+    }
   } else {
     fail("enabled Compute rollout mode is not canonical");
   }
@@ -114,6 +138,7 @@ function computePolicy(version) {
     environmentDigest,
     rolloutMode,
     canaryAllowlist,
+    certificationPrincipal,
   };
 }
 
@@ -130,6 +155,7 @@ function verifyPreservedPolicy(actual, expected) {
     "environmentDigest",
     "rolloutMode",
     "canaryAllowlist",
+    "certificationPrincipal",
   ];
   if (
     Object.keys(expected).length !== keys.length ||
@@ -247,6 +273,9 @@ export function verifyApiComputeDeployState({
     }
     if (plainValue(version, "COMPUTE_CANARY_ALLOWLIST") !== "") {
       fail("Compute canary allowlist is not empty");
+    }
+    if (optionalPlainValue(version, "COMPUTE_CERTIFICATION_PRINCIPAL") !== "") {
+      fail("Compute certification principal is not empty");
     }
     if (planes.length !== 0) {
       fail("bootstrap API unexpectedly has a Compute Plane binding");

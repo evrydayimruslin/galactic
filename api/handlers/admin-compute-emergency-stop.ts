@@ -2,10 +2,17 @@ import { error, json } from "./response.ts";
 import {
   type ComputeEmergencyStopDeps,
   ComputeEmergencyStopError,
+  type ComputeEmergencyStopStatus,
+  getComputeEmergencyStopStatus,
   releaseComputeEmergencyStop,
   runComputeEmergencyStop,
 } from "../services/compute-emergency-stop.ts";
-import { ComputeControlPlaneError } from "../services/compute/database.ts";
+import {
+  ComputeControlPlaneError,
+  type ComputeDatabaseDeps,
+} from "../services/compute/database.ts";
+import { computeAdmissionFlagState } from "../services/compute/config.ts";
+import { type Env, getEnv } from "../lib/env.ts";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -33,6 +40,50 @@ function invalid(message: string): ComputeEmergencyStopError {
     400,
     message,
   );
+}
+
+function privateResponse(response: Response): Response {
+  response.headers.set("Cache-Control", "private, no-store");
+  response.headers.set("Pragma", "no-cache");
+  response.headers.set("Vary", "Authorization");
+  response.headers.set("X-Content-Type-Options", "nosniff");
+  return response;
+}
+
+export async function handleAdminComputeEmergencyStopStatus(
+  deps: {
+    env?: Pick<Partial<Env>, "COMPUTE_ENABLED">;
+    database?: ComputeDatabaseDeps;
+    readStatus?: () => Promise<ComputeEmergencyStopStatus>;
+  } = {},
+): Promise<Response> {
+  try {
+    const status = await (deps.readStatus ??
+      (() => getComputeEmergencyStopStatus(deps.database ?? {})))();
+    return privateResponse(json({
+      schema_version: status.schemaVersion,
+      admission_state: computeAdmissionFlagState(deps.env ?? getEnv()),
+      latch_state: status.latchState,
+      operation_id: status.operationId,
+      cutoff_at: status.cutoffAt,
+      target_count: status.targetCount,
+      terminalized_count: status.terminalizedCount,
+      pending_target_count: status.pendingTargetCount,
+      created_at: status.createdAt,
+      updated_at: status.updatedAt,
+      completed_at: status.completedAt,
+    }));
+  } catch (caught) {
+    console.error("[COMPUTE] Emergency-stop status request failed", {
+      code: caught instanceof ComputeControlPlaneError
+        ? caught.code
+        : "COMPUTE_EMERGENCY_STOP_STATUS_FAILED",
+    });
+    return privateResponse(json({
+      error: "Compute emergency-stop status is unavailable.",
+      code: "COMPUTE_EMERGENCY_STOP_STATUS_UNAVAILABLE",
+    }, 503));
+  }
 }
 
 function optionalInteger(

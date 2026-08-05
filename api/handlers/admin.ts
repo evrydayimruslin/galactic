@@ -26,8 +26,10 @@
 //   GET   /api/admin/capture/conversation/:id — Inspect one captured conversation
 //   GET   /api/admin/capture/export     — Export captured threads/messages/events/artifacts
 //   GET   /api/admin/flash-training/export — Export Flash fine-tuning dataset rows
+//   GET   /api/admin/compute/emergency-stop — Read sanitized Compute stop status
 //   POST  /api/admin/compute/emergency-stop — Fence/destroy/settle all Compute runs
 //   POST  /api/admin/compute/emergency-stop/:id/release — Release completed stop latch
+//   POST  /api/admin/compute/certification — Read bounded canary persistence evidence
 
 import { error, json } from "./response.ts";
 import { unsuspendContent } from "../services/hosting-billing.ts";
@@ -77,10 +79,19 @@ import { getCapacityTelemetryReconciliationSummary } from "../services/capacity-
 import {
   handleAdminComputeEmergencyStop,
   handleAdminComputeEmergencyStopRelease,
+  handleAdminComputeEmergencyStopStatus,
 } from "./admin-compute-emergency-stop.ts";
 import {
   authenticateComputeEmergencyStopOperator,
 } from "../services/compute-emergency-auth.ts";
+import {
+  authenticateComputeCertification,
+  authenticateComputeCertificationCredential,
+} from "../services/compute-certification-auth.ts";
+import { isComputeCredentialIsolated } from "../services/compute-credential-isolation.ts";
+import {
+  handleAdminComputeCertification,
+} from "./admin-compute-certification.ts";
 
 interface UserIdRow {
   id: string;
@@ -249,10 +260,15 @@ function writeHeaders(key: string) {
 }
 
 function authenticateAdmin(request: Request): boolean {
-  const { SUPABASE_SERVICE_ROLE_KEY } = getSupabaseEnv();
+  const env = getEnv();
+  const SUPABASE_SERVICE_ROLE_KEY = typeof env.SUPABASE_SERVICE_ROLE_KEY ===
+      "string"
+    ? env.SUPABASE_SERVICE_ROLE_KEY
+    : "";
   const authHeader = request.headers.get("Authorization");
   const token = authHeader?.replace("Bearer ", "");
-  return !!token && token === SUPABASE_SERVICE_ROLE_KEY;
+  return isComputeCredentialIsolated(env, "SUPABASE_SERVICE_ROLE_KEY") &&
+    !!token && token === SUPABASE_SERVICE_ROLE_KEY;
 }
 
 function withAdminSensitiveRouteRateLimit(
@@ -270,20 +286,98 @@ function withAdminSensitiveRouteRateLimit(
     | "admin:app_category"
     | "admin:app_featured"
     | "admin:payout_process"
+    | "admin:compute_certification"
+    | "admin:compute_emergency_stop_status"
     | "admin:compute_emergency_stop",
   handler: () => Promise<Response> | Response,
+  authenticatedKey?: string,
 ): Promise<Response> {
   return withSensitiveRouteRateLimit(
-    `admin:${getSensitiveRouteClientKey(request)}`,
+    authenticatedKey ?? `admin:${getSensitiveRouteClientKey(request)}`,
     route,
     handler,
   );
+}
+
+function privateNoStore(response: Response): Response {
+  response.headers.set("Cache-Control", "private, no-store");
+  response.headers.set("Pragma", "no-cache");
+  response.headers.set("Vary", "Authorization");
+  response.headers.set("X-Content-Type-Options", "nosniff");
+  return response;
 }
 
 export async function handleAdmin(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method;
+
+  // POST /api/admin/compute/certification — bounded read-only evidence for
+  // the deployed release gate. Its credential cannot stop/release Compute and
+  // the legacy database-wide service role is deliberately not accepted.
+  if (path === "/api/admin/compute/certification" && method === "POST") {
+    const authorization = await authenticateComputeCertification(request);
+    if (authorization.status === "unavailable") {
+      return privateNoStore(json({
+        error: "Compute certification authentication is unavailable.",
+        code: "COMPUTE_CERTIFICATION_AUTH_UNAVAILABLE",
+      }, 503));
+    }
+    if (authorization.status !== "authorized") {
+      return privateNoStore(json({
+        error: "Unauthorized: invalid Compute certification credential.",
+        code: "COMPUTE_CERTIFICATION_UNAUTHORIZED",
+      }, 401));
+    }
+    return privateNoStore(
+      await withAdminSensitiveRouteRateLimit(
+        request,
+        "admin:compute_certification",
+        () =>
+          handleAdminComputeCertification(request, {
+            authorizedPrincipal: authorization.principal,
+          }),
+        authorization.rateLimitKey,
+      ),
+    );
+  }
+
+  // GET /api/admin/compute/emergency-stop — sanitized rollout preflight.
+  // Authenticate before rate-limit persistence or emergency-stop persistence.
+  if (path === "/api/admin/compute/emergency-stop" && method === "GET") {
+    const [emergencyAuthorization, certificationAuthorization] = await Promise
+      .all([
+        authenticateComputeEmergencyStopOperator(request),
+        authenticateComputeCertificationCredential(request),
+      ]);
+    const authorized = emergencyAuthorization.status === "authorized" ||
+      certificationAuthorization.status === "authorized";
+    if (
+      !authorized && emergencyAuthorization.status === "unavailable" &&
+      certificationAuthorization.status === "unavailable"
+    ) {
+      return privateNoStore(error(
+        "Compute emergency-stop operator authentication unavailable",
+        503,
+      ));
+    }
+    if (!authorized) {
+      return privateNoStore(error(
+        "Unauthorized: invalid Compute emergency-stop credential",
+        401,
+      ));
+    }
+    return privateNoStore(
+      await withAdminSensitiveRouteRateLimit(
+        request,
+        "admin:compute_emergency_stop_status",
+        () => handleAdminComputeEmergencyStopStatus(),
+        certificationAuthorization.status === "authorized"
+          ? certificationAuthorization.rateLimitKey
+          : undefined,
+      ),
+    );
+  }
 
   // POST /api/admin/compute/emergency-stop — audited, resumable global stop.
   // Admission must already be disabled; this route fences accepted work,

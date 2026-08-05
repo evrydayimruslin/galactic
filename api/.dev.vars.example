@@ -16,6 +16,12 @@ COMPUTE_JOB_TOKEN_PEPPER=
 # Never reuse SUPABASE_SERVICE_ROLE_KEY or any human/Agent/provider credential.
 COMPUTE_EMERGENCY_STOP_TOKEN=
 
+# Dedicated >=32-byte bearer for bounded, read-only deployed certification.
+# Never reuse the emergency-stop bearer or any account/session credential.
+COMPUTE_CERTIFICATION_TOKEN=
+# Exact owner/Agent pair readable by the certification bearer.
+COMPUTE_CERTIFICATION_PRINCIPAL=
+
 # Cloudflare (for D1 HTTP API — still needed until native D1 bindings)
 CF_ACCOUNT_ID=8d2df08dac65694aa1c6bf56233a2090
 CF_API_TOKEN=

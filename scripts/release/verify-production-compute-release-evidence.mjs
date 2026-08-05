@@ -116,6 +116,23 @@ function selectedPlainTextValue(record, name, label) {
   return values[0];
 }
 
+function optionalSelectedPlainTextValue(record, name, label) {
+  if (!Array.isArray(record.selected_bindings)) {
+    fail(`${label} selected_bindings must be an array`);
+  }
+  const matches = record.selected_bindings.filter((binding) =>
+    binding?.name === name
+  );
+  if (matches.length === 0) return null;
+  if (
+    matches.length !== 1 || matches[0]?.type !== "plain_text" ||
+    typeof matches[0]?.text !== "string"
+  ) {
+    fail(`${label} must contain at most one ${name} plain-text binding`);
+  }
+  return matches[0].text;
+}
+
 function hasExactlyOneSelectedBinding(record, predicate, label) {
   if (!Array.isArray(record.selected_bindings)) {
     fail(`${label} selected_bindings must be an array`);
@@ -669,6 +686,11 @@ function verifyPreserveOffEvidence({
     label: "pre-rollout policy",
   });
   exactUuid(policyBefore.id, "pre-rollout API version ID");
+  const beforeCertificationPrincipal = optionalSelectedPlainTextValue(
+    policyBefore,
+    "COMPUTE_CERTIFICATION_PRINCIPAL",
+    "pre-rollout policy",
+  );
   if (
     policyBefore.schema_version !== 1 ||
     policyBefore.worker !== "ultralight-api" ||
@@ -688,6 +710,8 @@ function verifyPreserveOffEvidence({
       "COMPUTE_CANARY_ALLOWLIST",
       "pre-rollout policy",
     ) !== "" ||
+    (beforeCertificationPrincipal !== null &&
+      beforeCertificationPrincipal !== "") ||
     !SHA256.test(
       selectedPlainTextValue(
         policyBefore,
@@ -720,6 +744,11 @@ function verifyPreserveOffEvidence({
     "active-preserve-off-api-version.json",
   );
   exactUuid(policyAfter.id, "post-rollout API version ID");
+  const afterCertificationPrincipal = optionalSelectedPlainTextValue(
+    policyAfter,
+    "COMPUTE_CERTIFICATION_PRINCIPAL",
+    "post-rollout policy",
+  );
   if (
     policyAfter.schema_version !== 1 ||
     policyAfter.worker !== "ultralight-api" ||
@@ -748,7 +777,9 @@ function verifyPreserveOffEvidence({
       policyAfter,
       "COMPUTE_CANARY_ALLOWLIST",
       "post-rollout policy",
-    ) !== ""
+    ) !== "" ||
+    (afterCertificationPrincipal !== null &&
+      afterCertificationPrincipal !== "")
   ) {
     fail("post-rollout evidence does not prove the exact OFF API version");
   }

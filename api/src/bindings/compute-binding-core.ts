@@ -1,9 +1,17 @@
 import type {
   ComputeArtifact,
+  ComputePublicErrorAction,
   ComputeRequest,
   ComputeResult,
   ComputeRun,
   ComputeRunStatus,
+} from "../../../shared/contracts/compute.ts";
+import {
+  COMPUTE_ADMISSION_DISABLED_ACTION,
+  COMPUTE_ADMISSION_DISABLED_CODE,
+  COMPUTE_ADMISSION_DISABLED_HINT,
+  COMPUTE_ADMISSION_DISABLED_MESSAGE,
+  normalizeComputePublicError,
 } from "../../../shared/contracts/compute.ts";
 import {
   type ComputeControlPlaneActor,
@@ -31,16 +39,23 @@ export interface ComputeBindingProps {
    * enclosing subscription-capacity execution. Never returned to the body.
    */
   capacityReceiptId: string | null;
+  /**
+   * Fresh 256-bit parent-generated key for authenticating the one public
+   * admission-disabled envelope across the stateless WorkerEntrypoint boundary.
+   * It is trusted binding state, never request/body data.
+   */
+  admissionDisabledProofKey: string;
 }
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const PUBLIC_COMPUTE_CODE_RE = /^COMPUTE_[A-Z0-9_]{1,56}$/;
-const PUBLIC_COMPUTE_MESSAGE_MAX_LENGTH = 1_024;
 const CONTROL_PLANE_UNAVAILABLE_CODE = "COMPUTE_CONTROL_PLANE_UNAVAILABLE";
 const CONTROL_PLANE_UNAVAILABLE_MESSAGE =
   "Galactic Compute control plane is unavailable.";
 const CAPACITY_TAIL_MARKER = "GALACTIC_CAPACITY_EXECUTION_V1 ";
+const ADMISSION_DISABLED_PROOF_KEY_RE = /^[0-9a-f]{64}$/;
+const ADMISSION_DISABLED_PROOF_DOMAIN =
+  "galactic-compute-admission-disabled-proof-v1";
 
 const PUBLIC_RUN_STATUSES = new Set<ComputeRunStatus>([
   "queued",
@@ -133,6 +148,9 @@ function resolveComputeExecution(
   }
   if (!UUID_RE.test(props.executionId)) {
     throw new Error("galactic.compute trusted execution identity is invalid.");
+  }
+  if (!ADMISSION_DISABLED_PROOF_KEY_RE.test(props.admissionDisabledProofKey)) {
+    throw new Error("galactic.compute public error proof is invalid.");
   }
   const callerFunction = requiredString(
     props.callerFunction,
@@ -356,14 +374,19 @@ export function sanitizeComputeRun(value: unknown): ComputeRun {
 }
 
 function publicBindingError(error: unknown): PublicComputeControlPlaneError {
-  if (
-    error instanceof PublicComputeControlPlaneError &&
-    PUBLIC_COMPUTE_CODE_RE.test(error.code) &&
-    typeof error.message === "string" &&
-    error.message.length > 0 &&
-    error.message.length <= PUBLIC_COMPUTE_MESSAGE_MAX_LENGTH
-  ) {
-    return new PublicComputeControlPlaneError(error.code, error.message);
+  if (error instanceof PublicComputeControlPlaneError) {
+    const safe = normalizeComputePublicError({
+      code: error.code,
+      message: error.message,
+      ...(error.hint !== undefined ? { hint: error.hint } : {}),
+      ...(error.action !== undefined ? { action: error.action } : {}),
+    });
+    if (safe) {
+      return new PublicComputeControlPlaneError(safe.code, safe.message, {
+        ...(safe.hint !== undefined ? { hint: safe.hint } : {}),
+        ...(safe.action !== undefined ? { action: safe.action } : {}),
+      });
+    }
   }
   // Do not stringify the original exception: control-plane/database errors may
   // contain private transport details. The host can correlate via its own logs.
@@ -380,8 +403,67 @@ export type ComputeBindingRpcResult<T> =
     error: {
       code: string;
       message: string;
+      hint?: string;
+      action?: ComputePublicErrorAction;
+      /** Internal transport proof; setup.js validates then strips it. */
+      proof?: string;
     };
   };
+
+function base64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  }
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/u, "");
+}
+
+function admissionDisabledProofPayload(callIndex: number): string {
+  return [
+    ADMISSION_DISABLED_PROOF_DOMAIN,
+    COMPUTE_ADMISSION_DISABLED_CODE,
+    COMPUTE_ADMISSION_DISABLED_MESSAGE,
+    COMPUTE_ADMISSION_DISABLED_HINT,
+    COMPUTE_ADMISSION_DISABLED_ACTION,
+    String(callIndex),
+  ].join("\0");
+}
+
+/**
+ * Create the capability proof consumed by generated setup.js. Exported only so
+ * the generated-runtime parity/security tests can exercise the real boundary.
+ */
+export async function createComputeAdmissionDisabledProof(
+  proofKey: string,
+  callIndex: unknown,
+): Promise<string | null> {
+  if (
+    !ADMISSION_DISABLED_PROOF_KEY_RE.test(proofKey) ||
+    typeof callIndex !== "number" || !Number.isSafeInteger(callIndex) ||
+    callIndex < 1 || callIndex > 1_000_000
+  ) return null;
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(proofKey),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  return base64Url(new Uint8Array(await crypto.subtle.sign(
+    "HMAC",
+    key,
+    encoder.encode(admissionDisabledProofPayload(callIndex)),
+  )));
+}
+
+interface CaptureComputeBindingRpcOptions {
+  admissionDisabledProofKey?: string;
+  admissionCallIndex?: unknown;
+}
 
 /**
  * Workers RPC does not preserve custom Error subclasses or their fields.
@@ -390,16 +472,26 @@ export type ComputeBindingRpcResult<T> =
  */
 export async function captureComputeBindingRpc<T>(
   operation: () => Promise<T>,
+  options: CaptureComputeBindingRpcOptions = {},
 ): Promise<ComputeBindingRpcResult<T>> {
   try {
     return { ok: true, value: await operation() };
   } catch (error) {
     const safe = publicBindingError(error);
+    const proof = safe.code === COMPUTE_ADMISSION_DISABLED_CODE
+      ? await createComputeAdmissionDisabledProof(
+        options.admissionDisabledProofKey ?? "",
+        options.admissionCallIndex,
+      )
+      : null;
     return {
       ok: false,
       error: {
         code: safe.code,
         message: safe.message,
+        ...(safe.hint !== undefined ? { hint: safe.hint } : {}),
+        ...(safe.action !== undefined ? { action: safe.action } : {}),
+        ...(proof ? { proof } : {}),
       },
     };
   }

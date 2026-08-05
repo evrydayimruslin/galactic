@@ -18,6 +18,12 @@ import {
 } from "../services/provisional.ts";
 import { getPermissionsForUser } from "./user.ts";
 import type { AIOutputSchema } from "../../shared/contracts/ai.ts";
+import {
+  COMPUTE_ADMISSION_DISABLED_CODE,
+  COMPUTE_ADMISSION_DISABLED_MESSAGE,
+  type ComputePublicErrorDetails,
+  normalizeComputePublicErrorDetails,
+} from "../../shared/contracts/compute.ts";
 import type { Tier } from "../../shared/contracts/runtime.ts";
 import type { LaunchOperatorRunDiagnostic } from "../../shared/contracts/launch.ts";
 import { type UserContext } from "../runtime/sandbox.ts";
@@ -185,6 +191,7 @@ import type {
   MCPToolsListResponse,
 } from "../../shared/contracts/mcp.ts";
 import type { AppManifest } from "../../shared/contracts/manifest.ts";
+import { AUTONOMOUS_POLICY_OFF_ERROR_TYPE } from "../../shared/contracts/routine.ts";
 import {
   manifestToMCPTools,
   parseManifestCallRateLimit,
@@ -1861,6 +1868,7 @@ async function denyAutonomousCall(params: {
   witnessChannel: string;
   ledgerMeta: Record<string, unknown>;
   policyVersion?: number | null;
+  errorType: string;
   errorMessage: string;
 }): Promise<Response> {
   const deniedExecutionId = crypto.randomUUID();
@@ -1903,7 +1911,9 @@ async function denyAutonomousCall(params: {
   }).catch((err) => {
     console.error("[GATE] denied-ledger write failed:", err);
   });
-  return jsonRpcErrorResponse(params.id, INVALID_PARAMS, params.errorMessage);
+  return jsonRpcErrorResponse(params.id, INVALID_PARAMS, params.errorMessage, {
+    type: params.errorType,
+  });
 }
 
 /**
@@ -2189,6 +2199,7 @@ async function handleToolsCall(
           witnessChannel: `policy:${rawName}`,
           witnessOutcome: "denied: autonomous policy is Off",
           ledgerMeta: { policy: "off", policy_revision: gateVerdict.revision },
+          errorType: AUTONOMOUS_POLICY_OFF_ERROR_TYPE,
           errorMessage:
             `POLICY_OFF: the owner set ${rawName} to Off for autonomous runs. ` +
             "The call was recorded as a deliberate non-action.",
@@ -2242,6 +2253,7 @@ async function handleToolsCall(
             policy_version: predicateVerdict.policyVersion,
           },
           policyVersion: predicateVerdict.policyVersion,
+          errorType: "POLICY_RULE",
           errorMessage:
             `POLICY_RULE: a compiled policy forbids this call — ` +
             `${predicateVerdict.readback} It was recorded as a deliberate ` +
@@ -4449,7 +4461,43 @@ function attachExecutionReceipt(result: unknown, receiptId: string): unknown {
 /**
  * Format tool error for MCP response
  */
-function formatToolError(
+function computeErrorType(value: unknown): string | null {
+  if (value instanceof Error) return value.name;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  return typeof input.type === "string"
+    ? input.type
+    : typeof input.name === "string"
+    ? input.name
+    : null;
+}
+
+/**
+ * MCP may expose Compute guidance only when both provenance and its closed
+ * details contract survived the Dynamic Worker boundary. A tenant-created
+ * `details` object or Error name alone is insufficient.
+ */
+export function projectMcpComputeErrorDetails(
+  value: unknown,
+  diagnostic?: LaunchOperatorRunDiagnostic,
+): ComputePublicErrorDetails | null {
+  if (computeErrorType(value) !== "GalacticComputeError") return null;
+  const details = value && typeof value === "object"
+    ? (value as { details?: unknown }).details
+    : undefined;
+  const normalized = normalizeComputePublicErrorDetails(details);
+  if (
+    !normalized ||
+    diagnostic?.provenance !== "platform" ||
+    diagnostic.code !== normalized.code ||
+    diagnostic.causeCode !== "GALACTIC_COMPUTE_ERROR"
+  ) {
+    return null;
+  }
+  return normalized;
+}
+
+export function formatToolError(
   err: unknown,
   receiptId?: string,
   diagnostic?: LaunchOperatorRunDiagnostic,
@@ -4457,20 +4505,33 @@ function formatToolError(
   const rawMessage = err instanceof Error
     ? err.message
     : (err as { message?: string })?.message || String(err);
-  const message = diagnostic
+  const publicComputeDetails = projectMcpComputeErrorDetails(err, diagnostic);
+  const primaryComputeMessage = publicComputeDetails?.code ===
+      COMPUTE_ADMISSION_DISABLED_CODE
+    ? COMPUTE_ADMISSION_DISABLED_MESSAGE
+    : rawMessage;
+  const message = publicComputeDetails
+    ? primaryComputeMessage
+    : diagnostic
     ? [diagnostic.summary, diagnostic.detail].filter(Boolean).join(" ")
     : rawMessage;
+  const contentMessage = publicComputeDetails?.hint
+    ? `${message} ${publicComputeDetails.hint}`
+    : message;
   const errorType = diagnostic?.causeCode ||
     (err instanceof Error ? err.name : (err as { type?: string })?.type);
-  const errorDetails = diagnostic
+  const claimsComputeProvenance = computeErrorType(err) ===
+    "GalacticComputeError";
+  const errorDetails = publicComputeDetails ?? (diagnostic ||
+      claimsComputeProvenance
     ? undefined
-    : (err as { details?: Record<string, unknown> })?.details;
+    : (err as { details?: Record<string, unknown> })?.details);
 
   return {
     content: [
       {
         type: "text",
-        text: `Error: ${message}`,
+        text: `Error: ${contentMessage}`,
       },
       ...(receiptId
         ? [{

@@ -67,7 +67,7 @@ export interface RoutineMonitorResponse {
 }
 
 export interface RoutineMonitorDetailResponse {
-  routine: RoutineMonitorItem;
+  routine: RoutineMonitorItem & { active_run_count: number };
   capabilities: RoutineCapabilityRow[];
   dashboard_bindings: StoredRoutine["dashboard_bindings"];
   cards: Record<string, CommandCardDataPayload>;
@@ -270,6 +270,40 @@ async function fetchRoutineRuns(params: {
     ),
     "Failed to load routine runs",
   );
+}
+
+async function fetchActiveRoutineRunCount(
+  userId: string,
+  routineId: string,
+): Promise<number> {
+  const response = await fetch(
+    restUrl("routine_runs", {
+      user_id: `eq.${userId}`,
+      routine_id: `eq.${routineId}`,
+      status: "in.(queued,running)",
+      select: "id",
+      limit: "1",
+    }),
+    {
+      headers: {
+        ...serviceHeaders(),
+        "Prefer": "count=exact",
+        "Range-Unit": "items",
+        "Range": "0-0",
+      },
+    },
+  );
+  if (!response.ok) {
+    throw new Error("Failed to count active routine runs");
+  }
+  const match = /^(?:\*|[0-9]+-[0-9]+)\/(0|[1-9][0-9]*)$/u.exec(
+    response.headers.get("content-range") ?? "",
+  );
+  const count = match ? Number(match[1]) : Number.NaN;
+  if (!Number.isSafeInteger(count) || count < 0) {
+    throw new Error("Active routine run count is unavailable");
+  }
+  return count;
 }
 
 function buildRoutineMonitorItems(params: {
@@ -511,7 +545,7 @@ export async function getRoutineMonitorDetail(
   const routine = await getRoutine(userId, routineId);
   if (!routine) return null;
   const since30d = new Date(now.getTime() - 30 * DAY_MS).toISOString();
-  const [recentRuns, spendRuns30d] = await Promise.all([
+  const [recentRuns, spendRuns30d, activeRunCount] = await Promise.all([
     fetchRoutineRuns({ userId, routineIds: [routine.id], limit: 100 }),
     fetchRoutineRuns({
       userId,
@@ -519,6 +553,7 @@ export async function getRoutineMonitorDetail(
       since: since30d,
       limit: 1000,
     }),
+    fetchActiveRoutineRunCount(userId, routine.id),
   ]);
   const [item] = buildRoutineMonitorItems({
     routines: [routine],
@@ -529,7 +564,7 @@ export async function getRoutineMonitorDetail(
   });
   const response = buildResponse([item], now);
   return {
-    routine: item,
+    routine: { ...item, active_run_count: activeRunCount },
     capabilities: routine.capabilities,
     dashboard_bindings: routine.dashboard_bindings,
     cards: response.cards,

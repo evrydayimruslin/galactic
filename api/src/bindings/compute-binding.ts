@@ -31,6 +31,9 @@ export class ComputeBinding extends WorkerEntrypoint<Env, ComputeBindingProps> {
         this.ctx.props,
         createComputeControlPlaneAdapter({ env: this.env }),
       ).call(request, callIndex);
+    }, {
+      admissionDisabledProofKey: this.ctx.props.admissionDisabledProofKey,
+      admissionCallIndex: callIndex,
     });
   }
 

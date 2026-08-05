@@ -1,5 +1,8 @@
 import type { UserContext } from "../../runtime/sandbox.ts";
-import type { TrustedComputeAgentFunctionCall } from "../compute-platform-gateway.ts";
+import {
+  createTrustedDownstreamToolFailure,
+  type TrustedComputeAgentFunctionCall,
+} from "../compute-platform-gateway.ts";
 import { mintCallerContextToken } from "../agent-caller-context.ts";
 import { resolveInternalMcpCall } from "../internal-mcp.ts";
 import { mintSandboxAuthToken } from "../sandbox-actor.ts";
@@ -161,6 +164,13 @@ export async function executeComputeAgentFunction(
       envelope.error.message ||
         `Compute Agent call failed (${envelope.error.code ?? "unknown"}).`,
     );
+  }
+  if (
+    envelope.result && typeof envelope.result === "object" &&
+    !Array.isArray(envelope.result) &&
+    (envelope.result as { isError?: unknown }).isError === true
+  ) {
+    throw createTrustedDownstreamToolFailure(envelope.result);
   }
   return unwrapMcpResult(envelope.result);
 }

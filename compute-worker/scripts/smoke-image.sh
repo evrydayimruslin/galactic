@@ -2,8 +2,20 @@
 set -eu
 
 image=${1:-galactic-compute:developer-v1}
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cli_package="$script_dir/../../cli/package.json"
+expected_cli_version=$(node -e '
+  const { version } = require(process.argv[1]);
+  if (
+    typeof version !== "string" ||
+    !/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)
+  ) process.exit(1);
+  process.stdout.write(version);
+' "$cli_package")
 
-docker run --rm --entrypoint /bin/bash "$image" -lc '
+docker run --rm \
+  --env "EXPECTED_GALACTIC_CLI_VERSION=$expected_cli_version" \
+  --entrypoint /bin/bash "$image" -lc '
   set -eu
   command -v bash git git-lfs gh jq rg sqlite3 duckdb ffmpeg convert pandoc libreoffice pdfinfo tesseract rclone psql mysql redis-cli gx claude codex playwright deno galactic galacticconnection python3 pip3 npm
   gh --version | grep "gh version 2.96.0"
@@ -23,8 +35,9 @@ docker run --rm --entrypoint /bin/bash "$image" -lc '
   test "$(node -p '\''require("/usr/local/lib/node_modules/npm/node_modules/brace-expansion").expand("a{b,c}d").join(",")'\'')" = "abd,acd"
   test "$(node -p '\''require("/usr/local/lib/node_modules/npm/node_modules/minimatch").minimatch("release-v0.4.52", "release-v{0.4.52,0.4.53}")'\'')" = "true"
   deno --version | grep "^deno 2.9.3 "
-  test "$(galactic --version)" = 2.4.0
-  test "$(galacticconnection --version)" = 2.4.0
+  test "$(cat /opt/galactic/image-metadata/galactic-cli-version.txt)" = "$EXPECTED_GALACTIC_CLI_VERSION"
+  test "$(galactic --version)" = "$EXPECTED_GALACTIC_CLI_VERSION"
+  test "$(galacticconnection --version)" = "$EXPECTED_GALACTIC_CLI_VERSION"
   test ! -e /usr/local/bin/cloudflared
   node --check /opt/galactic/bin/gx.mjs
   node --check /opt/galactic/bridge/gx-mcp.mjs

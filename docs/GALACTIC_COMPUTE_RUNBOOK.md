@@ -132,31 +132,41 @@ Before provisioning either environment:
    to the Compute Worker.
 6. Configure the GitHub `staging` and `production` environments with
    `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, the target's fixed private
-   smoke-Agent credentials, the owner-session bootstrap inputs, and the
-   repository/environment variable `COMPUTE_SANDBOX_BASE_IMAGE`. Environment
+   certification-Agent credentials, the owner-session bootstrap inputs, the
+   exact `COMPUTE_EMERGENCY_STOP_TOKEN` and `COMPUTE_CERTIFICATION_TOKEN`
+   configured on that target's API Worker, and the repository/environment
+   variable `COMPUTE_SANDBOX_BASE_IMAGE`. Environment
    protection rules may add organization-specific review controls, but the
-   canonical release does not require a separate reviewer or canary decision.
+   canonical rollout uses the environment's normal approval policy.
    The base-image variable must be the reviewed complete
    `docker.io/cloudflare/sandbox:0.12.3-python@sha256:<64 lowercase hex>`
    reference. Never substitute an unreviewed digest or a mutable tag.
-7. Configure `COMPUTE_JOB_TOKEN_PEPPER` and
-   `COMPUTE_EMERGENCY_STOP_TOKEN` on each API Worker with `wrangler secret put`.
-   Both must be independently generated random values of at least 32 bytes.
-   Store the emergency token in the approved on-call secret manager; never
-   reuse or expose `SUPABASE_SERVICE_ROLE_KEY`. The workflow verifies only the
-   two secret names and never reads, creates, or replaces their values.
+7. Configure `COMPUTE_JOB_TOKEN_PEPPER`, `COMPUTE_EMERGENCY_STOP_TOKEN`, and
+   `COMPUTE_CERTIFICATION_TOKEN` on each API Worker with `wrangler secret put`.
+   All three must be independently generated random values of at least 32 bytes.
+   Store the emergency token in the approved on-call secret manager and as a
+   protected GitHub environment secret; never reuse or expose
+   `SUPABASE_SERVICE_ROLE_KEY`. The certification token must also differ from
+   that service-role key and the job-token pepper. **Compute Deploy** verifies
+   the Worker secret names without reading them. **Compute Canary Rollout** uses the protected
+   emergency credential only to authenticate the sanitized latch preflight and
+   an explicitly confirmed completed-latch release; it never records the value.
    Likewise, migrations, queues, buckets, lifecycle rules, and environment
    approval policy are operator-provisioned inputs, not deployment side effects.
-8. Keep platform admission OFF outside the serialized **Compute Deploy**
-   workflow. That workflow certifies OFF / `canary` / empty allowlist as its
-   rollback baseline, then atomically deploys `global` / empty allowlist and
-   proves an admitted job. Do not hand-edit `COMPUTE_ENABLED`,
-   `COMPUTE_ROLLOUT_MODE`, or `COMPUTE_CANARY_ALLOWLIST`; use **Compute
-   Admission** only for the disable-only fail-safe.
-9. Record the current production API version, Compute Worker version (if any),
-   image digest, queue backlog, and count of nonterminal Compute runs before a
-   change. This is the rollback baseline.
-10. Run the canonical `Supabase DB` (staging) or `Supabase Production DB`
+8. Keep platform admission OFF outside the serialized **Compute Canary
+   Rollout** workflow. Do not hand-edit `COMPUTE_ENABLED`,
+   `COMPUTE_ENVIRONMENT_DIGEST`, `COMPUTE_ROLLOUT_MODE`, or
+   `COMPUTE_CANARY_ALLOWLIST`, or `COMPUTE_CERTIFICATION_PRINCIPAL`.
+9. Close or merge PR #172 before the production canary. Review disposition for
+   `codex/compute-rpc-boundary-fix`: its admission-boundary intent is superseded
+   by the current public-error/RPC boundary implementation; do not merge or use
+   that old branch as release evidence.
+10. Record the current production API version, Compute Worker version, image
+   digest, queue backlog, and count of nonterminal Compute runs before a change.
+   This is an observation, not rollback authority. The only rollback target is
+   an exact OFF API version captured or uploaded and reverified in the same
+   rollout dispatch that may mutate admission.
+11. Run the canonical `Supabase DB` (staging) or `Supabase Production DB`
     workflow at the exact Compute release SHA and retain its successful run ID.
     The schema workflows pin Checkout, `supabase/setup-cli`, and Supabase CLI
     `2.109.1`; a Compute release will not accept another workflow, SHA, or a run
@@ -365,117 +375,151 @@ opening a public route:
    version as the immutable rollback target.
 5. Run connectivity and denial probes through internal operator code. The
    Compute Worker's public/default fetch must still return `404`.
-6. Refresh the fixed private smoke Agent while admission is still off. Promote
-   the exact tested candidate through its short-lived owner session, then
-   verify the live executable version, `run_compute_smoke`, and a
-   `developer-v1` / shell-only / no-secret manifest ceiling. Its temporary
-   owner policy permits one concurrent job, a 30-second body timeout, and
-   bounded artifact allowance.
-7. Upload one exact-SHA API version with `COMPUTE_ENABLED=1`,
-   `COMPUTE_ROLLOUT_MODE=global`, an empty canary allowlist, and the certified
-   image digest. Read back one stable 100% API version and require the certified
-   Compute version to remain unchanged.
-8. Through a short-lived owner session, run one deterministic async shell job
-   on the fixed smoke Agent. Require admission, execution, exact stdout,
-   terminal settlement, owner-policy cleanup, and a final live API/Compute
-   version fence. Any ambiguous upload, readback, job, cleanup, or final-fence
-   result promotes the certified admission-OFF API version.
-9. Repeat the same migration/API-OFF/Compute/API-global/job-smoke order in
-   production from the immutable release tag.
+6. Refresh the fixed private `examples/compute-certification` Agent while
+   admission is still off. Promote the exact tested candidate through its
+   short-lived owner session, then verify the live executable version, the
+   exact three-function export set, deterministic fixture identity, paused
+   Policy Pillar routine, and a `developer-v1` / browser+shell / no-secret
+   manifest ceiling. The reviewed promotion profile accepts no caller-selected
+   directory, functions, tools, routine, or source files.
+7. Dispatch `staging_canary` from `main`. Upload one exact-SHA API version with
+   `COMPUTE_ENABLED=1`, `COMPUTE_ROLLOUT_MODE=canary`, the sole derived
+   certification owner/Agent pair in both the allowlist and certification
+   principal, and the certified image digest. Read back one stable 100% API
+   version and require the certified Compute version to remain unchanged. The
+   same dispatch captures its own admission-OFF rollback version before the
+   upload.
+8. Through a short-lived owner session, run the full deployed certification
+   suite on that Agent. Require the fixed toolchain, async marker, real browser
+   HTTPS, artifact round trip, nonzero exit, timeout, idempotent cancellation,
+   HTTPS/private-network boundaries, raw-TCP denial, and Policy Pillar allow/
+   deny paths. Then use the dedicated read-only certification bearer to bind
+   every run to persisted receipts, one economic backing, conservation,
+   artifact metadata, zero terminal tokens, a clear stop latch, and clean
+   health counters. Cleanup must also prove exact numeric zero active Compute
+   runs and exact numeric zero active routine runs for the fixed fixture. Any
+   ambiguous upload, readback, scenario, accounting snapshot, cleanup, or
+   final-fence result promotes the same-dispatch OFF API version.
+9. Repeat the migration/API-OFF/fixed-fixture sequence in production from the
+   immutable release tag, then dispatch `production_canary` with the successful
+   staging run as predecessor. After its certification succeeds, keep the exact
+   canary API/Compute pair under active production probes for at least 24
+   elapsed hours. Dispatch `production_global` with that production canary run
+   as predecessor only after the active-soak verifier accepts every probe and
+   deployment inventory entry. The global dispatch revalidates the live
+   canary, the active soak, all bound evidence, and the full production-global
+   certification before it leaves admission global; any ambiguity promotes the
+   OFF version captured by that dispatch.
 
 Normal subsequent releases do not need the bootstrap omission. Deploy order is
 database migration, API control plane with admission off, Compute Worker/image,
-API exact environment digest with admission still off, fixed fixture refresh,
-globally enabled API, admitted-job smoke, and final live-version fence.
+API exact environment digest with admission still off, fixed certification
+fixture refresh, staged policy enablement, deployed scenario certification,
+operator snapshot verification, and the final live-version fence.
 
-Use **Actions → Compute Deploy** for either the one-time bootstrap or a normal
-release. Select
-`staging` from `main` (or `production` from an immutable `v*` tag), enter the
-   exact confirmation, provide the canonical successful schema workflow run ID,
-   and attest that migrations and the API bootstrap are ready. The workflow:
+Use **Actions → Compute Deploy** only when the image, Compute Worker, schema, or
+other release inputs actually changed. Its current `preserve_off` evidence
+certifies the immutable image/Compute version, exact private bindings, schema,
+retention policy, and an admission-OFF API state. A Compute Deploy artifact is
+valid execution-plane evidence, but its API version is never rollback authority
+for a later admission dispatch.
 
-- on the first mutual-binding install, set `api_control_plane_ready=false` and
-  `bootstrap_api_control_plane=true`; this creates the API control-plane target
-  before the Compute Worker attempts to bind to it;
-- on every normal release, use the inverse:
-  `api_control_plane_ready=true` and `bootstrap_api_control_plane=false`.
+The August restoration does **not** run Compute Deploy and does not build, push,
+or redeploy an image or Compute Worker. Release evidence proves the already-live
+Compute digest. **Compute Canary Rollout** uploads full immutable API versions,
+but permits only these five policy binding values to differ from the live API:
 
-Do not set both inputs true or both false. The first-install branch is a
-one-time bootstrap, not an alternate steady-state deployment order.
+- `COMPUTE_ENABLED`;
+- `COMPUTE_ENVIRONMENT_DIGEST`;
+- `COMPUTE_ROLLOUT_MODE`;
+- `COMPUTE_CANARY_ALLOWLIST`; and
+- `COMPUTE_CERTIFICATION_PRINCIPAL`.
 
-1. binds the release to the exact successful schema workflow and environment
-   deploy job at the release SHA, then records a deterministic checksum manifest
-   of every `supabase/migrations/*.sql` file;
-2. verifies Compute plus the API integration and dry-runs both Workers;
-3. verifies—but never provisions—the exact queues, private R2 domain state,
-   bucket lifecycle, and API token-pepper/emergency-stop secret names;
-4. proves that the existing or first-install bootstrap API is one stable,
-   admission-OFF version before Compute rollout;
-5. builds and smokes the reviewed base image, emits an SPDX SBOM, blocks on
-   every CRITICAL and every fixable HIGH vulnerability, pushes it, and resolves the
-   Cloudflare registry digest;
-6. deploys Compute with the `compute-<git SHA>` Worker-version tag, retries only
-   within a bounded first-provisioning window, and polls `wrangler containers
-   list --json` until exactly one named application is `active` or `ready` on
-   the exact registry digest; then
-   redeploys the API with `api-<git SHA>-admission-off`, the same environment
-   digest, and `COMPUTE_ENABLED=0`; verifies both are stable at 100%; verifies the API is
-   exactly OFF / `canary` / empty allowlist; and records both exact version IDs
-   and tags as the certified rollback pair;
-7. refreshes the fixed private smoke Agent, dry-runs and uploads
-   `api-<git SHA>` with global admission, verifies exact bindings/digest and the
-   unchanged Compute version, runs the bounded admitted-job smoke, disables the
-   Agent's temporary Compute policy, and fences both live versions again; and
-8. uploads the immutable evidence packet. A failed or ambiguous step after the
-   global upload promotes and verifies the certified OFF version before the
-   workflow exits failed.
+The last value is the exact derived `owner_uuid/agent_uuid` for the fixed
+certification Agent. It remains populated for `production_global`, where the
+admission canary allowlist is intentionally empty, and is explicitly empty on
+new OFF anchors. The API uses it to scope the read-only certification bearer;
+the bearer cannot request another account, Agent, or run set.
+
+The validator requires the API script ETag, every non-policy binding (including
+secret names), script runtime exports, source-owned SQLite `GxTestSession`, live
+Compute version/tag/ETag/bindings, Container digest, and one-version/100-percent
+deployments to remain exact. Production always passes an explicit empty
+Wrangler environment (`--env ""`); staging always passes `--env staging`.
 
 ### Fail-safe admission disable
 
-**Compute Deploy** is the only workflow authorized to enable admission. Use
-**Actions → Compute Admission** only to stop new admissions by promoting the
-immutable OFF version certified by a successful Compute Deploy run. The
-workflow has no enable, canary, global, source-build, or source-upload path.
+Use **Actions → Compute Canary Rollout → `revert_off`** to stop new admission.
+For staging, dispatch from `main` and type `revert-staging-off`; for production,
+dispatch from the exact immutable `v*` tag and type `revert-production-off`.
+Supply the successful Compute Deploy evidence run and the last successful
+same-target rollout run when one exists. Leave the predecessor blank only for
+first-canary or cancelled-run recovery; `revert_off` then derives and verifies
+a fresh compatible OFF anchor from the exact live API/Compute pair.
 
-For `staging`, dispatch from `main`; for `production`, dispatch from the exact
-immutable `v*` tag used by Compute Deploy. Supply that successful Compute Deploy
-run ID, a non-secret reason, and exactly:
+The dispatch first fences the current API/Compute/Container pair. If admission
+is enabled, it uploads and byte-verifies a fresh OFF version in that same
+dispatch; if it is already OFF, the live version is captured as a no-op anchor.
+Only then may it promote the exact anchor at 100 percent. The historical OFF API
+inside Compute Deploy evidence is deliberately ignored. This prevents the
+July 31 failure mode in which an older OFF version predated the current Durable
+Object graph. **Compute Admission is a blocked legacy path; its first step exits
+before checkout or Cloudflare access.**
 
-- `DISABLE GALACTIC COMPUTE staging`; or
-- `DISABLE GALACTIC COMPUTE production`.
+After OFF is verified, `revert_off` also runs certification cleanup-only: the
+fixed Agent's Compute policy is disabled and its managed Policy Pillar routine
+is paused with the function policy restored to its managed `free` baseline.
+Cleanup is not complete until its evidence reports exact numeric zero for both
+active Compute runs and active routine runs on the fixed fixture.
+Normal certification refuses to mutate a fixture that does not begin at that
+baseline. This makes a fresh cleanup-only dispatch deterministic even when the
+original runner was killed before it could persist in-memory state. Cleanup is
+required in cancelled-run
+recovery because a killed certification runner may not have reached its own
+`finally` cleanup.
 
-The workflow verifies the referenced run and complete release artifact,
-including the exact SHA/ref, schema workflow/job, migration and retention
-checksums, image digest, Compute version, OFF API version, and—on globally
-enabled releases—the admitted-smoke evidence checksum. It immutably reads the
-certified API and Compute versions from Cloudflare and requires their exact
-tags, digest, and private service/queue/R2 bindings. It then dry-runs and
-promotes `wrangler versions deploy <certified-off-id>@100%` using the certified
-release's pinned Wrangler toolchain; it never compiles or uploads source.
-
-Post-promotion readback requires the exact OFF ID at 100% with
-`COMPUTE_ENABLED=0`, `canary`, an empty allowlist, the release digest, and the
-expected private bindings. An ambiguous attempt promotes the same OFF version
-again and repeats that verification. The switch stops **new admission only**;
-accepted work continues to drain. Use the separately authenticated emergency
-stop below when accepted execution must also be terminated.
+Post-promotion readback requires the exact OFF ID, one version at 100 percent,
+unchanged Compute and Container identities, `COMPUTE_ENABLED=0`, `canary`, and
+an empty allowlist. The switch stops **new admission only**; accepted work
+continues to drain. Use the separately authenticated emergency stop below when
+accepted execution must also be terminated.
 
 Every attempt uploads sanitized request, release-provenance, certified-version,
 promotion, and postcondition evidence for 90 days. Secret values and unfiltered
 Worker version metadata stay in runner temporary storage.
 
-The release workflow's compensation is durable once its step starts, but GitHub
-Actions cannot guarantee that it runs if the runner is killed immediately after
-Cloudflare accepts global enablement. Treat a lost or cancelled enable run as an
-incident: immediately dispatch this disable workflow with the same Compute
-Deploy run ID and verify the exact OFF-version promotion in Cloudflare. Never
-cancel an in-progress Compute Deploy as an operational rollback mechanism.
+The rollout workflow compensates to its same-dispatch OFF anchor after any
+ambiguous promotion, certification, snapshot, cleanup, latch, or final-fence result. GitHub Actions
+cannot guarantee compensation after a runner is killed. Treat a lost or
+cancelled mutating run as an incident: inspect Cloudflare's one-version/100%
+state, then immediately dispatch a new `revert_off` with predecessor blank.
+That recovery dispatch still requires successful Compute release evidence and
+creates its own fresh compatible OFF anchor. Never use a historical tag lookup,
+`wrangler rollback`, “previous,” or a cancelled run as rollback authority.
+If staging `main` advanced after the failed mutation, set `recovery_source_sha`
+to the failed rollout's exact `head_sha`. The workflow accepts it only for
+`revert_off`, requires the SHA to be the current ref or an ancestor in the same
+repository, installs its independently pinned dependencies with lifecycle
+scripts disabled and without deployment credentials, and uses that checkout
+only for the OFF upload. The Cloudflare version tag and committed rollout
+evidence record that upload source SHA separately from the workflow dispatch
+SHA. Current validators
+still require the resulting version's script ETag and all non-policy execution
+metadata to match the live API before it can receive traffic.
 
-The independent **Compute CI** workflow runs the same locked image build,
-smoke, SBOM, checksum-pinned Grype gate, Worker tests, and production/staging
-dry runs for every relevant pull request. Both workflows retain the unfiltered
-JSON finding set and fail before image push/deploy on any CRITICAL or fixable
-HIGH finding. Any temporary exception must identify one exact
+The independent **Compute CI** workflow runs its lightweight Worker, CLI,
+API/Compute bridge, and production/staging dry-run contracts automatically for
+relevant pull requests and `main` pushes. A manual dispatch runs those contracts
+first and then adds the locked image build, smoke, SBOM, checksum-pinned Grype
+gate, and evidence packet; that heavy job never publishes or deploys an image.
+The restoration workflow intentionally does not dispatch the heavy job or treat
+today's working-tree image inputs as evidence about the already-live digest. In
+particular, a newer CLI package version in source does not imply that version
+exists in the certified image; reconcile such image contract drift in the next
+Compute image release, not in this vars-only restoration. Compute CI and
+Compute Deploy retain the unfiltered JSON finding set and fail before image
+push/deploy on any CRITICAL or fixable HIGH finding.
+Any temporary exception must identify one exact
 CVE/package, owner, rationale, and expiry; a blanket severity ignore is not an
 acceptable launch gate. Neither workflow discovers or invents the base-image
 digest.
@@ -715,29 +759,117 @@ the exact page is retried; it never guesses past the failed object.
 
 ## Rollout
 
-1. **Certified OFF transition:** apply migrations, certify the exact OFF API,
-   deploy the image/Compute Worker, verify resources and the exact digest.
-2. **Fixed-fixture refresh:** while admission is off, hash the exact private
-   smoke Agent source and inspect Agent Home. Reuse an exact verified live
-   version, promote an exact already-tested candidate, or use the connected
-   builder to test and stage one explicit new version. The short-lived owner
-   session reviews and promotes that exact candidate, then verifies the live
-   executable version, `run_compute_smoke`, and the shell-only/no-secret
-   manifest ceiling while its per-Agent policy remains disabled. If three
-   unrelated drafts already occupy the connected-builder ceiling, fail closed;
-   the release never deletes or bypasses owner drafts.
-3. **Automatic staging release:** enable globally from the certified pair, run
-   one bounded admitted job, require settlement and policy cleanup, and fence
-   both live versions. Any ambiguity restores OFF.
-4. **Automatic production release:** repeat the identical sequence from the
-   immutable release tag. A successful Compute Deploy means Compute is globally
-   available; it does not require a separate canary decision or reviewer.
+Dispatch **Compute Canary Rollout** in this exact order. Each dispatch uses the
+same API deployment lock as API Deploy, Compute Deploy, and emergency disable;
+`cancel-in-progress` is false.
+
+Before the first dispatch, provision a distinct
+`COMPUTE_CERTIFICATION_TOKEN` secret in both protected GitHub environments and
+the matching API Worker. It authenticates the bounded, read-only
+`POST /api/admin/compute/certification` snapshot and the sanitized read-only
+`GET /api/admin/compute/emergency-stop` latch preflight used by probes. It is
+not accepted by either destructive emergency-stop or release POST. Conversely,
+the emergency-stop bearer is not accepted by the certification snapshot route.
+The snapshot step receives no owner-session, Supabase, Cloudflare, or
+emergency-stop secret; the owner suite never receives the certification bearer.
+The API must fail closed if this secret equals
+`COMPUTE_EMERGENCY_STOP_TOKEN`, `SUPABASE_SERVICE_ROLE_KEY`, or
+`COMPUTE_JOB_TOKEN_PEPPER`; compare them inside the Worker, not by co-locating
+the values in an Actions step.
+The fixed certification Agent's `run_compute_policy_probe` function must be at
+the managed `free` baseline and its certification routine must be paused before
+a normal dispatch. The suite refuses to mutate any other starting policy;
+cleanup-only is the recovery path that restores this fixed invariant.
+
+Provision a separate protected GitHub environment named
+`production-compute-probe` for `.github/workflows/compute-probe.yml`. Its
+Cloudflare credential is `COMPUTE_PROBE_CLOUDFLARE_TOKEN`, with only the read
+permissions needed to inspect Worker versions, deployments, bindings,
+Containers, queues, and DLQs. The probe environment must not expose the rollout
+`CLOUDFLARE_API_TOKEN`, `COMPUTE_EMERGENCY_STOP_TOKEN`, or any credential that
+can upload or promote an API version, change rollout vars, or release a stop
+latch. Keep the bounded owner-session and read-only certification credentials
+in separate steps under the same credential-domain rules as the rollout. An
+OFF production API is a successful probe no-op: record and retain the exact
+OFF/live-deployment evidence, admit no job, and do not count that run toward an
+active canary soak.
+
+1. **`staging_canary` from `main`:** type `rollout-staging-canary`, supply the
+   successful staging `preserve_off` Compute Deploy run, and leave predecessor
+   blank. The workflow derives the exact owner/Agent pair from the authenticated
+   fixed token; the allowlist is never dispatch input. It refreshes the closed
+   `compute-certification` profile, enables only that pair, and runs the
+   `staging-full` suite. Ten fixed scenarios plus the managed Policy Pillar run
+   must settle and clean up, with both active-run remainder counters exactly
+   zero. A separate bearer then reads exactly those eleven run IDs and proves
+   persisted accounting, receipts, artifact integrity, latch, tokens, and
+   health before the final live fence.
+2. **`production_canary` from the immutable `v*` tag:** type
+   `rollout-production-canary`, supply the production Compute Deploy run, and
+   bind the successful staging-canary run as predecessor. The predecessor must
+   have the identical release SHA and combined certification evidence. The
+   production canary derives and dogfoods the production owner/Agent pair with
+   the `production-canary` profile in the same way.
+3. **24-hour active production soak:** do not hold a runner. The dedicated
+   probe workflow runs a lifecycle canary every 15 minutes and a real browser
+   HTTPS/CA/screenshot probe hourly. The authoritative window begins only when
+   the production-canary workflow is successful and its artifact is published;
+   probes created during the finalize/upload interval are outside the window.
+   A production-global dispatch fails closed unless at least 24 elapsed hours
+   after that publication are covered, adjacent lifecycle probes are
+   no more than 35 minutes apart, every required hourly browser result exists,
+   every probe succeeded, and the final lifecycle probe is no more than 35
+   minutes old. Every probe must bind the same API version, Compute version and
+   digest, policy, and certification principal as the production-canary
+   evidence. The dispatch queue backlog and oldest age must remain zero, DLQ
+   depth may not increase from the accepted baseline, and settlement, receipt,
+   conservation, cleanup, and reconciliation violations must remain exactly
+   zero. The workflow retains each private, hashed probe artifact for 30 days.
+   Any production API or Compute deployment during the interval resets the soak
+   to that deployment; staging-only deploys do not. A gap, failure, drift,
+   missing artifact, incomplete run inventory, or ambiguous result starts a new
+   24-hour window.
+4. **`production_global` from the same immutable tag:** after the active soak
+   passes, type `rollout-production-global` and bind the successful production
+   canary. Before receiving any rollout-var mutation credential, the workflow
+   downloads the complete probe and API/Compute deployment inventories,
+   verifies the 24-hour contract, and binds its deterministic verification
+   summary to the rollout evidence. It then requires the exact canary
+   API/Compute deployment to remain unchanged, uploads a fresh no-traffic OFF
+   rollback anchor in this dispatch, uploads the global/empty-allowlist
+   candidate, promotes that exact UUID, re-resolves the same fixed owner/Agent
+   identity, runs the complete `production-global` suite and private snapshot,
+   and fences everything again.
 5. **Operational validation:** keep error, latency, budget conservation, DLQ,
    reconciliation, and cost signals green. Exercise low-privilege secret
-   delivery/redaction separately; the release smoke intentionally uses none.
-6. **Rollback readiness:** retain the certified OFF version and successful
-   Compute Deploy run ID, and periodically drill admission disable, drain,
-   token revocation, sandbox destruction, settlement, and emergency stop.
+   delivery/redaction separately; the release certification intentionally uses
+   none.
+6. **Rollback readiness:** retain successful rollout run IDs and periodically
+   drill `revert_off`, drain, token revocation, sandbox destruction, settlement,
+   and emergency stop. Retained OFF IDs are audit evidence only; every new
+   rollback dispatch creates or captures its own anchor.
+
+A canary/global dispatch is not successful until every public scenario, Policy
+Pillar transition, fixed-fixture cleanup, exact-run operator snapshot, combined
+evidence validator, latch check, final version fence, deterministic evidence
+manifest, and 90-day artifact upload succeed. Fixed-fixture cleanup includes
+strict evidence that active Compute runs and active routine runs both have an
+exact numeric remainder of zero. The full suite is not retried:
+once it has admitted a run, a second invocation would create a different
+economic record. A failed dispatch compensates admission to its same-dispatch
+OFF anchor and invokes cleanup-only instead.
+
+The private rollout artifact contains four chained certification files:
+`compute-certification-<target>.json`,
+`compute-certification-run-ids-<target>.json`,
+`compute-certification-snapshot-<target>.json`, and
+`compute-certification-verification-<target>.json`. The committed `rollout.json`
+references only the combined verification file and its SHA-256. Treat the
+snapshot as sensitive operational evidence because it includes owner, receipt,
+and accounting identifiers. If snapshot authentication or principal binding
+fails, do not rerun the suite inside the failed dispatch or substitute a manual
+SQL export. Let compensation restore OFF, correct the protected secret/Worker
+principal, and start a fresh serialized dispatch.
 
 ## Rollback and emergency stop
 
@@ -750,6 +882,8 @@ R2 objects.
    normal execution, recovery, teardown, and settlement unless step 2 is used.
    The bulk-stop endpoint refuses to start while `COMPUTE_ENABLED=1`; disabling
    admission and stopping accepted execution are deliberately separate acts.
+   Use the serialized `revert_off` stage above; never promote an OFF version
+   taken from an older release artifact.
 2. To terminate all accepted work, create one UUID for the stop operation and
    send the dedicated emergency-credential request below. The confirmation,
    reason, and `Idempotency-Key` are mandatory. A `202`
@@ -800,8 +934,10 @@ curl --fail-with-body --request POST \
    Compute reservation is left `reserved`.
 5. Reconcile all reservations and receipts. A rollback is incomplete while any
    hold or `settlement_pending` run remains unexplained.
-6. Roll the API and Compute Worker back to their recorded compatible versions.
-   Sandbox SDK code and base image must move together.
+6. Keep the API/Compute pair compatible. Admission-only rollback changes the
+   five API policy vars and leaves the verified Compute Worker/image untouched.
+   If execution-plane bytes are actually bad, perform a separate reviewed
+   Compute release; Sandbox SDK code and base image must move together.
 7. Keep the safe incomplete-multipart rule and the exact private checkpoint
    expiry active, and preserve DB/queue evidence. Do not empty or delete the
    artifact bucket during an incident, and do not add any other
@@ -825,9 +961,10 @@ curl --fail-with-body --request POST \
 ```
 
    Repeat an uncertain release with the same header and body. Only after the
-   release is audited should a new immutable Compute Deploy re-enable global
-   admission. The emergency-stop release route never changes
-   `COMPUTE_ENABLED` itself.
+   release is audited should `staging_canary → production_canary →` a new
+   24-hour active production soak `→ production_global` run again from the
+   immutable release SHA. Reusing pre-incident probe evidence is forbidden.
+   The emergency-stop release route never changes `COMPUTE_ENABLED` itself.
 
 If only the image is bad, disable admission, roll the Compute Worker to the last
 known compatible image/version, allow or individually cancel accepted runs as
@@ -849,9 +986,28 @@ requires staged SDK/image transport migrations.
 - [ ] local image build and image smoke
 - [ ] Compute CI evidence artifact, locked-input hashes, and SPDX SBOM
 - [ ] immutable Compute Deploy evidence artifact
+- [ ] staging-canary evidence artifact bound to the exact release SHA
+- [ ] production-canary evidence artifact and exact active canary baseline
+- [ ] 24 hours of 15-minute lifecycle probes with no gap over 35 minutes
+- [ ] hourly browser HTTPS/CA/screenshot evidence and a fresh final probe
+- [ ] zero failed probes, API/Compute/digest/policy/principal drift, DLQ growth,
+      accounting violations, settlement violations, or reconciliation failures
+- [ ] complete API/Compute deployment inventory proving no soak-resetting deploy
+- [ ] deterministic active-soak verification bound before mutation credentials
+- [ ] private hashed probe evidence retained for 30 days
+- [ ] production-global predecessor proof and final live fence
+- [ ] same-dispatch OFF rollback anchor (`captured` or verified `uploaded`)
 - [ ] exact Container name/image/version reports `active` or `ready`
-- [ ] exact certified-OFF and active-global API version evidence
-- [ ] admitted-job smoke evidence checksum and post-smoke live-version fence
+- [ ] exact canary/global API version and policy-only byte-equivalence evidence
+- [ ] public deployed-certification suite and exact run-set checksums
+- [ ] private certification snapshot and combined verification checksum
+- [ ] exact receipt/backing conservation, zero terminal tokens, clear latch,
+      and clean health counters
+- [ ] browser/TLS, artifact round-trip, timeout/cancel, egress, raw-TCP, and
+      Policy Pillar proofs
+- [ ] strict fixed-fixture cleanup evidence with exact numeric zero active
+      Compute runs and exact numeric zero active routine runs
+- [ ] post-certification live-version fence
 - [ ] reviewed immutable Sandbox base-image reference
 - [ ] deployed image digest and Container readiness
 - [ ] staging matrix run/receipt IDs
@@ -863,5 +1019,5 @@ requires staged SDK/image transport migrations.
 - [ ] rollback drill with all holds settled
 - [ ] audited emergency bulk-stop drill (claimed-body destroy before receipt)
 - [ ] emergency-stop idempotent retry and separate latch-release drill
-- [ ] production global-admission postcondition and fixed smoke-Agent policy cleanup
+- [ ] production global-admission postcondition and fixed certification-Agent cleanup
 - [ ] admission-off drain drill (distinct from emergency execution stop)

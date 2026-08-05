@@ -1,6 +1,35 @@
 /** The only manifest/runtime permission that admits Galactic Compute. */
 export declare const COMPUTE_EXEC_PERMISSION: "compute:exec";
 /**
+ * Public admission-off response. Keep this copy centralized: the API binding,
+ * Dynamic Worker SDK, MCP response, and CLI must not drift or reveal which
+ * internal admission fence (operator flag or emergency stop) is active.
+ */
+export declare const COMPUTE_ADMISSION_DISABLED_CODE: "COMPUTE_ADMISSION_DISABLED";
+export declare const COMPUTE_ADMISSION_DISABLED_MESSAGE: "Galactic Compute is not accepting new jobs right now.";
+export declare const COMPUTE_ADMISSION_DISABLED_HINT: "Try again later. This request did not start a Compute job.";
+export declare const COMPUTE_ADMISSION_DISABLED_ACTION: "retry_later";
+export type ComputePublicErrorAction = typeof COMPUTE_ADMISSION_DISABLED_ACTION;
+/** Closed, secret-safe error data that may cross into Agent code and MCP. */
+export interface ComputePublicErrorDetails {
+    code: string;
+    hint?: string;
+    action?: ComputePublicErrorAction;
+}
+/** Binding transport shape; `message` remains the human-facing primary copy. */
+export interface ComputePublicError extends ComputePublicErrorDetails {
+    message: string;
+}
+/**
+ * Normalize the only public Compute error wire shape. Optional guidance is
+ * deliberately code-specific: a new action or arbitrary hint cannot become a
+ * platform instruction merely by satisfying a broad string grammar.
+ */
+export declare function normalizeComputePublicError(value: unknown): ComputePublicError | null;
+export declare function computePublicErrorDetails(value: ComputePublicError): ComputePublicErrorDetails;
+/** Validate a details-only projection received by an MCP or CLI boundary. */
+export declare function normalizeComputePublicErrorDetails(value: unknown): ComputePublicErrorDetails | null;
+/**
  * Compute profiles are immutable, versioned platform contracts. Callers never
  * provide an image name or digest directly.
  */

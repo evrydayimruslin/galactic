@@ -4,6 +4,130 @@ import { validateEnvVarKey } from './env.ts';
 export const COMPUTE_EXEC_PERMISSION = 'compute:exec' as const;
 
 /**
+ * Public admission-off response. Keep this copy centralized: the API binding,
+ * Dynamic Worker SDK, MCP response, and CLI must not drift or reveal which
+ * internal admission fence (operator flag or emergency stop) is active.
+ */
+export const COMPUTE_ADMISSION_DISABLED_CODE =
+  'COMPUTE_ADMISSION_DISABLED' as const;
+export const COMPUTE_ADMISSION_DISABLED_MESSAGE =
+  'Galactic Compute is not accepting new jobs right now.' as const;
+export const COMPUTE_ADMISSION_DISABLED_HINT =
+  'Try again later. This request did not start a Compute job.' as const;
+export const COMPUTE_ADMISSION_DISABLED_ACTION = 'retry_later' as const;
+
+export type ComputePublicErrorAction =
+  typeof COMPUTE_ADMISSION_DISABLED_ACTION;
+
+/** Closed, secret-safe error data that may cross into Agent code and MCP. */
+export interface ComputePublicErrorDetails {
+  code: string;
+  hint?: string;
+  action?: ComputePublicErrorAction;
+}
+
+/** Binding transport shape; `message` remains the human-facing primary copy. */
+export interface ComputePublicError extends ComputePublicErrorDetails {
+  message: string;
+}
+
+const COMPUTE_PUBLIC_ERROR_CODE_PATTERN = /^COMPUTE_[A-Z0-9_]{1,56}$/u;
+const COMPUTE_PUBLIC_ERROR_MESSAGE_MAX_LENGTH = 1_024;
+
+function computeErrorRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function hasExactComputeErrorKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[],
+): boolean {
+  const keys = Object.keys(value);
+  return keys.length === expected.length &&
+    expected.every((key) => Object.prototype.hasOwnProperty.call(value, key));
+}
+
+/**
+ * Normalize the only public Compute error wire shape. Optional guidance is
+ * deliberately code-specific: a new action or arbitrary hint cannot become a
+ * platform instruction merely by satisfying a broad string grammar.
+ */
+export function normalizeComputePublicError(
+  value: unknown,
+): ComputePublicError | null {
+  const input = computeErrorRecord(value);
+  if (!input) return null;
+  if (
+    typeof input.code !== 'string' ||
+    !COMPUTE_PUBLIC_ERROR_CODE_PATTERN.test(input.code) ||
+    typeof input.message !== 'string' ||
+    input.message.length === 0 ||
+    input.message.length > COMPUTE_PUBLIC_ERROR_MESSAGE_MAX_LENGTH
+  ) {
+    return null;
+  }
+
+  if (input.code === COMPUTE_ADMISSION_DISABLED_CODE) {
+    if (
+      !hasExactComputeErrorKeys(input, ['code', 'message', 'hint', 'action']) ||
+      input.message !== COMPUTE_ADMISSION_DISABLED_MESSAGE ||
+      input.hint !== COMPUTE_ADMISSION_DISABLED_HINT ||
+      input.action !== COMPUTE_ADMISSION_DISABLED_ACTION
+    ) {
+      return null;
+    }
+    return {
+      code: COMPUTE_ADMISSION_DISABLED_CODE,
+      message: COMPUTE_ADMISSION_DISABLED_MESSAGE,
+      hint: COMPUTE_ADMISSION_DISABLED_HINT,
+      action: COMPUTE_ADMISSION_DISABLED_ACTION,
+    };
+  }
+
+  // PR1 has one reviewed action. Other errors remain code + message only.
+  if (!hasExactComputeErrorKeys(input, ['code', 'message'])) return null;
+  return { code: input.code, message: input.message };
+}
+
+export function computePublicErrorDetails(
+  value: ComputePublicError,
+): ComputePublicErrorDetails {
+  return {
+    code: value.code,
+    ...(value.hint !== undefined ? { hint: value.hint } : {}),
+    ...(value.action !== undefined ? { action: value.action } : {}),
+  };
+}
+
+/** Validate a details-only projection received by an MCP or CLI boundary. */
+export function normalizeComputePublicErrorDetails(
+  value: unknown,
+): ComputePublicErrorDetails | null {
+  const input = computeErrorRecord(value);
+  if (!input || typeof input.code !== 'string') return null;
+  if (input.code === COMPUTE_ADMISSION_DISABLED_CODE) {
+    return hasExactComputeErrorKeys(input, ['code', 'hint', 'action']) &&
+        input.hint === COMPUTE_ADMISSION_DISABLED_HINT &&
+        input.action === COMPUTE_ADMISSION_DISABLED_ACTION
+      ? {
+        code: COMPUTE_ADMISSION_DISABLED_CODE,
+        hint: COMPUTE_ADMISSION_DISABLED_HINT,
+        action: COMPUTE_ADMISSION_DISABLED_ACTION,
+      }
+      : null;
+  }
+  if (
+    !COMPUTE_PUBLIC_ERROR_CODE_PATTERN.test(input.code) ||
+    !hasExactComputeErrorKeys(input, ['code'])
+  ) {
+    return null;
+  }
+  return { code: input.code };
+}
+
+/**
  * Compute profiles are immutable, versioned platform contracts. Callers never
  * provide an image name or digest directly.
  */
