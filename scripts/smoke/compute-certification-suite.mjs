@@ -14,6 +14,12 @@ import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import {
+  cloudflareWorkerVersionOverride,
+  cloudflareWorkerVersionId,
+  COMPUTE_CERTIFICATION_API_VERSION_ID_ENV,
+} from "./cloudflare-worker-version-override.mjs";
+
 export const COMPUTE_CERTIFICATION_KIND =
   "galactic_compute_deployed_certification";
 export const COMPUTE_CERTIFICATION_SCHEMA_VERSION = 1;
@@ -56,10 +62,12 @@ export const COMPUTE_CERTIFICATION_TARGETS = Object.freeze({
   staging: Object.freeze({
     name: "staging",
     apiBase: "https://ultralight-api-staging.rgn4jz429m.workers.dev",
+    apiWorker: "ultralight-api-staging",
   }),
   production: Object.freeze({
     name: "production",
     apiBase: "https://api.connectgalactic.com",
+    apiWorker: "ultralight-api",
   }),
 });
 
@@ -239,6 +247,17 @@ export function computeCertificationConfigFromEnv(env = process.env, argv = []) 
     env.COMPUTE_RELEASE_EVIDENCE_DIR,
     "COMPUTE_RELEASE_EVIDENCE_DIR",
   ));
+  let apiVersionId = null;
+  try {
+    apiVersionId = cloudflareWorkerVersionId(
+      env[COMPUTE_CERTIFICATION_API_VERSION_ID_ENV],
+    );
+  } catch {
+    fail(
+      "INVALID_CONFIGURATION",
+      `${COMPUTE_CERTIFICATION_API_VERSION_ID_ENV} is invalid.`,
+    );
+  }
   return {
     profile: profileName,
     target: target.name,
@@ -251,6 +270,7 @@ export function computeCertificationConfigFromEnv(env = process.env, argv = []) 
       env[OWNER_ACCESS_TOKEN_ENV],
       OWNER_ACCESS_TOKEN_ENV,
     ),
+    apiVersionId,
     evidencePath: resolve(
       evidenceDirectory,
       `compute-certification-${target.name}.json`,
@@ -308,6 +328,12 @@ async function request({
       headers: {
         Authorization: `Bearer ${context.ownerAccessToken}`,
         Accept: bytes ? "application/octet-stream" : "application/json",
+        ...(context.apiVersionOverride === null
+          ? {}
+          : {
+            "Cloudflare-Workers-Version-Overrides":
+              context.apiVersionOverride,
+          }),
         ...(body === undefined ? {} : { "Content-Type": "application/json" }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -1928,6 +1954,18 @@ export async function runComputeCertificationSuite(
   if (profile.target !== null && profile.target !== target.name) {
     fail("INVALID_CONFIGURATION", "Certification profile target is invalid.");
   }
+  let apiVersionOverride = null;
+  try {
+    apiVersionOverride = cloudflareWorkerVersionOverride(
+      target.apiWorker,
+      config.apiVersionId,
+    );
+  } catch {
+    fail(
+      "INVALID_CONFIGURATION",
+      `${COMPUTE_CERTIFICATION_API_VERSION_ID_ENV} is invalid.`,
+    );
+  }
   const expectedMarker = buildComputeCertificationMarker(
     config.candidateSha,
     config.workflowRunId,
@@ -1943,6 +1981,7 @@ export async function runComputeCertificationSuite(
       OWNER_ACCESS_TOKEN_ENV,
     ),
     agentId: canonicalUuid(config.agentId, "certification Agent id"),
+    apiVersionOverride,
     requestTimeoutMs,
     activeRunIds: new Set(),
   };

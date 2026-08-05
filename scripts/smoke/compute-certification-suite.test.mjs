@@ -29,6 +29,9 @@ const POLICY_ROUTINE_ID = "99999999-9999-4999-8999-999999999999";
 const POLICY_ROUTINE_RUN_ID = "88888888-8888-4888-8888-888888888888";
 const CANDIDATE_SHA = "a".repeat(40);
 const WORKFLOW_RUN_ID = "123456789";
+const CANDIDATE_API_VERSION_ID = "12345678-1234-1234-1234-123456789abc";
+const PRODUCTION_VERSION_OVERRIDE =
+  `ultralight-api="${CANDIDATE_API_VERSION_ID}"`;
 const API_BASE = "https://api.connectgalactic.com";
 const OWNER_TOKEN = "owner-token-must-never-enter-evidence";
 const MARKER = buildComputeCertificationMarker(
@@ -141,6 +144,7 @@ test("derives only a pinned target/profile and private evidence paths", () => {
     GALACTIC_SMOKE_APP_ID: AGENT_ID,
     GALACTIC_OWNER_ACCESS_TOKEN: OWNER_TOKEN,
     COMPUTE_RELEASE_EVIDENCE_DIR: "/tmp/compute-certification",
+    COMPUTE_CERTIFICATION_API_VERSION_ID: CANDIDATE_API_VERSION_ID,
   });
   assert.equal(result.apiBase, API_BASE);
   assert.equal(result.marker, MARKER);
@@ -153,6 +157,23 @@ test("derives only a pinned target/profile and private evidence paths", () => {
     "/tmp/compute-certification/compute-certification-run-ids-production.json",
   );
   assert.equal(Object.hasOwn(result, "certificationToken"), false);
+  assert.equal(result.apiVersionId, CANDIDATE_API_VERSION_ID);
+});
+
+test("fails closed on a malformed API version override", () => {
+  assert.throws(
+    () => computeCertificationConfigFromEnv({
+      COMPUTE_CERTIFICATION_PROFILE: "production-canary",
+      GALACTIC_SMOKE_TARGET: "production",
+      COMPUTE_RELEASE_SHA: CANDIDATE_SHA,
+      COMPUTE_RELEASE_RUN_ID: WORKFLOW_RUN_ID,
+      GALACTIC_SMOKE_APP_ID: AGENT_ID,
+      GALACTIC_OWNER_ACCESS_TOKEN: OWNER_TOKEN,
+      COMPUTE_RELEASE_EVIDENCE_DIR: "/tmp/compute-certification",
+      COMPUTE_CERTIFICATION_API_VERSION_ID: 'bad\" , injected="value',
+    }),
+    (error) => error.code === "INVALID_CONFIGURATION",
+  );
 });
 
 test("fails closed when profile and target do not match", () => {
@@ -991,7 +1012,9 @@ test("certifies admitted owner-visible probes and always disables the fixture", 
   };
   const written = [];
   let clock = Date.parse("2026-08-04T12:00:00.000Z");
-  const evidence = await runComputeCertificationSuite(config(), {
+  const evidence = await runComputeCertificationSuite(config({
+    apiVersionId: CANDIDATE_API_VERSION_ID,
+  }), {
     fetchImpl,
     now: () => clock,
     sleep: async (milliseconds) => {
@@ -1015,7 +1038,9 @@ test("certifies admitted owner-visible probes and always disables the fixture", 
   assert.equal(JSON.stringify(written).includes(OWNER_TOKEN), false);
   assert.equal(
     calls.every((call) =>
-      call.headers.get("authorization") === `Bearer ${OWNER_TOKEN}`
+      call.headers.get("authorization") === `Bearer ${OWNER_TOKEN}` &&
+      call.headers.get("cloudflare-workers-version-overrides") ===
+        PRODUCTION_VERSION_OVERRIDE
     ),
     true,
   );

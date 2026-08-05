@@ -1455,18 +1455,26 @@ jobs:
         shell: bash
         env:
           COMPUTE_EMERGENCY_STOP_TOKEN: ${{ secrets.COMPUTE_EMERGENCY_STOP_TOKEN }}
+          CANDIDATE_API_VERSION_ID: ${{ steps.prepare.outputs.candidate_version_id }}
         run: |
           set -euo pipefail
           umask 077
+          [[ "$CANDIDATE_API_VERSION_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || {
+            echo "Candidate API version id is malformed." >&2
+            exit 1
+          }
+          version_override="$API_WORKER=\"$CANDIDATE_API_VERSION_ID\""
           status_file="$EVIDENCE_DIR/emergency-stop-after-promotion.json"
           if [ "$REQUESTED_STAGE" = "revert_off" ]; then
             converged=false
+            consecutive=0
             for attempt in {1..12}; do
               attempt_file="${status_file%.json}-attempt-$(printf '%02d' "$attempt").json"
               curl -fsS --retry 2 --connect-timeout 10 --max-time 30 \
                 -H "Authorization: Bearer $COMPUTE_EMERGENCY_STOP_TOKEN" \
                 -H "Accept: application/json" \
                 -H "Cache-Control: no-cache" \
+                -H "Cloudflare-Workers-Version-Overrides: $version_override" \
                 "$API_BASE/api/admin/compute/emergency-stop" > "$attempt_file"
               cp "$attempt_file" "$status_file"
               latch_state="$(jq -er '.latch_state' "$attempt_file")"
@@ -1477,8 +1485,13 @@ jobs:
                    node scripts/release/verify-compute-emergency-stop-status.mjs \
                      "$attempt_file" disabled completed "$operation_id" \
                      >/dev/null 2>&1; }; then
-                converged=true
-                break
+                consecutive=$((consecutive + 1))
+                if [ "$consecutive" -ge 3 ]; then
+                  converged=true
+                  break
+                fi
+              else
+                consecutive=0
               fi
               if ! node scripts/release/verify-compute-emergency-stop-status.mjs \
                    "$attempt_file" enabled clear >/dev/null 2>&1; then
@@ -1509,18 +1522,25 @@ jobs:
             fi
           else
             converged=false
+            consecutive=0
             for attempt in {1..12}; do
               attempt_file="${status_file%.json}-attempt-$(printf '%02d' "$attempt").json"
               curl -fsS --retry 2 --connect-timeout 10 --max-time 30 \
                 -H "Authorization: Bearer $COMPUTE_EMERGENCY_STOP_TOKEN" \
                 -H "Accept: application/json" \
                 -H "Cache-Control: no-cache" \
+                -H "Cloudflare-Workers-Version-Overrides: $version_override" \
                 "$API_BASE/api/admin/compute/emergency-stop" > "$attempt_file"
               cp "$attempt_file" "$status_file"
               if node scripts/release/verify-compute-emergency-stop-status.mjs \
                    "$attempt_file" enabled clear >/dev/null 2>&1; then
-                converged=true
-                break
+                consecutive=$((consecutive + 1))
+                if [ "$consecutive" -ge 3 ]; then
+                  converged=true
+                  break
+                fi
+              else
+                consecutive=0
               fi
               if ! node scripts/release/verify-compute-emergency-stop-status.mjs \
                    "$attempt_file" disabled clear >/dev/null 2>&1; then
@@ -1633,6 +1653,7 @@ jobs:
           COMPUTE_RELEASE_SHA: ${{ github.sha }}
           COMPUTE_RELEASE_RUN_ID: ${{ github.run_id }}
           COMPUTE_RELEASE_EVIDENCE_DIR: ${{ github.workspace }}/compute-rollout-evidence
+          COMPUTE_CERTIFICATION_API_VERSION_ID: ${{ steps.prepare.outputs.candidate_version_id }}
         run: |
           set -euo pipefail
           suite_file="$EVIDENCE_DIR/compute-certification-$REQUESTED_TARGET.json"
@@ -1694,6 +1715,7 @@ jobs:
         shell: bash
         env:
           COMPUTE_CERTIFICATION_TOKEN: ${{ secrets.COMPUTE_CERTIFICATION_TOKEN }}
+          CANDIDATE_API_VERSION_ID: ${{ steps.prepare.outputs.candidate_version_id }}
         run: |
           set -euo pipefail
           umask 077
@@ -1701,6 +1723,11 @@ jobs:
             echo "The selected environment must provide COMPUTE_CERTIFICATION_TOKEN." >&2
             exit 1
           }
+          [[ "$CANDIDATE_API_VERSION_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || {
+            echo "Candidate API version id is malformed." >&2
+            exit 1
+          }
+          version_override="$API_WORKER=\"$CANDIDATE_API_VERSION_ID\""
           identity="$EVIDENCE_DIR/canary-identity.json"
           run_set="$EVIDENCE_DIR/compute-certification-run-ids-$REQUESTED_TARGET.json"
           request_file="$RUNNER_TEMP/compute-certification-snapshot-request.json"
@@ -1736,6 +1763,7 @@ jobs:
             -H "Authorization: Bearer $COMPUTE_CERTIFICATION_TOKEN" \
             -H "Content-Type: application/json" \
             -H "Accept: application/json" \
+            -H "Cloudflare-Workers-Version-Overrides: $version_override" \
             --data-binary "@$request_file" \
             "$API_BASE/api/admin/compute/certification" > "$response_file"
           unset COMPUTE_CERTIFICATION_TOKEN
@@ -1827,12 +1855,19 @@ jobs:
         shell: bash
         env:
           COMPUTE_EMERGENCY_STOP_TOKEN: ${{ secrets.COMPUTE_EMERGENCY_STOP_TOKEN }}
+          CANDIDATE_API_VERSION_ID: ${{ steps.prepare.outputs.candidate_version_id }}
         run: |
           set -euo pipefail
+          [[ "$CANDIDATE_API_VERSION_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || {
+            echo "Candidate API version id is malformed." >&2
+            exit 1
+          }
+          version_override="$API_WORKER=\"$CANDIDATE_API_VERSION_ID\""
           status_file="$EVIDENCE_DIR/emergency-stop-final.json"
           curl -fsS --retry 2 --connect-timeout 10 --max-time 30 \
             -H "Authorization: Bearer $COMPUTE_EMERGENCY_STOP_TOKEN" \
             -H "Accept: application/json" \
+            -H "Cloudflare-Workers-Version-Overrides: $version_override" \
             "$API_BASE/api/admin/compute/emergency-stop" > "$status_file"
           unset COMPUTE_EMERGENCY_STOP_TOKEN
           if [ "$REQUESTED_STAGE" = "revert_off" ]; then
