@@ -1414,7 +1414,7 @@ async function invokeRoutineHandler(
   // admission decisions (for example POLICY_OFF and capacity waits) retain
   // their stable codes instead of degrading into retryable HTTP failures.
   const responseText = await response.text().catch(() => "");
-  let rpc: {
+  type RoutineMcpResponse = {
     result?: unknown;
     error?: {
       message?: string;
@@ -1427,10 +1427,11 @@ async function invokeRoutineHandler(
         concurrency_scope?: "account" | "agent" | "ai" | "routine" | null;
       };
     };
-  } | null = null;
+  };
+  let rpc: RoutineMcpResponse | null = null;
   try {
     const parsed = JSON.parse(responseText) as unknown;
-    if (isRecord(parsed)) rpc = parsed as NonNullable<typeof rpc>;
+    if (isRecord(parsed)) rpc = parsed as RoutineMcpResponse;
   } catch {
     // The transport failure below is the only safe interpretation of a
     // non-JSON response. Successful MCP responses must also be valid JSON.
