@@ -84,6 +84,7 @@ function apiBindings(target, digest) {
       name: 'COMPUTE_PLANE',
       service: target.computeWorker,
       entrypoint: 'ComputePlane',
+      environment: 'production',
     },
     {
       type: 'queue',
@@ -106,6 +107,7 @@ function computeBindings(target, digest) {
       name: 'CONTROL_PLANE',
       service: target.apiWorker,
       entrypoint: 'ComputeControlPlane',
+      environment: 'production',
     },
     {
       type: 'r2_bucket',
@@ -237,7 +239,7 @@ function createFixture(targetName = 'production') {
     instances: 1,
     image: `registry.cloudflare.com/${'1'.repeat(32)}/${target.computeWorker}@${DIGEST}`,
     version: 7,
-    updated_at: '2026-07-31T11:30:00Z',
+    updated_at: '2026-07-31T11:30:00.822000128Z',
   });
 
   const release = {
@@ -377,7 +379,7 @@ function dispose(fixture) {
   rmSync(fixture.directory, { recursive: true, force: true });
 }
 
-test('accepts exact schema-6 preserve_off evidence for both targets', () => {
+test('accepts exact schema-6 evidence with Cloudflare nanosecond timestamps', () => {
   for (const targetName of ['staging', 'production']) {
     const fixture = createFixture(targetName);
     try {
@@ -595,6 +597,18 @@ test('rejects hash, digest, image, binding, and policy tampering', () => {
       name: 'wrong control-plane binding',
       mutate(fixture) {
         fixture.computeEvidence.selected_bindings[1].service = 'wrong-api';
+        rebind(
+          fixture,
+          'active_compute_worker',
+          'active-preserve-off-compute-version.json',
+          fixture.computeEvidence,
+        );
+      },
+    },
+    {
+      name: 'wrong control-plane environment',
+      mutate(fixture) {
+        fixture.computeEvidence.selected_bindings[1].environment = 'staging';
         rebind(
           fixture,
           'active_compute_worker',
