@@ -21,6 +21,8 @@ const WORKFLOW_PATH = '.github/workflows/compute-worker-refresh.yml';
 const REFRESH_KIND = 'galactic_compute_worker_refresh';
 const REQUEST_KIND = 'galactic_compute_worker_refresh_request';
 const FINGERPRINT_KIND = 'galactic_compute_worker_version_fingerprint';
+const CODE_UPDATE = 'code_update';
+const SOURCE_ATTESTATION = 'source_attestation';
 
 const TARGETS = Object.freeze({
   staging: Object.freeze({
@@ -48,7 +50,7 @@ const SUCCESS_FILES_V1 = Object.freeze([
   'request.json',
   'source-release-verification.json',
 ]);
-const SUCCESS_FILES_V2 = Object.freeze([
+const SUCCESS_FILES_WITH_PREDECESSOR = Object.freeze([
   ...SUCCESS_FILES_V1,
   'predecessor-worker-refresh-verification.json',
 ].sort());
@@ -204,13 +206,14 @@ function validateDispatch(value, { includeRef = false } = {}) {
 function validateRequest(value, target, sourceRunId) {
   const candidate = record(value, 'request.json');
   const schemaVersion = candidate.schema_version;
+  const supportsPredecessor = [2, 3].includes(schemaVersion);
   const row = exactKeys(
     candidate,
     [
       'confirmation',
       'dispatch',
       'kind',
-      ...(schemaVersion === 2 ? ['predecessor_worker_refresh_run_id'] : []),
+      ...(supportsPredecessor ? ['predecessor_worker_refresh_run_id'] : []),
       'schema_version',
       'source_compute_release_run_id',
       'target',
@@ -219,7 +222,7 @@ function validateRequest(value, target, sourceRunId) {
   );
   const dispatch = validateDispatch(row.dispatch, { includeRef: true });
   validateGitRef(target, dispatch.git_ref, 'request git ref');
-  const predecessorRunId = schemaVersion === 2
+  const predecessorRunId = supportsPredecessor
     ? row.predecessor_worker_refresh_run_id === null
       ? null
       : positiveRunId(
@@ -228,7 +231,7 @@ function validateRequest(value, target, sourceRunId) {
       )
     : null;
   if (
-    ![1, 2].includes(row.schema_version) || row.kind !== REQUEST_KIND ||
+    ![1, 2, 3].includes(row.schema_version) || row.kind !== REQUEST_KIND ||
     row.target !== target || row.confirmation !== `refresh-${target}-compute` ||
     row.source_compute_release_run_id !== sourceRunId
   ) {
@@ -522,7 +525,7 @@ export function buildComputeWorkerRefreshEvidence({
     target,
     sourceComputeReleaseRunId,
   );
-  const predecessor = request.schema_version === 2
+  const predecessor = request.schema_version >= 2
     ? validatePredecessorRefresh(
       readJson(
         resolve(directory, 'predecessor-worker-refresh-verification.json'),
@@ -579,6 +582,11 @@ export function buildComputeWorkerRefreshEvidence({
     source.compute_version_id;
   const expectedBeforeVersionTag = predecessor?.compute_version_tag ??
     source.compute_version_tag;
+  const workerTransition = after.compute.code_etag === before.compute.code_etag
+    ? SOURCE_ATTESTATION
+    : CODE_UPDATE;
+  const sourceAttestationAllowed =
+    request.schema_version === 3 && predecessor !== null;
   if (
     before.phase !== 'inspected' || after.phase !== 'inspected' ||
     before.target !== target || after.target !== target ||
@@ -597,7 +605,7 @@ export function buildComputeWorkerRefreshEvidence({
     after.compute.version_id === before.compute.version_id ||
     after.compute.deployment_id === before.compute.deployment_id ||
     after.compute.version_tag !== expectedTag ||
-    after.compute.code_etag === before.compute.code_etag ||
+    (workerTransition === SOURCE_ATTESTATION && !sourceAttestationAllowed) ||
     beforeFingerprint.version_id !== before.compute.version_id ||
     beforeFingerprint.version_tag !== before.compute.version_tag ||
     beforeFingerprint.code_etag !== before.compute.code_etag ||
@@ -616,7 +624,7 @@ export function buildComputeWorkerRefreshEvidence({
     beforeContainer.image !== afterContainer.image ||
     String(beforeContainer.version) !== String(afterContainer.version)
   ) {
-    fail('before/after evidence does not prove one Worker-code-only refresh');
+    fail('before/after evidence does not prove one exact Worker-only transition');
   }
 
   return {
@@ -635,7 +643,7 @@ export function buildComputeWorkerRefreshEvidence({
       workflow_run_id: source.workflow_run_id,
       release_sha: source.release_sha,
     },
-    ...(request.schema_version === 2
+    ...(request.schema_version >= 2
       ? {
         predecessor_worker_refresh: predecessor === null
           ? null
@@ -652,6 +660,9 @@ export function buildComputeWorkerRefreshEvidence({
             git_sha: predecessor.git_sha,
           },
       }
+      : {}),
+    ...(request.schema_version === 3
+      ? { worker_transition: workerTransition }
       : {}),
     environment_digest: source.environment_digest,
     deployed_image: source.deployed_image,
@@ -748,12 +759,14 @@ export function verifyComputeWorkerRefreshEvidence({
     readJson(resolve(directory, 'refresh.json'), 'refresh.json'),
     'refresh.json',
   );
-  if (![1, 2].includes(refreshInput.schema_version)) {
+  if (![1, 2, 3].includes(refreshInput.schema_version)) {
     fail('refresh.json schema version is unsupported');
   }
   verifyManifest(
     directory,
-    refreshInput.schema_version === 2 ? SUCCESS_FILES_V2 : SUCCESS_FILES_V1,
+    refreshInput.schema_version >= 2
+      ? SUCCESS_FILES_WITH_PREDECESSOR
+      : SUCCESS_FILES_V1,
   );
   const refresh = exactKeys(
     refreshInput,
@@ -766,13 +779,14 @@ export function verifyComputeWorkerRefreshEvidence({
       'generated_at',
       'invariants',
       'kind',
-      ...(refreshInput.schema_version === 2
+      ...(refreshInput.schema_version >= 2
         ? ['predecessor_worker_refresh']
         : []),
       'schema_version',
       'source_compute_release',
       'target',
       'verified',
+      ...(refreshInput.schema_version === 3 ? ['worker_transition'] : []),
     ],
     'refresh.json',
   );
@@ -786,7 +800,8 @@ export function verifyComputeWorkerRefreshEvidence({
     fail('refresh.json does not match its bound evidence files');
   }
   if (
-    ![1, 2].includes(refresh.schema_version) || refresh.kind !== REFRESH_KIND ||
+    ![1, 2, 3].includes(refresh.schema_version) ||
+    refresh.kind !== REFRESH_KIND ||
     refresh.verified !== true || refresh.target !== target ||
     refresh.dispatch.workflow_run_id !== expectedRunId
   ) {
@@ -794,7 +809,7 @@ export function verifyComputeWorkerRefreshEvidence({
   }
   const workflowRun = readJson(workflowRunPath, 'refresh workflow-run JSON');
   verifyWorkflowRun(workflowRun, target, refresh);
-  const predecessor = refresh.schema_version === 2 &&
+  const predecessor = refresh.schema_version >= 2 &&
       refresh.predecessor_worker_refresh !== null
     ? readJson(
       resolve(directory, 'predecessor-worker-refresh-verification.json'),

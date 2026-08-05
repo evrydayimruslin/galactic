@@ -263,7 +263,7 @@ function writeManifest(directory, schemaVersion) {
     'refresh.json',
     'request.json',
     'source-release-verification.json',
-    ...(schemaVersion === 2
+    ...(schemaVersion >= 2
       ? ['predecessor-worker-refresh-verification.json']
       : []),
   ];
@@ -294,7 +294,7 @@ function fixture(mutator = () => {}) {
     mutator(values);
     writeJson(directory, 'request.json', values.request);
     writeJson(directory, 'source-release-verification.json', values.source);
-    if (values.request.schema_version === 2) {
+    if (values.request.schema_version >= 2) {
       writeJson(
         directory,
         'predecessor-worker-refresh-verification.json',
@@ -419,6 +419,85 @@ test('builds and verifies a repeated refresh through its exact predecessor', (t)
   assert.equal(refresh.before.compute_version_id, IDS.predecessorVersion);
   assert.equal(result.source_compute_version_id, IDS.beforeVersion);
   assert.equal(result.compute_version_id, IDS.afterVersion);
+});
+
+test('records a schema v3 code update through its exact predecessor', (t) => {
+  const directory = fixture((values) => {
+    values.request = {
+      ...values.request,
+      schema_version: 3,
+      predecessor_worker_refresh_run_id: PREDECESSOR_REFRESH_RUN_ID,
+    };
+    values.predecessor = predecessorRefreshVerification();
+    values.beforeState = predecessorState();
+    values.beforeVersion = predecessorVersion();
+  });
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const refresh = JSON.parse(readFileSync(join(directory, 'refresh.json'), 'utf8'));
+  assert.equal(refresh.schema_version, 3);
+  assert.equal(refresh.worker_transition, 'code_update');
+  assert.equal(
+    verifyComputeWorkerRefreshEvidence({
+      evidenceDirectory: directory,
+      target: 'staging',
+      workflowRunPath: join(directory, 'workflow-run.json'),
+      expectedRunId: REFRESH_RUN_ID,
+      expectedSourceComputeReleaseRunId: SOURCE_RUN_ID,
+    }).verified,
+    true,
+  );
+});
+
+test('attests code-identical schema v3 source through the exact predecessor', (t) => {
+  const directory = fixture((values) => {
+    values.request = {
+      ...values.request,
+      schema_version: 3,
+      predecessor_worker_refresh_run_id: PREDECESSOR_REFRESH_RUN_ID,
+    };
+    values.predecessor = predecessorRefreshVerification();
+    values.beforeState = predecessorState();
+    values.beforeVersion = predecessorVersion();
+    values.afterState.compute.code_etag = 'compute-code-predecessor';
+    values.afterVersion.resources.script.etag = 'compute-code-predecessor';
+  });
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const refresh = JSON.parse(readFileSync(join(directory, 'refresh.json'), 'utf8'));
+  const result = verifyComputeWorkerRefreshEvidence({
+    evidenceDirectory: directory,
+    target: 'staging',
+    workflowRunPath: join(directory, 'workflow-run.json'),
+    expectedRunId: REFRESH_RUN_ID,
+    expectedSourceComputeReleaseRunId: SOURCE_RUN_ID,
+  });
+  assert.equal(refresh.worker_transition, 'source_attestation');
+  assert.equal(refresh.before.compute_code_etag, refresh.after.compute_code_etag);
+  assert.equal(result.compute_code_etag, 'compute-code-predecessor');
+});
+
+test('rejects code-identical source evidence without schema v3 predecessor binding', () => {
+  for (const schemaVersion of [2, 3]) {
+    assert.throws(() => {
+      fixture((values) => {
+        values.request = {
+          ...values.request,
+          schema_version: schemaVersion,
+          predecessor_worker_refresh_run_id:
+            schemaVersion === 2 ? PREDECESSOR_REFRESH_RUN_ID : null,
+        };
+        if (schemaVersion === 2) {
+          values.predecessor = predecessorRefreshVerification();
+          values.beforeState = predecessorState();
+          values.beforeVersion = predecessorVersion();
+          values.afterState.compute.code_etag = 'compute-code-predecessor';
+          values.afterVersion.resources.script.etag = 'compute-code-predecessor';
+        } else {
+          values.afterState.compute.code_etag = 'compute-code-before';
+          values.afterVersion.resources.script.etag = 'compute-code-before';
+        }
+      });
+    }, /Compute Worker refresh evidence is invalid: before\/after evidence/u);
+  }
 });
 
 test('rejects a predecessor that does not identify the captured live Worker', () => {
