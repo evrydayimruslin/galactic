@@ -1189,6 +1189,17 @@ export function failedScenarioRuntimeDiagnostic(
   const stdout = diagnosticText(publicRun.stdout);
   const stderr = diagnosticText(publicRun.stderr);
   const publicError = diagnosticText(publicRun.error);
+  // The Compute Worker already redacts every lease token and configured
+  // secret before persisting this owner-visible terminal error. Emit it only
+  // to the protected workflow log when explicitly requested so an operator
+  // can diagnose an otherwise opaque hashed failure without weakening the
+  // durable release-evidence artifact.
+  if (
+    process.env.COMPUTE_CERTIFICATION_LOG_SAFE_TERMINAL_ERROR === "1" &&
+    typeof publicRun.error === "string"
+  ) {
+    console.error(`SAFE_COMPUTE_TERMINAL_ERROR: ${publicRun.error}`);
+  }
   const infraFailure = ownerRun.infraFailure !== null &&
       typeof ownerRun.infraFailure === "object" &&
       !Array.isArray(ownerRun.infraFailure)
