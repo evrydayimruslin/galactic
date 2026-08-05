@@ -18,8 +18,10 @@ import {
 
 const REFRESH_SHA = 'a'.repeat(40);
 const RELEASE_SHA = 'b'.repeat(40);
+const PREDECESSOR_REFRESH_SHA = 'd'.repeat(40);
 const DIGEST = `sha256:${'c'.repeat(64)}`;
 const SOURCE_RUN_ID = '30646319201';
+const PREDECESSOR_REFRESH_RUN_ID = '30984313869';
 const REFRESH_RUN_ID = '30990000001';
 const GENERATED_AT = '2026-08-05T18:00:00Z';
 const REPOSITORY = 'evrydayimruslin/galactic';
@@ -30,6 +32,8 @@ const IDS = Object.freeze({
   beforeDeployment: '44444444-4444-4444-8444-444444444444',
   afterVersion: '55555555-5555-4555-8555-555555555555',
   afterDeployment: '66666666-6666-4666-8666-666666666666',
+  predecessorVersion: '77777777-7777-4777-8777-777777777777',
+  predecessorDeployment: '88888888-8888-4888-8888-888888888888',
 });
 
 function hash(value) {
@@ -138,6 +142,28 @@ function computeVersion({ after = false, setting = 'stable' } = {}) {
   };
 }
 
+function predecessorState() {
+  const state = rolloutState();
+  state.compute = workerState({
+    worker: 'galactic-compute-staging',
+    versionId: IDS.predecessorVersion,
+    versionTag: `compute-${PREDECESSOR_REFRESH_SHA}-worker-refresh`,
+    deploymentId: IDS.predecessorDeployment,
+    codeEtag: 'compute-code-predecessor',
+    compatibility: '9'.repeat(64),
+  });
+  return state;
+}
+
+function predecessorVersion({ setting = 'stable' } = {}) {
+  const version = computeVersion({ setting });
+  version.id = IDS.predecessorVersion;
+  version.annotations['workers/tag'] =
+    `compute-${PREDECESSOR_REFRESH_SHA}-worker-refresh`;
+  version.resources.script.etag = 'compute-code-predecessor';
+  return version;
+}
+
 function container({ version = '7', instances = 0 } = {}) {
   return {
     schema_version: 1,
@@ -184,6 +210,33 @@ function request() {
   };
 }
 
+function predecessorRefreshVerification() {
+  const fingerprint = computeWorkerVersionFingerprint({
+    target: 'staging',
+    version: predecessorVersion(),
+  });
+  return {
+    schema_version: 1,
+    verified: true,
+    target: 'staging',
+    workflow_run_id: PREDECESSOR_REFRESH_RUN_ID,
+    git_sha: PREDECESSOR_REFRESH_SHA,
+    source_compute_release_run_id: SOURCE_RUN_ID,
+    source_release_sha: RELEASE_SHA,
+    environment_digest: DIGEST,
+    deployed_image:
+      `registry.cloudflare.com/${'1'.repeat(32)}/galactic-compute-staging@${DIGEST}`,
+    source_compute_version_id: IDS.beforeVersion,
+    source_compute_version_tag: `compute-${RELEASE_SHA}`,
+    source_compute_code_etag: 'compute-code-before',
+    compute_version_id: IDS.predecessorVersion,
+    compute_version_tag:
+      `compute-${PREDECESSOR_REFRESH_SHA}-worker-refresh`,
+    compute_code_etag: 'compute-code-predecessor',
+    compute_configuration_sha256: fingerprint.configuration_sha256,
+  };
+}
+
 function workflowRun() {
   return {
     id: Number(REFRESH_RUN_ID),
@@ -199,7 +252,7 @@ function workflowRun() {
   };
 }
 
-function writeManifest(directory) {
+function writeManifest(directory, schemaVersion) {
   const files = [
     'after-container-readiness.json',
     'after-state.json',
@@ -210,7 +263,11 @@ function writeManifest(directory) {
     'refresh.json',
     'request.json',
     'source-release-verification.json',
+    ...(schemaVersion === 2
+      ? ['predecessor-worker-refresh-verification.json']
+      : []),
   ];
+  files.sort();
   writeFileSync(
     join(directory, 'evidence.sha256'),
     files.map((name) =>
@@ -223,19 +280,27 @@ function fixture(mutator = () => {}) {
   const directory = mkdtempSync(join(tmpdir(), 'compute-worker-refresh-'));
   try {
     const values = {
-    request: request(),
-    source: sourceRelease(),
-    beforeState: rolloutState(),
-    afterState: rolloutState({ after: true }),
-    beforeVersion: computeVersion(),
-    afterVersion: computeVersion({ after: true }),
-    beforeContainer: container(),
-    afterContainer: container({ instances: 1 }),
-    workflowRun: workflowRun(),
+      request: request(),
+      source: sourceRelease(),
+      predecessor: undefined,
+      beforeState: rolloutState(),
+      afterState: rolloutState({ after: true }),
+      beforeVersion: computeVersion(),
+      afterVersion: computeVersion({ after: true }),
+      beforeContainer: container(),
+      afterContainer: container({ instances: 1 }),
+      workflowRun: workflowRun(),
     };
     mutator(values);
     writeJson(directory, 'request.json', values.request);
     writeJson(directory, 'source-release-verification.json', values.source);
+    if (values.request.schema_version === 2) {
+      writeJson(
+        directory,
+        'predecessor-worker-refresh-verification.json',
+        values.predecessor ?? null,
+      );
+    }
     writeJson(directory, 'before-state.json', values.beforeState);
     writeJson(directory, 'after-state.json', values.afterState);
     writeJson(
@@ -263,7 +328,7 @@ function fixture(mutator = () => {}) {
       generatedAt: GENERATED_AT,
     });
     writeJson(directory, 'refresh.json', refresh);
-    writeManifest(directory);
+    writeManifest(directory, refresh.schema_version);
     writeJson(directory, 'workflow-run.json', values.workflowRun);
     return directory;
   } catch (error) {
@@ -301,6 +366,91 @@ test('builds and verifies a Worker-only refresh chained to release evidence', (t
   assert.equal(result.source_compute_version_id, IDS.beforeVersion);
   assert.equal(result.compute_version_id, IDS.afterVersion);
   assert.equal(result.git_sha, REFRESH_SHA);
+});
+
+test('builds and verifies schema v2 without a predecessor refresh', (t) => {
+  const directory = fixture((values) => {
+    values.request = {
+      ...values.request,
+      schema_version: 2,
+      predecessor_worker_refresh_run_id: null,
+    };
+  });
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const result = verifyComputeWorkerRefreshEvidence({
+    evidenceDirectory: directory,
+    target: 'staging',
+    workflowRunPath: join(directory, 'workflow-run.json'),
+    expectedRunId: REFRESH_RUN_ID,
+    expectedSourceComputeReleaseRunId: SOURCE_RUN_ID,
+  });
+  const refresh = JSON.parse(readFileSync(join(directory, 'refresh.json'), 'utf8'));
+  assert.equal(refresh.schema_version, 2);
+  assert.equal(refresh.predecessor_worker_refresh, null);
+  assert.equal(result.source_compute_version_id, IDS.beforeVersion);
+  assert.equal(result.compute_version_id, IDS.afterVersion);
+});
+
+test('builds and verifies a repeated refresh through its exact predecessor', (t) => {
+  const directory = fixture((values) => {
+    values.request = {
+      ...values.request,
+      schema_version: 2,
+      predecessor_worker_refresh_run_id: PREDECESSOR_REFRESH_RUN_ID,
+    };
+    values.predecessor = predecessorRefreshVerification();
+    values.beforeState = predecessorState();
+    values.beforeVersion = predecessorVersion();
+  });
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const result = verifyComputeWorkerRefreshEvidence({
+    evidenceDirectory: directory,
+    target: 'staging',
+    workflowRunPath: join(directory, 'workflow-run.json'),
+    expectedRunId: REFRESH_RUN_ID,
+    expectedSourceComputeReleaseRunId: SOURCE_RUN_ID,
+  });
+  const refresh = JSON.parse(readFileSync(join(directory, 'refresh.json'), 'utf8'));
+  assert.equal(refresh.schema_version, 2);
+  assert.equal(
+    refresh.predecessor_worker_refresh.workflow_run_id,
+    PREDECESSOR_REFRESH_RUN_ID,
+  );
+  assert.equal(refresh.before.compute_version_id, IDS.predecessorVersion);
+  assert.equal(result.source_compute_version_id, IDS.beforeVersion);
+  assert.equal(result.compute_version_id, IDS.afterVersion);
+});
+
+test('rejects a predecessor that does not identify the captured live Worker', () => {
+  assert.throws(() => {
+    fixture((values) => {
+      values.request = {
+        ...values.request,
+        schema_version: 2,
+        predecessor_worker_refresh_run_id: PREDECESSOR_REFRESH_RUN_ID,
+      };
+      values.predecessor = predecessorRefreshVerification();
+      values.beforeState = predecessorState();
+      values.beforeVersion = predecessorVersion();
+      values.predecessor.compute_code_etag = 'different-predecessor-code';
+    });
+  }, /Compute Worker refresh evidence is invalid: before\/after evidence/u);
+});
+
+test('rejects a predecessor chained to a different source release', () => {
+  assert.throws(() => {
+    fixture((values) => {
+      values.request = {
+        ...values.request,
+        schema_version: 2,
+        predecessor_worker_refresh_run_id: PREDECESSOR_REFRESH_RUN_ID,
+      };
+      values.predecessor = predecessorRefreshVerification();
+      values.predecessor.source_release_sha = 'e'.repeat(40);
+      values.beforeState = predecessorState();
+      values.beforeVersion = predecessorVersion();
+    });
+  }, /predecessor Worker refresh does not chain to the source release/u);
 });
 
 test('rejects non-code Compute configuration drift', () => {

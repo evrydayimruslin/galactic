@@ -24,6 +24,11 @@ on:
         description: Successful preserve_off Compute Deploy run certifying the live digest.
         required: true
         type: string
+      predecessor_worker_refresh_run_id:
+        description: Optional successful Worker refresh run proving the currently live Worker version.
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -43,6 +48,7 @@ jobs:
       REQUESTED_TARGET: ${{ inputs.target }}
       REFRESH_CONFIRMATION: ${{ inputs.confirmation }}
       COMPUTE_RELEASE_RUN_ID_INPUT: ${{ inputs.compute_release_run_id }}
+      PREDECESSOR_WORKER_REFRESH_RUN_ID_INPUT: ${{ inputs.predecessor_worker_refresh_run_id }}
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -76,6 +82,11 @@ jobs:
             echo "compute_release_run_id must be a positive run ID." >&2
             exit 1
           }
+          if [ -n "$PREDECESSOR_WORKER_REFRESH_RUN_ID_INPUT" ] &&
+             ! [[ "$PREDECESSOR_WORKER_REFRESH_RUN_ID_INPUT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "predecessor_worker_refresh_run_id must be empty or a positive run ID." >&2
+            exit 1
+          fi
           if [ "$REQUESTED_TARGET" = "staging" ]; then
             [ "$GITHUB_REF" = "refs/heads/main" ] || {
               echo "Staging Worker refreshes must run from main." >&2
@@ -115,17 +126,21 @@ jobs:
             --arg target "$REQUESTED_TARGET" \
             --arg confirmation "$REFRESH_CONFIRMATION" \
             --arg source_run_id "$COMPUTE_RELEASE_RUN_ID_INPUT" \
+            --arg predecessor_run_id "$PREDECESSOR_WORKER_REFRESH_RUN_ID_INPUT" \
             --arg repository "$GITHUB_REPOSITORY" \
             --arg workflow_run_id "$GITHUB_RUN_ID" \
             --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
             --arg git_sha "$GITHUB_SHA" \
             --arg git_ref "$GITHUB_REF" '
               {
-                schema_version: 1,
+                schema_version: 2,
                 kind: "galactic_compute_worker_refresh_request",
                 target: $target,
                 confirmation: $confirmation,
                 source_compute_release_run_id: $source_run_id,
+                predecessor_worker_refresh_run_id:
+                  (if $predecessor_run_id == "" then null
+                   else $predecessor_run_id end),
                 dispatch: {
                   repository: $repository,
                   workflow_run_id: $workflow_run_id,
@@ -186,6 +201,62 @@ jobs:
             echo "SOURCE_COMPUTE_VERSION_TAG=$(jq -er '.compute_version_tag' "$EVIDENCE_DIR/source-release-verification.json")"
           } >> "$GITHUB_ENV"
 
+      - name: Verify the exact predecessor Worker refresh
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          verification="$EVIDENCE_DIR/predecessor-worker-refresh-verification.json"
+          if [ -z "$PREDECESSOR_WORKER_REFRESH_RUN_ID_INPUT" ]; then
+            printf 'null\n' > "$verification"
+            exit 0
+          fi
+
+          [ "$PREDECESSOR_WORKER_REFRESH_RUN_ID_INPUT" != "$GITHUB_RUN_ID" ] || {
+            echo "A Worker refresh cannot name itself as predecessor." >&2
+            exit 1
+          }
+          predecessor_run_json="$RUNNER_TEMP/predecessor-worker-refresh-run.json"
+          predecessor_artifact_dir="$RUNNER_TEMP/predecessor-worker-refresh-evidence"
+          gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$PREDECESSOR_WORKER_REFRESH_RUN_ID_INPUT" \
+            > "$predecessor_run_json"
+          predecessor_sha="$(jq -er '.head_sha' "$predecessor_run_json")"
+          [ "$predecessor_sha" != "$GITHUB_SHA" ] || {
+            echo "Predecessor Worker refresh must predate this dispatch SHA." >&2
+            exit 1
+          }
+          git merge-base --is-ancestor "$predecessor_sha" "$GITHUB_SHA" || {
+            echo "Predecessor Worker refresh SHA is not an ancestor of this dispatch." >&2
+            exit 1
+          }
+          predecessor_artifact="compute-worker-refresh-$REQUESTED_TARGET-$predecessor_sha"
+          mkdir -p "$predecessor_artifact_dir"
+          gh run download "$PREDECESSOR_WORKER_REFRESH_RUN_ID_INPUT" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$predecessor_artifact" \
+            --dir "$predecessor_artifact_dir"
+          node scripts/release/verify-compute-worker-refresh-evidence.mjs \
+            verify "$predecessor_artifact_dir" "$REQUESTED_TARGET" \
+            "$predecessor_run_json" "$PREDECESSOR_WORKER_REFRESH_RUN_ID_INPUT" \
+            "$COMPUTE_RELEASE_RUN_ID_INPUT" \
+            > "$verification"
+          jq -e \
+            --arg target "$REQUESTED_TARGET" \
+            --arg predecessor_run "$PREDECESSOR_WORKER_REFRESH_RUN_ID_INPUT" \
+            --arg source_run "$COMPUTE_RELEASE_RUN_ID_INPUT" \
+            --arg digest "$ENVIRONMENT_DIGEST" \
+            --arg image "$DEPLOYED_IMAGE" '
+              .schema_version == 1 and
+              .verified == true and
+              .target == $target and
+              .workflow_run_id == $predecessor_run and
+              .source_compute_release_run_id == $source_run and
+              .environment_digest == $digest and
+              .deployed_image == $image
+            ' "$verification" >/dev/null
+
       - name: Capture and fence the exact admission-OFF live pair
         id: before
         shell: bash
@@ -238,24 +309,52 @@ jobs:
             inspect "$REQUESTED_TARGET" "$api_status" "$api_version" \
             "$compute_status" "$compute_version" \
             > "$EVIDENCE_DIR/before-state.json"
+          node scripts/release/verify-compute-worker-refresh-evidence.mjs \
+            fingerprint "$REQUESTED_TARGET" "$compute_version" \
+            > "$EVIDENCE_DIR/before-worker-fingerprint.json"
           jq -e \
-            --arg digest "$ENVIRONMENT_DIGEST" \
-            --arg version_id "$SOURCE_COMPUTE_VERSION_ID" \
-            --arg version_tag "$SOURCE_COMPUTE_VERSION_TAG" '
+            --arg digest "$ENVIRONMENT_DIGEST" '
               .phase == "inspected" and
               .policy == "off" and
               .canary_allowlist == [] and
               .certification_principal == null and
-              .environment_digest == $digest and
-              .compute.version_id == $version_id and
-              .compute.version_tag == $version_tag
+              .environment_digest == $digest
             ' "$EVIDENCE_DIR/before-state.json" >/dev/null || {
-            echo "Live Compute is not the exact certified admission-OFF source release." >&2
+            echo "Live API and Compute are not at the exact admission-OFF baseline." >&2
             exit 1
           }
-          node scripts/release/verify-compute-worker-refresh-evidence.mjs \
-            fingerprint "$REQUESTED_TARGET" "$compute_version" \
-            > "$EVIDENCE_DIR/before-worker-fingerprint.json"
+          jq -ne \
+            --slurpfile state "$EVIDENCE_DIR/before-state.json" \
+            --slurpfile fingerprint "$EVIDENCE_DIR/before-worker-fingerprint.json" '
+              $fingerprint[0].version_id == $state[0].compute.version_id and
+              $fingerprint[0].version_tag == $state[0].compute.version_tag and
+              $fingerprint[0].code_etag == $state[0].compute.code_etag
+            ' </dev/null >/dev/null
+          if [ -n "$PREDECESSOR_WORKER_REFRESH_RUN_ID_INPUT" ]; then
+            jq -ne \
+              --slurpfile state "$EVIDENCE_DIR/before-state.json" \
+              --slurpfile fingerprint "$EVIDENCE_DIR/before-worker-fingerprint.json" \
+              --slurpfile predecessor "$EVIDENCE_DIR/predecessor-worker-refresh-verification.json" '
+                $state[0].compute.version_id == $predecessor[0].compute_version_id and
+                $state[0].compute.version_tag == $predecessor[0].compute_version_tag and
+                $state[0].compute.code_etag == $predecessor[0].compute_code_etag and
+                $fingerprint[0].configuration_sha256 ==
+                  $predecessor[0].compute_configuration_sha256
+              ' </dev/null >/dev/null || {
+              echo "Live Compute does not match the verified predecessor Worker refresh." >&2
+              exit 1
+            }
+          else
+            jq -e \
+              --arg version_id "$SOURCE_COMPUTE_VERSION_ID" \
+              --arg version_tag "$SOURCE_COMPUTE_VERSION_TAG" '
+                .compute.version_id == $version_id and
+                .compute.version_tag == $version_tag
+              ' "$EVIDENCE_DIR/before-state.json" >/dev/null || {
+              echo "Live Compute does not match the certified source release; supply its verified predecessor refresh run." >&2
+              exit 1
+            }
+          fi
           node compute-worker/scripts/verify-container-readiness.mjs \
             "$container_list" "$CONTAINER_APPLICATION" "$DEPLOYED_IMAGE" \
             > "$EVIDENCE_DIR/before-container-readiness.json"
@@ -401,6 +500,9 @@ jobs:
             echo
             echo "- Target: $REQUESTED_TARGET"
             echo "- Source image release run: $COMPUTE_RELEASE_RUN_ID_INPUT"
+            if [ -n "$PREDECESSOR_WORKER_REFRESH_RUN_ID_INPUT" ]; then
+              echo "- Verified predecessor Worker refresh run: $PREDECESSOR_WORKER_REFRESH_RUN_ID_INPUT"
+            fi
             echo "- Image digest retained: $ENVIRONMENT_DIGEST"
             echo "- Prior Compute version: $(jq -r '.before.compute_version_id' "$EVIDENCE_DIR/refresh.json")"
             echo "- Refreshed Compute version: $(jq -r '.after.compute_version_id' "$EVIDENCE_DIR/refresh.json")"

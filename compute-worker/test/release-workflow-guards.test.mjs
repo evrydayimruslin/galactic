@@ -12,10 +12,17 @@ describe("Compute release workflow static guards", () => {
   it("refreshes Worker code without rebuilding or rolling the certified Container", async () => {
     const refresh = await text(".github/workflows/compute-worker-refresh.yml");
     expect(refresh).toContain("compute_release_run_id:");
+    expect(refresh).toContain("predecessor_worker_refresh_run_id:");
     expect(refresh).toContain(
       "verify-compute-rollout-release-evidence.mjs",
     );
     expect(refresh).toContain("--containers-rollout=none");
+    expect(refresh).toContain(
+      'git merge-base --is-ancestor "$predecessor_sha" "$GITHUB_SHA"',
+    );
+    expect(refresh).toContain(
+      "Live Compute does not match the verified predecessor Worker refresh",
+    );
     expect(refresh).not.toMatch(/--containers-rollout=(?:gradual|immediate)/u);
     expect(refresh).not.toMatch(/docker (?:build|push)/u);
     expect(refresh).toContain("before-worker-fingerprint.json");
