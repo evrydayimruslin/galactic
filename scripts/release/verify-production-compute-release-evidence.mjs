@@ -451,7 +451,7 @@ function verifyBindingPreflight({
     preflight.target !== "production" ||
     preflight.candidate_sha !== candidateSha ||
     String(preflight.workflow_run_id) !== workflowRunId ||
-    preflight.function_name !== "run_compute_smoke" ||
+    preflight.function_name !== "run_compute_certification" ||
     preflightFixturePolicy.enabled !== false ||
     !/^(0|[1-9][0-9]*)$/u.test(String(preflightFixturePolicy.revision)) ||
     preflightProbe.action !== "status" ||

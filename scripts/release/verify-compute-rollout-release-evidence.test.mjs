@@ -171,7 +171,7 @@ function createFixture(targetName = 'production') {
     candidate_sha: SHA,
     workflow_run_id: RUN_ID,
     agent_id: AGENT_ID,
-    function_name: 'run_compute_smoke',
+    function_name: 'run_compute_certification',
     fixture_policy: { enabled: false, revision: '7' },
     probe: {
       action: 'status',

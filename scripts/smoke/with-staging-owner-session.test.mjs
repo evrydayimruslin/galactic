@@ -891,6 +891,7 @@ test("generic child runner injects production target and preserves nonsecret rel
         COMPUTE_RELEASE_SHA: "a".repeat(40),
         COMPUTE_RELEASE_RUN_ID: "123456",
         COMPUTE_RELEASE_EVIDENCE_DIR: "/tmp/release-evidence",
+        GALACTIC_SMOKE_FIXTURE: "compute-certification",
         COMPUTE_CERTIFICATION_API_VERSION_ID: CANDIDATE_API_VERSION_ID,
       },
     },
@@ -906,6 +907,10 @@ test("generic child runner injects production target and preserves nonsecret rel
   assert.equal(
     passedEnv.COMPUTE_RELEASE_EVIDENCE_DIR,
     "/tmp/release-evidence",
+  );
+  assert.equal(
+    passedEnv.GALACTIC_SMOKE_FIXTURE,
+    "compute-certification",
   );
   assert.equal(
     passedEnv.COMPUTE_CERTIFICATION_API_VERSION_ID,

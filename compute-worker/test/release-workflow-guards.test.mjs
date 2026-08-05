@@ -702,7 +702,7 @@ describe("Compute release workflow static guards", () => {
       "Capture the stable API and Compute rollback pair before mutation",
     );
     const prepareFixture = deploy.indexOf(
-      "Prepare exact fixed Compute smoke Agent for OFF binding preflight",
+      "Prepare exact fixed Compute certification Agent for OFF binding preflight",
     );
     const verifyOffBinding = deploy.indexOf(
       "Verify the admission-OFF binding path before Compute mutation",
@@ -710,7 +710,7 @@ describe("Compute release workflow static guards", () => {
     const deployCompute = deploy.indexOf("Dry-run and deploy Compute Worker");
     const certifyOff = deploy.indexOf("Certify admission-off API and exact Compute digest");
     const refreshFixture = deploy.indexOf(
-      "Review, promote, and verify exact fixed Compute smoke Agent while admission is off",
+      "Review, promote, and verify exact fixed Compute certification Agent while admission is off",
     );
     const bindingPreflight = deploy.indexOf(
       "Verify the Compute binding path while admission is off",
@@ -814,6 +814,12 @@ describe("Compute release workflow static guards", () => {
       "scripts/smoke/compute-admitted-smoke.mjs --preflight-only",
     );
     expect(preflightStep).toContain(
+      "GALACTIC_SMOKE_FIXTURE: compute-certification",
+    );
+    expect(preflightStep).toContain(
+      '.function_name == "run_compute_certification"',
+    );
+    expect(preflightStep).toContain(
       '"00000000-0000-4000-8000-000000000000"',
     );
     expect(preflightStep).toContain(
@@ -849,11 +855,17 @@ describe("Compute release workflow static guards", () => {
       expect(step).toContain(
         "scripts/smoke/with-staging-owner-session.mjs",
       );
+      expect(step).toContain("--dir examples/compute-certification");
       expect(step).toContain("--promote-reviewed");
-      expect(step).toContain("--reviewed-permission compute:exec");
-      expect(step).toContain("--reviewed-function run_compute_smoke");
+      expect(step).toContain("--reviewed-fixture compute-certification");
+      expect(step).toContain(
+        "--reviewed-permission compute:exec,notify:owner",
+      );
+      expect(step).toContain(
+        "--reviewed-function run_compute_certification",
+      );
       expect(step).toContain("--reviewed-compute-profile developer-v1");
-      expect(step).toContain("--reviewed-compute-tools shell");
+      expect(step).toContain("--reviewed-compute-tools browser,shell");
       expect(step).toContain("--reviewed-compute-secrets none");
       expect(step).not.toContain("--token");
       expect(step).not.toContain("--app-id");
