@@ -10,6 +10,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -108,6 +109,8 @@ const SHA256_RE = /^[0-9a-f]{64}$/u;
 const GIT_SHA_RE = /^[0-9a-f]{40}$/u;
 const WORKFLOW_RUN_ID_RE = /^[1-9][0-9]{0,19}$/u;
 const REVISION_RE = /^(0|[1-9][0-9]*)$/u;
+const SEMVER_RE =
+  /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
 const ACTIVE_STATUSES = new Set(["queued", "reserving", "starting", "running"]);
 const ACTIVE_ROUTINE_STATUSES = new Set(["queued", "running"]);
 const FIXTURE_COMPUTE_FUNCTIONS = new Set([
@@ -128,6 +131,20 @@ const DEFAULT_SCENARIO_TIMEOUT_MS = 20 * 60 * 1_000;
 const DEFAULT_CLEANUP_TIMEOUT_MS = 5 * 60 * 1_000;
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
 const MAX_OWNER_RUN_PAGES = 10;
+export const EXPECTED_GALACTIC_CLI_VERSION = (() => {
+  const cliPackage = JSON.parse(
+    readFileSync(new URL("../../cli/package.json", import.meta.url), "utf8"),
+  );
+  if (
+    typeof cliPackage.version !== "string" ||
+    !SEMVER_RE.test(cliPackage.version)
+  ) {
+    throw new Error(
+      "cli/package.json must contain a canonical Galactic CLI version.",
+    );
+  }
+  return cliPackage.version;
+})();
 const CERTIFICATION_LIMITS = Object.freeze({
   maxTimeoutMs: 120_000,
   maxConcurrency: 2,
@@ -874,7 +891,7 @@ export function validateComputeCertificationProof(
       python: "3.13.14",
       npm: "12.0.1",
       deno: "2.9.3",
-      galactic_cli: "2.4.0",
+      galactic_cli: EXPECTED_GALACTIC_CLI_VERSION,
       playwright: "1.62.0-alpha-2026-07-20",
       chromium: "152.0.7977.8",
     };
