@@ -1436,10 +1436,10 @@ async function invokeRoutineHandler(
     // non-JSON response. Successful MCP responses must also be valid JSON.
   }
   if (!rpc) {
-    const detail = responseText || response.statusText || "invalid JSON";
+    const detail = responseText || response.statusText || "invalid response";
     throw new Error(
       response.ok
-        ? `Routine MCP call returned invalid JSON: ${detail}`
+        ? "Routine MCP call returned invalid JSON"
         : `Routine MCP call failed (${response.status}): ${detail}`,
     );
   }
