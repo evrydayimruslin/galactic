@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -86,6 +87,9 @@ describe("developer-v1 image contract", () => {
   it("pins every Ubuntu package stage to one signed archive snapshot", () => {
     const dockerfile = fixture("Dockerfile");
     const smoke = repositoryFile("compute-worker/scripts/smoke-image.sh");
+    const smokePath = fileURLToPath(
+      new URL("../scripts/smoke-image.sh", import.meta.url),
+    );
     expect(dockerfile).toContain("ARG UBUNTU_SNAPSHOT=20260805T110000Z");
     expect(dockerfile).toContain(
       'ai.galactic.security.ubuntu-snapshot="${UBUNTU_SNAPSHOT}"',
@@ -113,11 +117,29 @@ describe("developer-v1 image contract", () => {
       expect(dockerfile.match(sourcePattern)).toHaveLength(2);
     }
     expect(smoke).toContain(
-      "https://snapshot.ubuntu.com/ubuntu/20260805T110000Z",
+      "grep -c '\\''^deb https://snapshot.ubuntu.com/ubuntu/20260805T110000Z jammy'\\''",
     );
     expect(smoke).toContain("(archive|security)\\.ubuntu\\.com/ubuntu");
     expect(dockerfile).not.toContain("archive.ubuntu.com/ubuntu");
     expect(dockerfile).not.toContain("security.ubuntu.com/ubuntu");
+
+    // The smoke body crosses two shell parsers: this host script and the
+    // container's bash -lc. Parse the exact payload the docker invocation
+    // receives so quote-boundary mistakes fail the fast contract suite.
+    const smokeSyntax = spawnSync(
+      "/bin/sh",
+      [
+        "-c",
+        'docker() { last=; for argument do last=$argument; done; /bin/bash -n -c "$last"; }; node() { printf "0.0.0"; }; . "$1"',
+        "image-smoke-contract",
+        smokePath,
+      ],
+      { encoding: "utf8" },
+    );
+    expect({ status: smokeSyntax.status, stderr: smokeSyntax.stderr }).toEqual({
+      status: 0,
+      stderr: "",
+    });
   });
 
   it("installs the runtime interception CA through mandatory Chrome policy", () => {

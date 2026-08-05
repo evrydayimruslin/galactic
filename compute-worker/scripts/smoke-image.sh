@@ -28,7 +28,7 @@ docker run --rm \
   pip3 --version | grep "pip 26.1.2 "
   python3 -c '\''import bz2, ctypes, curses, dbm, html.parser, lzma, readline, socket, sqlite3, ssl, tkinter, uuid, zlib; assert hasattr(html.parser.HTMLParser(), "_pending"); assert hasattr(socket, "AF_BLUETOOTH")'\''
   MPLBACKEND=Agg python3 -c '\''import IPython, matplotlib, numpy, pandas, psutil; frame = pandas.DataFrame({"x": numpy.array([1, 2]), "y": [3, 4]}); axes = frame.plot(x="x", y="y"); axes.figure.canvas.draw()'\''
-  test "$(grep -c '^deb https://snapshot.ubuntu.com/ubuntu/20260805T110000Z jammy' /etc/apt/sources.list)" = "4"
+  test "$(grep -c '\''^deb https://snapshot.ubuntu.com/ubuntu/20260805T110000Z jammy'\'' /etc/apt/sources.list)" = "4"
   ! grep -R -E '\''https?://(archive|security)\.ubuntu\.com/ubuntu'\'' /etc/apt/sources.list /etc/apt/sources.list.d
   node --version
   test "$(npm --version)" = "12.0.1"
