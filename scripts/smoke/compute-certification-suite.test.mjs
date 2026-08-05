@@ -9,6 +9,7 @@ import {
   assertPinnedApiVersionResponse,
   buildComputeCertificationMarker,
   classifyComputeRuntimeFailure,
+  computeCertificationStartRequestTimeoutMs,
   COMPUTE_CERTIFICATION_ARTIFACT_SHA256,
   COMPUTE_CERTIFICATION_FUNCTION,
   COMPUTE_CERTIFICATION_SCENARIOS,
@@ -243,6 +244,30 @@ test("derives only a pinned target/profile and private evidence paths", () => {
   );
   assert.equal(Object.hasOwn(result, "certificationToken"), false);
   assert.equal(result.apiVersionId, CANDIDATE_API_VERSION_ID);
+});
+
+test("reserves the cold-start envelope only for synchronous certification starts", () => {
+  const synchronous = new Set([
+    "sync_toolchain",
+    "exit_23",
+    "raw_tcp_denied",
+  ]);
+  for (const scenario of COMPUTE_CERTIFICATION_SCENARIOS) {
+    assert.equal(
+      computeCertificationStartRequestTimeoutMs(scenario),
+      synchronous.has(scenario) ? 300_000 : 20_000,
+      scenario,
+    );
+  }
+
+  assert.equal(
+    computeCertificationStartRequestTimeoutMs(
+      "sync_toolchain",
+      360_000,
+      300_000,
+    ),
+    360_000,
+  );
 });
 
 test("fails closed on a malformed API version override", () => {
