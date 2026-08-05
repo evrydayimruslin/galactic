@@ -1151,6 +1151,7 @@ export async function executeComputeRun(
   let startedAtMs = now();
   let sandbox: ComputeSandboxStub | undefined;
   let session: ComputeExecutionSession | undefined;
+  const sessionIds = new Set<string>();
   let lease: PreparedComputeLease | undefined;
   let finalized = false;
   let terminalFinalizationStarted = false;
@@ -1177,8 +1178,8 @@ export async function executeComputeRun(
       if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
       if (leaseExpiryTimer !== undefined) clearTimeout(leaseExpiryTimer);
       if (reservationTimer !== undefined) clearTimeout(reservationTimer);
-      if (session) {
-        await boundedDeleteSession(sandbox, session.id).catch(() => undefined);
+      for (const sessionId of sessionIds) {
+        await boundedDeleteSession(sandbox, sessionId).catch(() => undefined);
       }
       await boundedDestroy(sandbox);
     })();
@@ -1196,8 +1197,8 @@ export async function executeComputeRun(
       if (heartbeat) await heartbeat.catch(() => undefined);
       await interruptDestroyPromise?.catch(() => undefined);
       if (!sandbox) return;
-      if (session) {
-        await boundedDeleteSession(sandbox, session.id).catch(() => undefined);
+      for (const sessionId of sessionIds) {
+        await boundedDeleteSession(sandbox, sessionId).catch(() => undefined);
       }
       // Always issue a FRESH whole-body destroy after every sequential SDK call
       // and heartbeat has unwound. An earlier interrupt can race a late
@@ -1321,6 +1322,7 @@ export async function executeComputeRun(
       isolation: true,
       commandTimeoutMs: run.timeout_ms,
     });
+    sessionIds.add(session.id);
     if (execution.signal.aborted) {
       throw new Error(String(execution.signal.reason));
     }
@@ -1371,9 +1373,28 @@ export async function executeComputeRun(
     if (execution.signal.aborted) {
       throw new Error(String(execution.signal.reason ?? "compute execution aborted"));
     }
+    // Explicit Sandbox sessions are long-lived shells. A successful user
+    // command can still terminate that shell (browser process trees have done
+    // this in production), while the container filesystem remains available.
+    // Never entrust authoritative artifact harvesting to the user-controlled
+    // execution shell: collect through a fresh, isolated internal session.
+    let captureSession = session;
+    if (run.capture_paths.length > 0) {
+      captureSession = await sandbox.createSession({
+        id: `capture-${dispatch.run_id}`,
+        name: "galactic-compute-capture-v1",
+        cwd: "/workspace",
+        isolation: true,
+        commandTimeoutMs: run.timeout_ms,
+      });
+      sessionIds.add(captureSession.id);
+      if (execution.signal.aborted) {
+        throw new Error(String(execution.signal.reason ?? "compute execution aborted"));
+      }
+    }
     const capture = await captureOutputs(
       env,
-      session,
+      captureSession,
       run,
       client,
       lease.lease_id,

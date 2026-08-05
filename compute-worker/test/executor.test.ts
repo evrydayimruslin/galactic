@@ -88,6 +88,7 @@ interface SessionOptions {
   writeError?: { path: string; message: string };
   captureKind?: "missing" | "unsafe" | "file" | "directory";
   captureSize?: number;
+  dieAfterUserExec?: boolean;
   onUserExec?: () => void;
   beforeWriteCompletes?: (path: string) => Promise<void> | void;
   workspaceAvailableKiB?: number;
@@ -96,10 +97,12 @@ interface SessionOptions {
 function makeSession(
   events: string[],
   options: SessionOptions = {},
+  files = new Map<string, string>(),
+  id = `lease-${RUN_ID}`,
 ): ComputeExecutionSession {
-  const files = new Map<string, string>();
+  let userExecFinished = false;
   return {
-    id: `lease-${RUN_ID}`,
+    id,
     async mkdir(path) {
       events.push(`mkdir:${path}`);
     },
@@ -140,7 +143,11 @@ function makeSession(
           "/tmp/galactic-output/stderr-bytes",
           String(options.stderrBytes ?? new TextEncoder().encode(stderr).byteLength),
         );
+        userExecFinished = true;
         return { success: true, exitCode: 0, stdout: "", stderr: "" };
+      }
+      if (options.dieAfterUserExec && userExecFinished) {
+        throw new Error("execution session shell terminated");
       }
       events.push(`exec:${command.split(" ")[0]}`);
       if (command.startsWith("df -Pk")) {
@@ -202,7 +209,7 @@ interface HarnessOptions {
   operationTransportFailures?: Record<string, number>;
   heartbeat?: { cancelled: boolean; expires_at: string };
   destroyFailures?: number;
-  beforeCreate?: () => Promise<void>;
+  beforeCreate?: (sessionName: string | undefined) => Promise<void>;
   bucketObjects?: Map<string, string>;
 }
 
@@ -211,17 +218,33 @@ function makeHarness(options: HarnessOptions = {}) {
   const requests: Array<{ operation: string; body: unknown }> = [];
   const puts: Array<{ key: string; options?: { sha256?: string } }> = [];
   const bucketObjects = options.bucketObjects ?? new Map<string, string>();
-  const session = makeSession(events, options.session);
+  const files = new Map<string, string>();
+  const session = makeSession(events, options.session, files);
+  const captureSession = makeSession(
+    events,
+    { ...options.session, dieAfterUserExec: false },
+    files,
+    `capture-${RUN_ID}`,
+  );
+  const createdSessions: Array<{
+    id: string | undefined;
+    name: string | undefined;
+  }> = [];
+  const deletedSessionIds: string[] = [];
   let destroyFailures = options.destroyFailures ?? 0;
   const sandbox: ComputeSandboxStub = {
-    async createSession() {
+    async createSession(createOptions) {
       events.push("sandbox:create");
-      await options.beforeCreate?.();
+      createdSessions.push({ id: createOptions?.id, name: createOptions?.name });
+      await options.beforeCreate?.(createOptions?.name);
       if (options.failCreate) throw new Error("container unavailable");
-      return session;
+      return createOptions?.name === "galactic-compute-capture-v1"
+        ? captureSession
+        : session;
     },
-    async deleteSession() {
+    async deleteSession(sessionId) {
       events.push("sandbox:delete-session");
+      deletedSessionIds.push(sessionId);
     },
     async destroy() {
       events.push("sandbox:destroy");
@@ -362,6 +385,8 @@ function makeHarness(options: HarnessOptions = {}) {
     dependencies,
     delays,
     bucketObjects,
+    createdSessions,
+    deletedSessionIds,
   };
 }
 
@@ -496,6 +521,51 @@ describe("compute executor lifecycle", () => {
     const failIndex = harness.events.lastIndexOf("control:fail");
     expect(failIndex).toBeGreaterThan(-1);
     expect(harness.events.slice(0, failIndex)).toContain("sandbox:destroy");
+    expect(
+      harness.requests.find((request) => request.operation === "fail")?.body,
+    ).toMatchObject({ code: "cancelled" });
+  });
+
+  it("freshly destroys after cancellation races capture-session creation", async () => {
+    let releaseCaptureCreate!: () => void;
+    let markCaptureCreateStarted!: () => void;
+    const captureCreateGate = new Promise<void>((resolve) => {
+      releaseCaptureCreate = resolve;
+    });
+    const captureCreateStarted = new Promise<void>((resolve) => {
+      markCaptureCreateStarted = resolve;
+    });
+    const abort = new AbortController();
+    const harness = makeHarness({
+      run: { capture_paths: ["output/browser-https.json"] },
+      beforeCreate: async (sessionName) => {
+        if (sessionName !== "galactic-compute-capture-v1") return;
+        markCaptureCreateStarted();
+        await captureCreateGate;
+      },
+    });
+    const execution = executeComputeRun(
+      harness.env,
+      { version: 1, run_id: RUN_ID },
+      { ...harness.dependencies, externalAbortSignal: abort.signal },
+    );
+    await captureCreateStarted;
+    abort.abort("owner cancelled");
+    await vi.waitFor(() => {
+      expect(harness.events).toContain("sandbox:destroy");
+    });
+    releaseCaptureCreate();
+
+    const receipt = await execution;
+    expect(receipt?.status).toBe("failed");
+    const destroys = harness.events.flatMap((event, index) =>
+      event === "sandbox:destroy" ? [index] : []
+    );
+    expect(destroys.length).toBeGreaterThanOrEqual(2);
+    expect(harness.deletedSessionIds).toContain(`capture-${RUN_ID}`);
+    expect(destroys.at(-1)).toBeLessThan(
+      harness.events.indexOf("control:fail"),
+    );
     expect(
       harness.requests.find((request) => request.operation === "fail")?.body,
     ).toMatchObject({ code: "cancelled" });
@@ -988,6 +1058,34 @@ describe("compute executor lifecycle", () => {
     expect(harness.events.indexOf("r2:put")).toBeLessThan(
       harness.events.indexOf("control:commit-output"),
     );
+  });
+
+  it("harvests outputs through a fresh session after the user shell terminates", async () => {
+    const harness = makeHarness({
+      run: { capture_paths: ["output/browser-https.json"] },
+      session: {
+        captureKind: "file",
+        captureSize: 2,
+        dieAfterUserExec: true,
+      },
+    });
+    const receipt = await executeComputeRun(
+      harness.env,
+      { version: 1, run_id: RUN_ID },
+      harness.dependencies,
+    );
+    expect(receipt?.status).toBe("succeeded");
+    expect(harness.puts).toHaveLength(1);
+    expect(harness.createdSessions).toEqual([
+      { id: `lease-${RUN_ID}`, name: "galactic-compute-v1" },
+      { id: `capture-${RUN_ID}`, name: "galactic-compute-capture-v1" },
+    ]);
+    expect(harness.deletedSessionIds).toEqual([
+      `lease-${RUN_ID}`,
+      `capture-${RUN_ID}`,
+    ]);
+    expect(operations(harness.requests, "complete")).toBe(1);
+    expect(operations(harness.requests, "fail")).toBe(0);
   });
 });
 
