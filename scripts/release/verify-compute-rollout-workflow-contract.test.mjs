@@ -78,3 +78,20 @@ test("routine provisioning is fenced before any admission version upload", () =>
   assert.match(routineStep, /\.active_run_count == 0/u);
   assert.match(routineStep, /stat -c '%a'/u);
 });
+
+test("post-promotion latch verification waits only for the exact OFF predecessor", () => {
+  const [step] = namedStepBlocks(workflow).filter((candidate) =>
+    candidate.includes(
+      "name: Verify the emergency-stop latch after promotion",
+    )
+  );
+  assert.ok(step, "post-promotion latch step is missing");
+  assert.match(step, /umask 077/u);
+  assert.match(step, /for attempt in \{1\.\.12\}/u);
+  assert.match(step, /\$\{status_file%\.json\}-attempt-/u);
+  assert.match(step, /"\$attempt_file" enabled clear/u);
+  assert.match(step, /"\$attempt_file" disabled clear/u);
+  assert.match(step, /if \[ "\$attempt" -lt 12 \]; then\n\s+sleep 5/u);
+  assert.match(step, /"\$status_file" enabled clear/u);
+  assert.doesNotMatch(step, /sleep (?:[6-9]|[1-9][0-9])/u);
+});
