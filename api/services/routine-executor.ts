@@ -1409,12 +1409,12 @@ async function invokeRoutineHandler(
     throw error;
   }
 
-  if (!response.ok) {
-    const text = await response.text().catch(() => response.statusText);
-    throw new Error(`Routine MCP call failed (${response.status}): ${text}`);
-  }
-
-  const rpc = await response.json() as {
+  // MCP transports JSON-RPC failures with their corresponding HTTP status.
+  // Parse a valid JSON-RPC body before considering response.ok so structured
+  // admission decisions (for example POLICY_OFF and capacity waits) retain
+  // their stable codes instead of degrading into retryable HTTP failures.
+  const responseText = await response.text().catch(() => "");
+  let rpc: {
     result?: unknown;
     error?: {
       message?: string;
@@ -1427,7 +1427,27 @@ async function invokeRoutineHandler(
         concurrency_scope?: "account" | "agent" | "ai" | "routine" | null;
       };
     };
-  };
+  } | null = null;
+  try {
+    const parsed = JSON.parse(responseText) as unknown;
+    if (isRecord(parsed)) rpc = parsed as NonNullable<typeof rpc>;
+  } catch {
+    // The transport failure below is the only safe interpretation of a
+    // non-JSON response. Successful MCP responses must also be valid JSON.
+  }
+  if (!rpc) {
+    const detail = responseText || response.statusText || "invalid JSON";
+    throw new Error(
+      response.ok
+        ? `Routine MCP call returned invalid JSON: ${detail}`
+        : `Routine MCP call failed (${response.status}): ${detail}`,
+    );
+  }
+  if (!response.ok && !rpc.error) {
+    throw new Error(
+      `Routine MCP call failed (${response.status}): ${responseText}`,
+    );
+  }
   if (rpc.error) {
     if (
       rpc.error.code === -32010 &&
@@ -1468,6 +1488,11 @@ async function invokeRoutineHandler(
     }
     throw new Error(
       rpc.error.message || `Routine MCP error ${rpc.error.code ?? ""}`.trim(),
+    );
+  }
+  if (!response.ok) {
+    throw new Error(
+      `Routine MCP call failed (${response.status}): ${responseText}`,
     );
   }
 
