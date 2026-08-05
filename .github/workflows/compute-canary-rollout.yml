@@ -1655,6 +1655,7 @@ jobs:
           COMPUTE_RELEASE_RUN_ID: ${{ github.run_id }}
           COMPUTE_RELEASE_EVIDENCE_DIR: ${{ github.workspace }}/compute-rollout-evidence
           COMPUTE_CERTIFICATION_API_VERSION_ID: ${{ steps.prepare.outputs.candidate_version_id }}
+          COMPUTE_CERTIFICATION_LOG_SAFE_TERMINAL_ERROR: "1"
         run: |
           set -euo pipefail
           suite_file="$EVIDENCE_DIR/compute-certification-$REQUESTED_TARGET.json"
