@@ -62,3 +62,21 @@ Deno.test("safety scan catches quoted structured secrets but permits placeholder
   }]);
   assertEquals(accepted.passed, true);
 });
+
+Deno.test("fixed Compute certification fixture passes the upload safety scan", async () => {
+  const fixtureUrl = new URL(
+    "../../examples/compute-certification/",
+    import.meta.url,
+  );
+  const files = await Promise.all(
+    ["index.ts", "manifest.json"].map(async (name) => ({
+      name,
+      content: await Deno.readTextFile(new URL(name, fixtureUrl)),
+    })),
+  );
+
+  const result = runSafetyScan(files);
+
+  assertEquals(result.passed, true);
+  assertEquals(result.summary.errors, 0);
+});
