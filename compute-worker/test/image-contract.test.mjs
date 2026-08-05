@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -20,6 +21,8 @@ describe("developer-v1 image contract", () => {
   it("pins the Sandbox image and lease MCP dependency", () => {
     const dockerfile = fixture("Dockerfile");
     const bridgePackage = JSON.parse(fixture("bridge/package.json"));
+    const bridgeLock = JSON.parse(fixture("bridge/package-lock.json"));
+    const cliLock = JSON.parse(repositoryFile("cli/package-lock.json"));
     const toolchainPackage = JSON.parse(fixture("toolchain/package.json"));
     expect(dockerfile).toContain("cloudflare/sandbox:0.12.3-python");
     expect(dockerfile).toContain('"playwright@${PLAYWRIGHT_VERSION}"');
@@ -59,6 +62,10 @@ describe("developer-v1 image contract", () => {
       "1.62.0-alpha-2026-07-20",
     );
     expect(bridgePackage.dependencies["@modelcontextprotocol/sdk"]).toBe("1.29.0");
+    for (const lock of [bridgeLock, cliLock]) {
+      expect(lock.packages["node_modules/fast-uri"].version).toBe("3.1.5");
+      expect(lock.packages["node_modules/ip-address"].version).toBe("10.4.0");
+    }
   });
 
   it("smokes the same ESM Playwright import a workspace job will use", () => {
@@ -74,6 +81,43 @@ describe("developer-v1 image contract", () => {
     expect(smoke).toContain('browser.version() !== "152.0.7977.8"');
     expect(smoke).toContain('page.goto("data:text/html,<title>compute-smoke</title>")');
     expect(smoke).toContain("/node_modules/playwright-core");
+  });
+
+  it("installs the runtime interception CA through mandatory Chrome policy", () => {
+    const dockerfile = fixture("Dockerfile");
+    const entrypoint = fixture("entrypoint.sh");
+    const policyInstaller = fixture("configure-chrome-ca-policy.mjs");
+    const smoke = repositoryFile("compute-worker/scripts/smoke-image.sh");
+    const inputHasher = repositoryFile(
+      "compute-worker/scripts/hash-image-inputs.sh",
+    );
+
+    expect(entrypoint).toContain(
+      "/etc/opt/chrome_for_testing/policies/managed/galactic-cloudflare-ca.json",
+    );
+    expect(entrypoint).toContain(
+      "/etc/cloudflare/certs/cloudflare-containers-ca.crt",
+    );
+    expect(entrypoint).toContain("configure-chrome-ca-policy.mjs");
+    expect(policyInstaller).toContain("CACertificates");
+    expect(policyInstaller).toContain("new X509Certificate(der)");
+    expect(policyInstaller).toContain("certificate.ca");
+    expect(policyInstaller).toContain("renameSync(temporaryFile, policyFile)");
+    expect(policyInstaller).toContain("chmodSync(policyFile, 0o444)");
+    expect(dockerfile).toContain(
+      "COPY compute-worker/images/standard/configure-chrome-ca-policy.mjs",
+    );
+    expect(inputHasher).toContain(
+      "compute-worker/images/standard/configure-chrome-ca-policy.mjs",
+    );
+    expect(smoke).toContain("policy.CACertificates.length !== 1");
+    expect(smoke).toContain("galactic-cloudflare-ca.json)\" = 444");
+
+    for (const source of [dockerfile, entrypoint, policyInstaller, smoke]) {
+      expect(source).not.toContain("ignoreHTTPSErrors");
+      expect(source).not.toContain("--ignore-certificate-errors");
+      expect(source).not.toContain("--ignore-certificate-errors-spki-list");
+    }
   });
 
   it("bakes the local Compute-capable CLI with a pinned, offline Deno runtime", () => {
@@ -399,6 +443,17 @@ describe("Compute release supply-chain contract", () => {
     expect(manifest).toContain(
       "compute-worker/images/standard/python/requirements.lock",
     );
+    for (const cve of ["11940", "11972", "15308"]) {
+      expect(manifest).toContain(
+        `compute-worker/images/standard/python/patches/cve-2026-${cve}.patch`,
+      );
+    }
+    expect(fixture("Dockerfile")).not.toContain(
+      "github.com/python/cpython/commit/",
+    );
+    expect(fixture("Dockerfile").match(/patch --batch --fuzz=0/g)).toHaveLength(
+      3,
+    );
   });
 
   it("limits VEX to the three exact tested CPython backports", () => {
@@ -414,27 +469,32 @@ describe("Compute release supply-chain contract", () => {
         "CVE-2026-11972",
         [
           "3f031d431f80668e14f3bc066bbf4369cd9281b9",
-          "240177f6a8e0e328773cb775add1f2cfe9128e67d461a9ba728fbb3cbbe89086",
+          "4d7ccbe21433911d9fccbb73fbe02b6767f3968837e117dbd4a2361ab23d7df2",
         ],
       ],
       [
         "CVE-2026-11940",
         [
           "771d12dda5140313db0ac550292987975651bbde",
-          "f74e92f1eb84a91b3efc144660d9e59162d81a922bb9ecccb2e64b832c91d387",
+          "164d2fa4eda5d9ba9084b30940bf81359523e1d1d8e6b0ff753a17fb9c308eac",
         ],
       ],
       [
         "CVE-2026-15308",
         [
           "7933f4bf7131aa4140750f9404f5de0aa2969ced",
-          "d8913b46e769704d0e810994909ee81c8af6aaa7230b79ff4c0d849fe1f305a4",
+          "1468bb09b06e351b2ed9212f9a068a8f7a988f84dd1bc0021233f85cf05693d4",
         ],
       ],
     ]);
     for (const statement of vex.statements) {
       const [commit, patchSha] = expected.get(statement.vulnerability.name) ?? [];
       expect(commit).toBeTruthy();
+      const patch = fixture(
+        `python/patches/${statement.vulnerability.name.toLowerCase()}.patch`,
+      );
+      expect(createHash("sha256").update(patch).digest("hex")).toBe(patchSha);
+      expect(fixture("Dockerfile")).toContain(patchSha);
       expect(statement.products).toEqual([
         { "@id": "pkg:generic/python@3.13.14" },
       ]);
