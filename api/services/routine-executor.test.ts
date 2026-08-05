@@ -1478,7 +1478,7 @@ Deno.test("processQueuedRoutineRun: stale or tampered operator remediation fails
   }
 });
 
-Deno.test("processQueuedRoutineRun: concurrency admission coalesces and retries a sparse routine at lease release", async () => {
+Deno.test("processQueuedRoutineRun: HTTP 429 concurrency admission coalesces and retries a sparse routine at lease release", async () => {
   const restoreEnv = installEnv();
   const originalFetch = globalThis.fetch;
   const retryAt = "2026-05-17T12:03:00.000Z";
@@ -1547,7 +1547,7 @@ Deno.test("processQueuedRoutineRun: concurrency admission coalesces and retries 
                 concurrency_scope: "routine",
               },
             },
-          }),
+          }, 429),
       },
     );
 
@@ -1577,7 +1577,7 @@ Deno.test("processQueuedRoutineRun: concurrency admission coalesces and retries 
   }
 });
 
-Deno.test("processQueuedRoutineRun: preserves POLICY_OFF as a terminal routine error code", async () => {
+Deno.test("processQueuedRoutineRun: preserves HTTP 400 POLICY_OFF as a terminal routine error code", async () => {
   const restoreEnv = installEnv();
   const originalFetch = globalThis.fetch;
   const runPatches: Array<Record<string, unknown>> = [];
@@ -1625,7 +1625,7 @@ Deno.test("processQueuedRoutineRun: preserves POLICY_OFF as a terminal routine e
                 "POLICY_OFF: the owner set this function to Off for autonomous runs.",
               data: { type: "POLICY_OFF" },
             },
-          }),
+          }, 400),
       },
     );
 
