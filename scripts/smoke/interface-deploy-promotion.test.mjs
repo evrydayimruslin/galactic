@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import {
+  collectInterfaceDeploySourceFiles,
+  INTERFACE_DEPLOY_SOURCE_EXTENSIONS,
+} from "./interface-deploy-source-files.mjs";
 import {
   computeRawSourceHash,
   fixtureRefreshPlan,
@@ -31,6 +36,20 @@ const COMPUTE_AUTHORITY = {
   level: "read",
   effects: { "compute.execute": "free" },
 };
+
+test("reviewed Compute certification collection includes its V2 YAML contract", () => {
+  const directory = fileURLToPath(
+    new URL("../../examples/compute-certification/", import.meta.url),
+  );
+  const files = collectInterfaceDeploySourceFiles(directory);
+
+  assert.ok(INTERFACE_DEPLOY_SOURCE_EXTENSIONS.includes(".yaml"));
+  assert.deepEqual(
+    files.map((file) => file.path),
+    ["galactic.yaml", "index.ts"],
+  );
+  assert.equal(files[0].content, CERTIFICATION_DOCUMENT);
+});
 const CERTIFICATION_MANIFEST = {
   name: "Compute Certification",
   version: "1.0.0",
