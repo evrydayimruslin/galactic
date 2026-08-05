@@ -25,6 +25,9 @@ const PROJECT_REF = STAGING_SUPABASE_PROJECT_REF;
 const OWNER_ID = "7a2f16e1-c578-4c9b-9db7-6b3f49703fe0";
 const AGENT_ID = "da122721-e66b-4d3e-b107-b9841c7f7162";
 const SESSION_ID = "8725bcf0-2189-4701-98f2-ee652ed3cfb5";
+const CANDIDATE_API_VERSION_ID = "12345678-1234-1234-1234-123456789abc";
+const STAGING_VERSION_OVERRIDE =
+  `ultralight-api-staging="${CANDIDATE_API_VERSION_ID}"`;
 const OWNER_EMAIL = "owner@example.test";
 const NOW_MS = 1_800_000_000_000;
 const SUPABASE_URL = STAGING_SUPABASE_URL;
@@ -275,6 +278,7 @@ test("mints one owner session through the exact single-use exchange", async () =
     projectRef: PROJECT_REF,
     apiToken: "gx_smoke-secret",
     smokeAgentId: AGENT_ID,
+    apiVersionId: CANDIDATE_API_VERSION_ID,
     fetchImpl,
     now: () => NOW_MS,
   });
@@ -341,6 +345,24 @@ test("mints one owner session through the exact single-use exchange", async () =
       call.headers.get("authorization") === `Bearer ${session.accessToken}`
     ).headers.get("authorization"),
     `Bearer ${session.accessToken}`,
+  );
+  const galacticCalls = calls.filter((call) =>
+    call.url.startsWith(STAGING_API_BASE)
+  );
+  assert.equal(galacticCalls.length, 3);
+  assert.equal(
+    galacticCalls.every((call) =>
+      call.headers.get("cloudflare-workers-version-overrides") ===
+        STAGING_VERSION_OVERRIDE
+    ),
+    true,
+  );
+  assert.equal(
+    calls.filter((call) => !call.url.startsWith(STAGING_API_BASE)).every(
+      (call) =>
+        !call.headers.has("cloudflare-workers-version-overrides"),
+    ),
+    true,
   );
   await session.revoke();
   const logout = calls.filter((call) =>
@@ -439,6 +461,23 @@ test("generic owner bootstrap rejects cross-target origins and projects before f
   for (const runCase of cases) {
     await assert.rejects(runCase(), /pinned production|production project/u);
   }
+  assert.equal(fetchCalls, 0);
+});
+
+test("owner bootstrap rejects a malformed Worker version override before fetching", async () => {
+  let fetchCalls = 0;
+  await assert.rejects(
+    resolveSmokeOwner({
+      apiToken: "gx_smoke-secret",
+      smokeAgentId: AGENT_ID,
+      apiVersionId: 'invalid-version\" , injected="value',
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return jsonResponse({});
+      },
+    }),
+    /Worker version id is invalid/u,
+  );
   assert.equal(fetchCalls, 0);
 });
 
@@ -852,6 +891,7 @@ test("generic child runner injects production target and preserves nonsecret rel
         COMPUTE_RELEASE_SHA: "a".repeat(40),
         COMPUTE_RELEASE_RUN_ID: "123456",
         COMPUTE_RELEASE_EVIDENCE_DIR: "/tmp/release-evidence",
+        COMPUTE_CERTIFICATION_API_VERSION_ID: CANDIDATE_API_VERSION_ID,
       },
     },
   );
@@ -866,6 +906,10 @@ test("generic child runner injects production target and preserves nonsecret rel
   assert.equal(
     passedEnv.COMPUTE_RELEASE_EVIDENCE_DIR,
     "/tmp/release-evidence",
+  );
+  assert.equal(
+    passedEnv.COMPUTE_CERTIFICATION_API_VERSION_ID,
+    CANDIDATE_API_VERSION_ID,
   );
   assert.equal(
     Object.hasOwn(passedEnv, "SUPABASE_PRODUCTION_PROJECT_ID"),

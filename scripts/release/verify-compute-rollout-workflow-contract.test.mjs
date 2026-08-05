@@ -83,7 +83,7 @@ test("routine provisioning is fenced before any admission version upload", () =>
   assert.match(routineStep, /stat -c '%a'/u);
 });
 
-test("post-promotion latch verification waits only for the exact OFF predecessor", () => {
+test("post-promotion latch verification pins and stabilizes the exact candidate", () => {
   const [step] = namedStepBlocks(workflow).filter((candidate) =>
     candidate.includes(
       "name: Verify the emergency-stop latch after promotion",
@@ -91,13 +91,45 @@ test("post-promotion latch verification waits only for the exact OFF predecessor
   );
   assert.ok(step, "post-promotion latch step is missing");
   assert.match(step, /umask 077/u);
+  assert.match(
+    step,
+    /CANDIDATE_API_VERSION_ID: \$\{\{ steps\.prepare\.outputs\.candidate_version_id \}\}/u,
+  );
+  assert.match(step, /Cloudflare-Workers-Version-Overrides/u);
   assert.match(step, /for attempt in \{1\.\.12\}/u);
+  assert.match(step, /consecutive=0/u);
+  assert.match(step, /\[ "\$consecutive" -ge 3 \]/u);
   assert.match(step, /\$\{status_file%\.json\}-attempt-/u);
   assert.match(step, /"\$attempt_file" enabled clear/u);
   assert.match(step, /"\$attempt_file" disabled clear/u);
   assert.match(step, /if \[ "\$attempt" -lt 12 \]; then\n\s+sleep 5/u);
   assert.match(step, /"\$status_file" enabled clear/u);
   assert.doesNotMatch(step, /sleep (?:[6-9]|[1-9][0-9])/u);
+});
+
+test("certification and final read fences stay pinned to the promoted candidate", () => {
+  const steps = namedStepBlocks(workflow);
+  const [suite] = steps.filter((step) =>
+    step.includes("name: Run the deployed Compute certification suite")
+  );
+  const [snapshot] = steps.filter((step) =>
+    step.includes("name: Read the least-privilege Compute certification snapshot")
+  );
+  const [finalLatch] = steps.filter((step) =>
+    step.includes("name: Final emergency-stop latch fence after certification")
+  );
+  assert.ok(suite && snapshot && finalLatch, "candidate-pinned steps are missing");
+  assert.match(
+    suite,
+    /COMPUTE_CERTIFICATION_API_VERSION_ID: \$\{\{ steps\.prepare\.outputs\.candidate_version_id \}\}/u,
+  );
+  for (const step of [snapshot, finalLatch]) {
+    assert.match(
+      step,
+      /CANDIDATE_API_VERSION_ID: \$\{\{ steps\.prepare\.outputs\.candidate_version_id \}\}/u,
+    );
+    assert.match(step, /Cloudflare-Workers-Version-Overrides/u);
+  }
 });
 
 test("every OFF transition waits only for the exact enabled predecessor", () => {

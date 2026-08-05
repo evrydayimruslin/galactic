@@ -31,6 +31,11 @@ import { Buffer } from "node:buffer";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import {
+  cloudflareWorkerVersionOverrideHeaders,
+  COMPUTE_CERTIFICATION_API_VERSION_ID_ENV,
+} from "./cloudflare-worker-version-override.mjs";
+
 export const STAGING_API_BASE =
   "https://ultralight-api-staging.rgn4jz429m.workers.dev";
 export const STAGING_SUPABASE_PROJECT_REF = "mtekfhozmsboxizxxxyn";
@@ -48,6 +53,7 @@ export const OWNER_SESSION_TARGETS = Object.freeze({
   staging: Object.freeze({
     name: "staging",
     apiBase: STAGING_API_BASE,
+    apiWorker: "ultralight-api-staging",
     projectRef: STAGING_SUPABASE_PROJECT_REF,
     supabaseUrl: STAGING_SUPABASE_URL,
     projectIdEnv: "SUPABASE_STAGING_PROJECT_ID",
@@ -55,6 +61,7 @@ export const OWNER_SESSION_TARGETS = Object.freeze({
   production: Object.freeze({
     name: "production",
     apiBase: PRODUCTION_API_BASE,
+    apiWorker: "ultralight-api",
     projectRef: PRODUCTION_SUPABASE_PROJECT_REF,
     supabaseUrl: PRODUCTION_SUPABASE_URL,
     projectIdEnv: "SUPABASE_PRODUCTION_PROJECT_ID",
@@ -157,6 +164,7 @@ export async function resolveSmokeOwner({
   apiToken,
   smokeAgentId,
   apiBase,
+  apiVersionId,
   fetchImpl = fetch,
   timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
 }) {
@@ -173,10 +181,17 @@ export async function resolveSmokeOwner({
   }
 
   const authorization = { Authorization: `Bearer ${token}` };
+  const apiHeaders = {
+    ...authorization,
+    ...cloudflareWorkerVersionOverrideHeaders(
+      environment.apiWorker,
+      apiVersionId,
+    ),
+  };
   const owner = await requestJson(
     fetchImpl,
     `${resolvedApiBase}/auth/user`,
-    { headers: authorization },
+    { headers: apiHeaders },
     `${environment.name} smoke owner lookup`,
     timeoutMs,
   );
@@ -200,7 +215,7 @@ export async function resolveSmokeOwner({
   const projection = await requestJson(
     fetchImpl,
     `${resolvedApiBase}/api/launch/agents/${encodeURIComponent(agentId)}`,
-    { headers: authorization },
+    { headers: apiHeaders },
     `${environment.name} smoke Agent ownership lookup`,
     timeoutMs,
   );
@@ -375,6 +390,7 @@ export async function mintOwnerSession({
   target = "staging",
   owner,
   apiBase,
+  apiVersionId,
   supabaseUrl,
   anonKey,
   serviceRoleKey,
@@ -414,6 +430,10 @@ export async function mintOwnerSession({
   const serviceRole = requiredString(
     serviceRoleKey,
     `${environment.name} Supabase service-role key`,
+  );
+  const galacticHeaders = cloudflareWorkerVersionOverrideHeaders(
+    environment.apiWorker,
+    apiVersionId,
   );
 
   // Prove the auth user already exists by immutable id and exact email before
@@ -544,7 +564,12 @@ export async function mintOwnerSession({
     const galacticUser = await requestJson(
       fetchImpl,
       `${resolvedApiBase}/auth/user`,
-      { headers: { Authorization: `Bearer ${accessToken}` } },
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          ...galacticHeaders,
+        },
+      },
       "Galactic owner-session verification",
       timeoutMs,
     );
@@ -585,6 +610,7 @@ export async function obtainOwnerSession({
   projectRef,
   apiToken,
   smokeAgentId,
+  apiVersionId,
   fetchImpl = fetch,
   now = Date.now,
   timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
@@ -595,6 +621,7 @@ export async function obtainOwnerSession({
     apiBase: environment.apiBase,
     apiToken,
     smokeAgentId,
+    apiVersionId,
     fetchImpl,
     timeoutMs,
   });
@@ -609,6 +636,7 @@ export async function obtainOwnerSession({
     target: environment.name,
     owner,
     apiBase: environment.apiBase,
+    apiVersionId,
     ...keys,
     fetchImpl,
     now,
@@ -765,6 +793,7 @@ async function main(argv, env = process.env) {
     projectRef: env[environment.projectIdEnv],
     apiToken: env.ULTRALIGHT_TOKEN,
     smokeAgentId: env.GALACTIC_SMOKE_APP_ID,
+    apiVersionId: env[COMPUTE_CERTIFICATION_API_VERSION_ID_ENV],
   });
 
   if (checkOnly) {
