@@ -607,7 +607,7 @@ the Compute Worker does not exercise admission.
 | Secret denial | undeclared/unconfigured/reserved secret names fail before execution; value never appears in response/logs |
 | Egress allow | public HTTP(S), Git-over-HTTPS, package registries, and Cloudflare-resolved public names work through the catch-all Worker handler |
 | HTTP(S) egress deny | metadata/private literals, every Galactic public control-plane alias, public-to-private redirects, and DNS-rebinding probes cannot reach a private/control-plane origin |
-| Raw transport deny | `CONNECT`, custom DNS, raw TCP on 80/443, SSH, and native PostgreSQL/MySQL/Redis ports fail while the private `galactic.internal` route remains healthy |
+| Raw transport deny | `CONNECT`, custom DNS, end-to-end non-HTTP payload delivery on 80/443, SSH on 22/443, and native PostgreSQL/MySQL/Redis ports fail while the private `galactic.internal` route remains healthy; a TCP handshake accepted by the local interception sidecar is not evidence that payload reached an origin |
 | WebSocket/Upgrade | a public WSS echo and a Playwright page using WSS work through the pinned runtime, or WSS remains explicitly unsupported for the release; private/Galactic Upgrade targets stay denied |
 | Private gateway | `galactic.internal/v1` works only with the lease token and exact server-side authority |
 | No ambient authority | body contains no human/Agent bearer, platform key, Supabase key, Cloudflare token, or unrequested provider key |

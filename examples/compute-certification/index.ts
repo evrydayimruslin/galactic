@@ -261,10 +261,29 @@ const HTTPS_EGRESS_SCRIPT = [
 
 const RAW_TCP_SCRIPT = [
   "set -eu",
-  "if nc -z -w 5 example.com 443 >/dev/null 2>&1; then",
-  "  exit 91",
-  "fi",
-  'printf \'%s\\n\' \'{"schema_version":1,"scenario":"raw_tcp_denied","verified":true,"raw_tcp_denied":true}\'',
+  "# A zero-byte connect is insufficient: the interception sidecar may accept",
+  "# a local port-443 socket before it has classified the application protocol.",
+  "getent ahosts ssh.github.com >/dev/null || exit 93",
+  "getent ahosts github.com >/dev/null || exit 93",
+  "probe_ssh_banner() {",
+  '  host="$1"',
+  '  port="$2"',
+  '  escape_code="$3"',
+  "  set +e",
+  '  probe_output="$(timeout 8 ssh -vv -T -p "$port" -o BatchMode=yes -o ConnectTimeout=5 -o ConnectionAttempts=1 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null -o PreferredAuthentications=none -o PubkeyAuthentication=no -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no "git@$host" 2>&1)"',
+  '  probe_status="$?"',
+  "  set -e",
+  '  case "$probe_output" in',
+  '    *"Remote protocol version "*|*"Server host key:"*|*"Authentications that can continue:"*) exit "$escape_code" ;;',
+  "  esac",
+  '  case "$probe_status" in',
+  "    124|255) ;;",
+  "    *) exit 92 ;;",
+  "  esac",
+  "}",
+  "probe_ssh_banner ssh.github.com 443 91",
+  "probe_ssh_banner github.com 22 90",
+  'printf \'%s\\n\' \'{"schema_version":1,"scenario":"raw_tcp_denied","verified":true,"raw_tcp_denied":true,"probe_method":"ssh_banner_absence","ssh_over_443_host":"ssh.github.com","ssh_over_443_denied":true,"ssh_port_22_host":"github.com","ssh_port_22_denied":true}\'',
 ].join("\n");
 
 const POLICY_PROBE_SCRIPT =
@@ -420,7 +439,7 @@ function buildScenarioRequest(
         60_000,
       );
     case "raw_tcp_denied":
-      return baseRequest(["bash", "-lc", RAW_TCP_SCRIPT], "sync", 15_000);
+      return baseRequest(["bash", "-lc", RAW_TCP_SCRIPT], "sync", 25_000);
   }
 }
 

@@ -69,6 +69,13 @@ function runHttpsEgressFixture(curlBody) {
   });
 }
 
+function runRawTcpFixture(shellPrelude) {
+  return spawnSync("bash", ["-s"], {
+    encoding: "utf8",
+    input: `${shellPrelude}\n${computeFixtureScript("RAW_TCP_SCRIPT")}\n`,
+  });
+}
+
 test("binds toolchain certification to the workspace and image CLI metadata", () => {
   const cliPackage = JSON.parse(
     readFileSync(new URL("../../cli/package.json", import.meta.url), "utf8"),
@@ -402,6 +409,91 @@ test("the HTTPS egress fixture records narrow denial modes and rejects a transpo
     ),
   );
   assert.equal(reachablePrivateTarget.status, 90);
+});
+
+test("the raw transport fixture requires payload escape rather than a local TCP handshake", () => {
+  const deniedPrelude = [
+    "getent() { return 0; }",
+    'timeout() { shift; "$@"; }',
+    "ssh() { return 255; }",
+  ].join("\n");
+  const denied = runRawTcpFixture(deniedPrelude);
+  assert.equal(denied.status, 0, denied.stderr);
+  assert.deepEqual(JSON.parse(denied.stdout), {
+    schema_version: 1,
+    scenario: "raw_tcp_denied",
+    verified: true,
+    raw_tcp_denied: true,
+    probe_method: "ssh_banner_absence",
+    ssh_over_443_host: "ssh.github.com",
+    ssh_over_443_denied: true,
+    ssh_port_22_host: "github.com",
+    ssh_port_22_denied: true,
+  });
+
+  const sshOver443Escape = runRawTcpFixture([
+    "getent() { return 0; }",
+    'timeout() { shift; "$@"; }',
+    'ssh() { previous=""; for argument in "$@"; do if [ "$previous" = "-p" ] && [ "$argument" = "443" ]; then printf \'debug1: Remote protocol version 2.0, remote software version GitHub\\n\'; fi; previous="$argument"; done; return 255; }',
+  ].join("\n"));
+  assert.equal(sshOver443Escape.status, 91);
+
+  const sshPort22Escape = runRawTcpFixture([
+    "getent() { return 0; }",
+    'timeout() { shift; "$@"; }',
+    'ssh() { previous=""; for argument in "$@"; do if [ "$previous" = "-p" ] && [ "$argument" = "22" ]; then printf \'debug1: Server host key: ssh-ed25519 SHA256:fixture\\n\'; fi; previous="$argument"; done; return 255; }',
+  ].join("\n"));
+  assert.equal(sshPort22Escape.status, 90);
+
+  const unexpectedProbeFailure = runRawTcpFixture([
+    "getent() { return 0; }",
+    'timeout() { return 127; }',
+  ].join("\n"));
+  assert.equal(unexpectedProbeFailure.status, 92);
+
+  const dnsFailure = runRawTcpFixture("getent() { return 2; }");
+  assert.equal(dnsFailure.status, 93);
+});
+
+test("raw transport proof is bound to the fixed SSH payload probe", () => {
+  const script = computeFixtureScript("RAW_TCP_SCRIPT");
+  assert.match(script, /probe_ssh_banner ssh\.github\.com 443 91/u);
+  assert.match(script, /probe_ssh_banner github\.com 22 90/u);
+  assert.doesNotMatch(script, /\bnc\s+-z\b/u);
+
+  const proof = {
+    schema_version: 1,
+    scenario: "raw_tcp_denied",
+    verified: true,
+    raw_tcp_denied: true,
+    probe_method: "ssh_banner_absence",
+    ssh_over_443_host: "ssh.github.com",
+    ssh_over_443_denied: true,
+    ssh_port_22_host: "github.com",
+    ssh_port_22_denied: true,
+  };
+  assert.match(
+    validateComputeCertificationProof({
+      stdout: JSON.stringify(proof),
+      stderr: "",
+    }, "raw_tcp_denied").stdoutSha256,
+    /^[0-9a-f]{64}$/u,
+  );
+  for (const drift of [
+    { probe_method: "connect_only" },
+    { ssh_over_443_host: "example.com" },
+    { ssh_over_443_denied: false },
+    { ssh_port_22_host: "example.com" },
+    { ssh_port_22_denied: false },
+  ]) {
+    assert.throws(
+      () => validateComputeCertificationProof({
+        stdout: JSON.stringify({ ...proof, ...drift }),
+        stderr: "",
+      }, "raw_tcp_denied"),
+      (error) => error.code === "INVALID_PROBE_OUTPUT",
+    );
+  }
 });
 
 test("cross-binds producer and consumer proofs to the deterministic fixture", () => {
