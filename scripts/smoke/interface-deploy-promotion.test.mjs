@@ -18,6 +18,7 @@ import {
   validateReviewedComputeSource,
   validateReviewedFixtureIdentity,
   validateStagedPromotion,
+  waitForPromotedAgentHomeRelease,
 } from "./interface-deploy-promotion.mjs";
 
 const APP_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -226,6 +227,40 @@ function home({
     },
   };
 }
+
+test("waits boundedly for the promoted executable attestation to converge", async () => {
+  const snapshots = [
+    home({ live: "1.4.2" }),
+    home({ integrity: "unverified" }),
+    home(),
+  ];
+  const delays = [];
+  const converged = await waitForPromotedAgentHomeRelease({
+    readHome: async () => snapshots.shift(),
+    appId: APP_ID,
+    version: VERSION,
+    sourceHash: SOURCE_HASH,
+    attempts: 3,
+    delayMs: 7,
+    wait: async (milliseconds) => delays.push(milliseconds),
+  });
+
+  assert.equal(converged.release.live.version, VERSION);
+  assert.deepEqual(delays, [7, 7]);
+
+  await assert.rejects(
+    waitForPromotedAgentHomeRelease({
+      readHome: async () => home({ integrity: "unverified" }),
+      appId: APP_ID,
+      version: VERSION,
+      sourceHash: SOURCE_HASH,
+      attempts: 2,
+      delayMs: 0,
+      wait: async () => {},
+    }),
+    /did not converge on the promoted executable after 2 reads/u,
+  );
+});
 
 test("reviewed promotion requires every exact authority acknowledgement", () => {
   const config = reviewedPromotionConfig({

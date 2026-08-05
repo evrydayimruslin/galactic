@@ -447,6 +447,67 @@ export function promotionAction(home, version, idempotencyKey) {
   };
 }
 
+export function validatePromotedAgentHomeRelease({
+  home,
+  appId,
+  version,
+  sourceHash,
+}) {
+  const snapshot = record(home, "Promoted Agent Home snapshot");
+  if (
+    snapshot.agent?.id !== appId ||
+    snapshot.release?.live?.version !== version ||
+    snapshot.release.live.sourceFingerprint !== sourceHash ||
+    snapshot.release.live.executedVersion !== version ||
+    snapshot.release.live.integrity !== "verified"
+  ) {
+    throw new Error(
+      "Agent Home did not verify the exact promoted executable version.",
+    );
+  }
+  return snapshot;
+}
+
+export async function waitForPromotedAgentHomeRelease({
+  readHome,
+  appId,
+  version,
+  sourceHash,
+  attempts = 30,
+  delayMs = 2_000,
+  wait = (milliseconds) =>
+    new Promise((resolve) => setTimeout(resolve, milliseconds)),
+}) {
+  if (typeof readHome !== "function" || typeof wait !== "function") {
+    throw new Error("Agent Home convergence requires read and wait functions.");
+  }
+  if (!Number.isInteger(attempts) || attempts < 1 || attempts > 60) {
+    throw new Error("Agent Home convergence attempts must be between 1 and 60.");
+  }
+  if (!Number.isInteger(delayMs) || delayMs < 0 || delayMs > 10_000) {
+    throw new Error("Agent Home convergence delay is invalid.");
+  }
+
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return validatePromotedAgentHomeRelease({
+        home: await readHome(),
+        appId,
+        version,
+        sourceHash,
+      });
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) await wait(delayMs);
+    }
+  }
+  throw new Error(
+    `Agent Home did not converge on the promoted executable after ${attempts} reads.`,
+    { cause: lastError },
+  );
+}
+
 export function validatePromotedComputeFixture({
   app,
   home,
@@ -478,18 +539,7 @@ export function validatePromotedComputeFixture({
     throw new Error("The live fixture export list does not match the review profile.");
   }
 
-  const snapshot = record(home, "Promoted Agent Home snapshot");
-  if (
-    snapshot.agent?.id !== appId ||
-    snapshot.release?.live?.version !== version ||
-    snapshot.release.live.sourceFingerprint !== sourceHash ||
-    snapshot.release.live.executedVersion !== version ||
-    snapshot.release.live.integrity !== "verified"
-  ) {
-    throw new Error(
-      "Agent Home did not verify the exact promoted executable version.",
-    );
-  }
+  validatePromotedAgentHomeRelease({ home, appId, version, sourceHash });
 
   const functionProjection = record(
     functions,
