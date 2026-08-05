@@ -777,9 +777,14 @@ The API must fail closed if this secret equals
 `COMPUTE_JOB_TOKEN_PEPPER`; compare them inside the Worker, not by co-locating
 the values in an Actions step.
 The fixed certification Agent's `run_compute_policy_probe` function must be at
-the managed `free` baseline and its certification routine must be paused before
-a normal dispatch. The suite refuses to mutate any other starting policy;
-cleanup-only is the recovery path that restores this fixed invariant.
+the managed `free` baseline and its certification routine must be paused and
+idle before a normal dispatch. Before uploading any admission version, the
+rollout workflow idempotently creates that account-owned routine from the
+live `compute_policy_probe` template when it is missing. It never edits an
+existing routine: duplicate names, Agent/template/handler drift, capabilities,
+blockers, active runs, or a non-`free` policy fail closed while admission is
+still OFF. The suite refuses to mutate any other starting policy; cleanup-only
+is the recovery path that restores the fixed paused/idle/`free` invariant.
 
 Provision a separate protected GitHub environment named
 `production-compute-probe` for `.github/workflows/compute-probe.yml`. Its

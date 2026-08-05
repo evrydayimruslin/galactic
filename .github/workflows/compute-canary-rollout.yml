@@ -973,6 +973,46 @@ jobs:
               --reviewed-compute-secrets none \
             | tee "$EVIDENCE_DIR/certification-fixture-refresh.txt"
 
+      - name: Ensure the fixed certification routine is paused and ready
+        if: >-
+          inputs.stage != 'revert_off' &&
+          steps.canary_identity.outputs.verified == 'true'
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_STAGING_PROJECT_ID: ${{ (inputs.stage == 'staging_canary' && secrets.SUPABASE_STAGING_PROJECT_ID) || '' }}
+          SUPABASE_PRODUCTION_PROJECT_ID: ${{ ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.SUPABASE_PRODUCTION_PROJECT_ID) || '' }}
+          ULTRALIGHT_TOKEN: ${{ (inputs.stage == 'staging_canary' && secrets.ULTRALIGHT_TOKEN_STAGING) || ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.ULTRALIGHT_TOKEN) }}
+          GALACTIC_SMOKE_APP_ID: ${{ (inputs.stage == 'staging_canary' && secrets.GALACTIC_SMOKE_APP_ID_STAGING) || ((inputs.stage == 'production_canary' || inputs.stage == 'production_global') && secrets.GALACTIC_SMOKE_APP_ID) }}
+        run: |
+          set -euo pipefail
+          routine_preflight="$EVIDENCE_DIR/certification-routine-preflight.json"
+          node scripts/smoke/with-staging-owner-session.mjs \
+            --target "$REQUESTED_TARGET" \
+            -- node scripts/smoke/ensure-compute-certification-routine.mjs \
+              --output "$routine_preflight"
+          jq -e \
+            --arg target "$REQUESTED_TARGET" \
+            --arg agent "$GALACTIC_SMOKE_APP_ID" '
+              .schema_version == 1 and
+              .kind == "galactic_compute_certification_routine_preflight" and
+              .verified == true and
+              .target == $target and
+              .agent_id == ($agent | ascii_downcase) and
+              (.routine_id | test("^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")) and
+              .template_id == "compute_policy_probe" and
+              .function_name == "run_compute_policy_probe" and
+              .name == "Compute policy certification" and
+              .status == "paused" and
+              .active_run_count == 0 and
+              .function_policy == "free" and
+              ((.created | type) == "boolean")
+            ' "$routine_preflight" >/dev/null
+          [ "$(stat -c '%a' "$routine_preflight")" = "600" ] || {
+            echo "Certification routine evidence must have mode 0600." >&2
+            exit 1
+          }
+
       - name: Upload and byte-verify rollback and desired policy versions
         id: prepare
         shell: bash
