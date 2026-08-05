@@ -437,6 +437,15 @@ evidence binds the prior and refreshed Worker versions and separate code/config
 fingerprints. Any failed fence or unpublished committed evidence promotes the
 exact pre-refresh Worker version captured by that dispatch.
 
+For a second or later Worker-only repair against the same image release, also
+supply `predecessor_worker_refresh_run_id` from the refresh that produced the
+currently live Worker. The workflow verifies that artifact, requires its SHA to
+be an ancestor of the new dispatch, and matches its exact version, tag, code
+ETag, configuration fingerprint, image, and source release to the live OFF
+state. The resulting evidence forms a reconstructible release → prior refresh →
+new refresh chain; never roll the Worker back to the older image-release version
+merely to make another refresh pass.
+
 Supply the successful Worker-refresh run to **Compute Canary Rollout** whenever
 the live Worker version is newer than the image-certifying Compute Deploy run.
 The rollout verifies both artifacts: Compute Deploy remains image authority;

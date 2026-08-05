@@ -37,7 +37,7 @@ const TARGETS = Object.freeze({
   }),
 });
 
-const SUCCESS_FILES = Object.freeze([
+const SUCCESS_FILES_V1 = Object.freeze([
   'after-container-readiness.json',
   'after-state.json',
   'after-worker-fingerprint.json',
@@ -48,6 +48,10 @@ const SUCCESS_FILES = Object.freeze([
   'request.json',
   'source-release-verification.json',
 ]);
+const SUCCESS_FILES_V2 = Object.freeze([
+  ...SUCCESS_FILES_V1,
+  'predecessor-worker-refresh-verification.json',
+].sort());
 
 function fail(message) {
   throw new Error(`Compute Worker refresh evidence is invalid: ${message}`);
@@ -198,12 +202,15 @@ function validateDispatch(value, { includeRef = false } = {}) {
 }
 
 function validateRequest(value, target, sourceRunId) {
+  const candidate = record(value, 'request.json');
+  const schemaVersion = candidate.schema_version;
   const row = exactKeys(
-    value,
+    candidate,
     [
       'confirmation',
       'dispatch',
       'kind',
+      ...(schemaVersion === 2 ? ['predecessor_worker_refresh_run_id'] : []),
       'schema_version',
       'source_compute_release_run_id',
       'target',
@@ -212,14 +219,29 @@ function validateRequest(value, target, sourceRunId) {
   );
   const dispatch = validateDispatch(row.dispatch, { includeRef: true });
   validateGitRef(target, dispatch.git_ref, 'request git ref');
+  const predecessorRunId = schemaVersion === 2
+    ? row.predecessor_worker_refresh_run_id === null
+      ? null
+      : positiveRunId(
+        row.predecessor_worker_refresh_run_id,
+        'predecessor Worker refresh run ID',
+      )
+    : null;
   if (
-    row.schema_version !== 1 || row.kind !== REQUEST_KIND ||
+    ![1, 2].includes(row.schema_version) || row.kind !== REQUEST_KIND ||
     row.target !== target || row.confirmation !== `refresh-${target}-compute` ||
     row.source_compute_release_run_id !== sourceRunId
   ) {
     fail('request does not match the selected target or source release');
   }
-  return { ...row, dispatch };
+  if (predecessorRunId === dispatch.workflow_run_id) {
+    fail('refresh cannot name its own workflow run as predecessor');
+  }
+  return {
+    ...row,
+    dispatch,
+    predecessorWorkerRefreshRunId: predecessorRunId,
+  };
 }
 
 function validateSourceRelease(value, target, sourceRunId) {
@@ -259,6 +281,77 @@ function validateSourceRelease(value, target, sourceRunId) {
     imageMatch[3] !== digest
   ) {
     fail('source release does not certify the selected Compute image');
+  }
+  return row;
+}
+
+function validatePredecessorRefresh(
+  value,
+  target,
+  expectedRunId,
+  source,
+) {
+  if (expectedRunId === null) {
+    if (value !== null) fail('unexpected predecessor Worker refresh evidence');
+    return null;
+  }
+  const row = exactKeys(
+    value,
+    [
+      'compute_code_etag',
+      'compute_configuration_sha256',
+      'compute_version_id',
+      'compute_version_tag',
+      'deployed_image',
+      'environment_digest',
+      'git_sha',
+      'schema_version',
+      'source_compute_code_etag',
+      'source_compute_release_run_id',
+      'source_compute_version_id',
+      'source_compute_version_tag',
+      'source_release_sha',
+      'target',
+      'verified',
+      'workflow_run_id',
+    ],
+    'predecessor-worker-refresh-verification.json',
+  );
+  positiveRunId(row.workflow_run_id, 'predecessor refresh workflow run ID');
+  positiveRunId(
+    row.source_compute_release_run_id,
+    'predecessor source Compute release run ID',
+  );
+  gitSha(row.git_sha, 'predecessor refresh git SHA');
+  gitSha(row.source_release_sha, 'predecessor source release SHA');
+  uuid(row.source_compute_version_id, 'predecessor source Compute version ID');
+  uuid(row.compute_version_id, 'predecessor Compute version ID');
+  versionTag(row.source_compute_version_tag, 'predecessor source Compute version tag');
+  versionTag(row.compute_version_tag, 'predecessor Compute version tag');
+  if (
+    row.schema_version !== 1 || row.verified !== true ||
+    row.target !== target || row.workflow_run_id !== expectedRunId ||
+    row.source_compute_release_run_id !== source.workflow_run_id ||
+    row.source_release_sha !== source.release_sha ||
+    row.environment_digest !== source.environment_digest ||
+    row.deployed_image !== source.deployed_image ||
+    row.source_compute_version_id !== source.compute_version_id ||
+    row.source_compute_version_tag !== source.compute_version_tag ||
+    typeof row.source_compute_code_etag !== 'string' ||
+    row.source_compute_code_etag.length === 0 ||
+    row.source_compute_code_etag.length > 256 ||
+    /[\u0000-\u001f\u007f]/u.test(row.source_compute_code_etag) ||
+    typeof row.compute_code_etag !== 'string' ||
+    row.compute_code_etag.length === 0 ||
+    row.compute_code_etag.length > 256 ||
+    /[\u0000-\u001f\u007f]/u.test(row.compute_code_etag) ||
+    row.compute_code_etag === row.source_compute_code_etag ||
+    row.compute_version_id === row.source_compute_version_id ||
+    row.compute_version_tag !== `compute-${row.git_sha}-worker-refresh` ||
+    typeof row.compute_configuration_sha256 !== 'string' ||
+    !HEX_SHA256.test(row.compute_configuration_sha256)
+  ) {
+    fail('predecessor Worker refresh does not chain to the source release');
   }
   return row;
 }
@@ -429,6 +522,17 @@ export function buildComputeWorkerRefreshEvidence({
     target,
     sourceComputeReleaseRunId,
   );
+  const predecessor = request.schema_version === 2
+    ? validatePredecessorRefresh(
+      readJson(
+        resolve(directory, 'predecessor-worker-refresh-verification.json'),
+        'predecessor-worker-refresh-verification.json',
+      ),
+      target,
+      request.predecessorWorkerRefreshRunId,
+      source,
+    )
+    : null;
   const before = validateRolloutState(
     readJson(resolve(directory, 'before-state.json'), 'before-state.json'),
   );
@@ -471,6 +575,10 @@ export function buildComputeWorkerRefreshEvidence({
   );
 
   const expectedTag = `compute-${request.dispatch.git_sha}-worker-refresh`;
+  const expectedBeforeVersionId = predecessor?.compute_version_id ??
+    source.compute_version_id;
+  const expectedBeforeVersionTag = predecessor?.compute_version_tag ??
+    source.compute_version_tag;
   if (
     before.phase !== 'inspected' || after.phase !== 'inspected' ||
     before.target !== target || after.target !== target ||
@@ -483,8 +591,8 @@ export function buildComputeWorkerRefreshEvidence({
     !sameDispatch(before.dispatch, request.dispatch) ||
     !sameDispatch(after.dispatch, request.dispatch) ||
     JSON.stringify(before.api) !== JSON.stringify(after.api) ||
-    before.compute.version_id !== source.compute_version_id ||
-    before.compute.version_tag !== source.compute_version_tag ||
+    before.compute.version_id !== expectedBeforeVersionId ||
+    before.compute.version_tag !== expectedBeforeVersionTag ||
     after.compute.worker !== before.compute.worker ||
     after.compute.version_id === before.compute.version_id ||
     after.compute.deployment_id === before.compute.deployment_id ||
@@ -493,6 +601,11 @@ export function buildComputeWorkerRefreshEvidence({
     beforeFingerprint.version_id !== before.compute.version_id ||
     beforeFingerprint.version_tag !== before.compute.version_tag ||
     beforeFingerprint.code_etag !== before.compute.code_etag ||
+    (predecessor !== null &&
+      (predecessor.git_sha === request.dispatch.git_sha ||
+        predecessor.compute_code_etag !== before.compute.code_etag ||
+        predecessor.compute_configuration_sha256 !==
+          beforeFingerprint.configuration_sha256)) ||
     afterFingerprint.version_id !== after.compute.version_id ||
     afterFingerprint.version_tag !== after.compute.version_tag ||
     afterFingerprint.code_etag !== after.compute.code_etag ||
@@ -507,7 +620,7 @@ export function buildComputeWorkerRefreshEvidence({
   }
 
   return {
-    schema_version: 1,
+    schema_version: request.schema_version,
     kind: REFRESH_KIND,
     verified: true,
     target,
@@ -522,6 +635,24 @@ export function buildComputeWorkerRefreshEvidence({
       workflow_run_id: source.workflow_run_id,
       release_sha: source.release_sha,
     },
+    ...(request.schema_version === 2
+      ? {
+        predecessor_worker_refresh: predecessor === null
+          ? null
+          : {
+            evidence_file: 'predecessor-worker-refresh-verification.json',
+            sha256: hashFile(
+              resolve(
+                directory,
+                'predecessor-worker-refresh-verification.json',
+              ),
+              'predecessor-worker-refresh-verification.json',
+            ),
+            workflow_run_id: predecessor.workflow_run_id,
+            git_sha: predecessor.git_sha,
+          },
+      }
+      : {}),
     environment_digest: source.environment_digest,
     deployed_image: source.deployed_image,
     before: {
@@ -580,12 +711,12 @@ function verifyWorkflowRun(workflowRun, target, refresh) {
   }
 }
 
-function verifyManifest(directory) {
+function verifyManifest(directory, expectedFiles) {
   const manifest = readFileSync(resolve(directory, 'evidence.sha256'), 'utf8');
   const lines = manifest.endsWith('\n')
     ? manifest.slice(0, -1).split('\n')
     : fail('evidence.sha256 is not newline terminated');
-  const expectedNames = [...SUCCESS_FILES].sort();
+  const expectedNames = [...expectedFiles].sort();
   if (lines.length !== expectedNames.length) {
     fail('evidence.sha256 does not bind the exact successful evidence files');
   }
@@ -613,9 +744,19 @@ export function verifyComputeWorkerRefreshEvidence({
     expectedSourceComputeReleaseRunId,
     'expected source Compute release run ID',
   );
-  verifyManifest(directory);
-  const refresh = exactKeys(
+  const refreshInput = record(
     readJson(resolve(directory, 'refresh.json'), 'refresh.json'),
+    'refresh.json',
+  );
+  if (![1, 2].includes(refreshInput.schema_version)) {
+    fail('refresh.json schema version is unsupported');
+  }
+  verifyManifest(
+    directory,
+    refreshInput.schema_version === 2 ? SUCCESS_FILES_V2 : SUCCESS_FILES_V1,
+  );
+  const refresh = exactKeys(
+    refreshInput,
     [
       'after',
       'before',
@@ -625,6 +766,9 @@ export function verifyComputeWorkerRefreshEvidence({
       'generated_at',
       'invariants',
       'kind',
+      ...(refreshInput.schema_version === 2
+        ? ['predecessor_worker_refresh']
+        : []),
       'schema_version',
       'source_compute_release',
       'target',
@@ -642,7 +786,7 @@ export function verifyComputeWorkerRefreshEvidence({
     fail('refresh.json does not match its bound evidence files');
   }
   if (
-    refresh.schema_version !== 1 || refresh.kind !== REFRESH_KIND ||
+    ![1, 2].includes(refresh.schema_version) || refresh.kind !== REFRESH_KIND ||
     refresh.verified !== true || refresh.target !== target ||
     refresh.dispatch.workflow_run_id !== expectedRunId
   ) {
@@ -650,6 +794,13 @@ export function verifyComputeWorkerRefreshEvidence({
   }
   const workflowRun = readJson(workflowRunPath, 'refresh workflow-run JSON');
   verifyWorkflowRun(workflowRun, target, refresh);
+  const predecessor = refresh.schema_version === 2 &&
+      refresh.predecessor_worker_refresh !== null
+    ? readJson(
+      resolve(directory, 'predecessor-worker-refresh-verification.json'),
+      'predecessor-worker-refresh-verification.json',
+    )
+    : null;
   return {
     schema_version: 1,
     verified: true,
@@ -661,9 +812,12 @@ export function verifyComputeWorkerRefreshEvidence({
     source_release_sha: refresh.source_compute_release.release_sha,
     environment_digest: refresh.environment_digest,
     deployed_image: refresh.deployed_image,
-    source_compute_version_id: refresh.before.compute_version_id,
-    source_compute_version_tag: refresh.before.compute_version_tag,
-    source_compute_code_etag: refresh.before.compute_code_etag,
+    source_compute_version_id: predecessor?.source_compute_version_id ??
+      refresh.before.compute_version_id,
+    source_compute_version_tag: predecessor?.source_compute_version_tag ??
+      refresh.before.compute_version_tag,
+    source_compute_code_etag: predecessor?.source_compute_code_etag ??
+      refresh.before.compute_code_etag,
     compute_version_id: refresh.after.compute_version_id,
     compute_version_tag: refresh.after.compute_version_tag,
     compute_code_etag: refresh.after.compute_code_etag,

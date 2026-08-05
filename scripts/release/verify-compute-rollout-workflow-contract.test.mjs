@@ -123,6 +123,7 @@ test("every OFF transition waits only for the exact enabled predecessor", () => 
 
 test("Worker refresh reuses the certified digest and fails back to this dispatch's version", () => {
   assert.match(workerRefreshWorkflow, /compute_release_run_id:/u);
+  assert.match(workerRefreshWorkflow, /predecessor_worker_refresh_run_id:/u);
   assert.match(
     workerRefreshWorkflow,
     /group: api-\$\{\{ inputs\.target \}\}-deploy/u,
@@ -130,6 +131,18 @@ test("Worker refresh reuses the certified digest and fails back to this dispatch
   assert.match(
     workerRefreshWorkflow,
     /verify-compute-rollout-release-evidence\.mjs/u,
+  );
+  assert.match(
+    workerRefreshWorkflow,
+    /git merge-base --is-ancestor "\$predecessor_sha" "\$GITHUB_SHA"/u,
+  );
+  assert.match(
+    workerRefreshWorkflow,
+    /verify-compute-worker-refresh-evidence\.mjs \\\n+\s+verify "\$predecessor_artifact_dir"/u,
+  );
+  assert.match(
+    workerRefreshWorkflow,
+    /Live Compute does not match the verified predecessor Worker refresh/u,
   );
   assert.match(
     workerRefreshWorkflow,
