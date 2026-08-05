@@ -1037,7 +1037,14 @@ export function validateComputeCertificationProof(
       );
     }
   } else if (scenario === "raw_tcp_denied") {
-    if (row.raw_tcp_denied !== true) {
+    if (
+      row.raw_tcp_denied !== true ||
+      row.probe_method !== "ssh_banner_absence" ||
+      row.ssh_over_443_host !== "ssh.github.com" ||
+      row.ssh_over_443_denied !== true ||
+      row.ssh_port_22_host !== "github.com" ||
+      row.ssh_port_22_denied !== true
+    ) {
       fail("INVALID_PROBE_OUTPUT", `${scenario} did not prove raw TCP denial.`);
     }
   }
