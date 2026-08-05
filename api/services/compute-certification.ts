@@ -203,7 +203,7 @@ export class ComputeCertificationError extends Error {
   }
 }
 
-export interface ComputeCertificationInput {
+interface ComputeCertificationInput {
   ownerId: string;
   agentId: string;
   runIds: string[];

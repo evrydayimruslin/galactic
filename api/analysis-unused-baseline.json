@@ -707,13 +707,9 @@
       "file": "services/compute/tokens.ts"
     },
     {
-      "exports": [
-        "COMPUTE_TERMINAL_RUN_STATES"
-      ],
       "file": "services/compute/types.ts",
       "types": [
         "ComputeRunAuthorityRecord",
-        "ComputeTerminalRunState",
         "DeveloperV1ToolId"
       ]
     },

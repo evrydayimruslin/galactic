@@ -14,7 +14,7 @@ export interface ComputeCertificationPrincipal {
   entry: string;
 }
 
-export type ComputeCertificationAuthorization =
+type ComputeCertificationAuthorization =
   | {
     status: "authorized";
     credentialReference: string;
@@ -24,7 +24,7 @@ export type ComputeCertificationAuthorization =
   | { status: "unauthorized" }
   | { status: "unavailable" };
 
-export type ComputeCertificationCredentialAuthorization =
+type ComputeCertificationCredentialAuthorization =
   | {
     status: "authorized";
     credentialReference: string;
