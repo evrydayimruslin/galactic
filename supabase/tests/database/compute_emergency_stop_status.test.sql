@@ -96,8 +96,11 @@ SELECT ok(
   'an active operation reports only its identity and aggregate progress'
 );
 SELECT is(
-  jsonb_object_length(public.get_compute_emergency_stop_status()),
-  10,
+  (
+    SELECT count(*)
+    FROM jsonb_object_keys(public.get_compute_emergency_stop_status())
+  ),
+  10::bigint,
   'the projection exposes only its reviewed status fields'
 );
 
