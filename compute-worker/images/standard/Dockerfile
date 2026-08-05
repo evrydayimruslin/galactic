@@ -3,6 +3,7 @@
 # docker.io/cloudflare/sandbox:0.12.3-python@sha256:<64 lowercase hex chars>
 # There is intentionally no mutable default.
 ARG SANDBOX_BASE_IMAGE
+ARG UBUNTU_SNAPSHOT=20260805T110000Z
 
 # Build the Go CLIs from immutable, checksum-verified modules with a patched
 # compiler. gh and rclone stay on their product-pinned releases while forcing
@@ -115,6 +116,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Build a replacement at the same prefix and apply the exact upstream 3.13
 # security backport before any runtime files are copied into the final stage.
 FROM ${SANDBOX_BASE_IMAGE} AS python-runtime
+ARG UBUNTU_SNAPSHOT
 ARG PYTHON_VERSION=3.13.14
 COPY compute-worker/images/standard/python/requirements.lock /tmp/python-requirements.lock
 # Vendored as exact unified diffs from these immutable upstream commits. GitHub's
@@ -126,6 +128,14 @@ COPY compute-worker/images/standard/python/requirements.lock /tmp/python-require
 COPY compute-worker/images/standard/python/patches /tmp/python-security-patches
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources && \
+    snapshot_root="https://snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}" && \
+    printf '%s\n' \
+      "deb ${snapshot_root} jammy main restricted universe multiverse" \
+      "deb ${snapshot_root} jammy-updates main restricted universe multiverse" \
+      "deb ${snapshot_root} jammy-backports main restricted universe multiverse" \
+      "deb ${snapshot_root} jammy-security main restricted universe multiverse" \
+      > /etc/apt/sources.list && \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
     apt-get update && apt-get install -y --no-install-recommends \
       build-essential ca-certificates curl patch xz-utils \
@@ -173,6 +183,7 @@ FROM ${SANDBOX_BASE_IMAGE}
 # A pre-FROM ARG is only in Docker's global scope. Redeclare it in the build
 # stage so the exact base reference is preserved in image metadata.
 ARG SANDBOX_BASE_IMAGE
+ARG UBUNTU_SNAPSHOT
 ARG TARGETARCH
 ARG DUCKDB_VERSION=1.5.1
 ARG PLAYWRIGHT_VERSION=1.62.0-alpha-2026-07-20
@@ -193,6 +204,7 @@ ARG IP_ADDRESS_VERSION=10.4.0
 # local Galactic CLI version is intentionally derived from cli/package.json
 # below and recorded inside the image instead of being duplicated here.
 LABEL org.opencontainers.image.base.name="${SANDBOX_BASE_IMAGE}" \
+      ai.galactic.security.ubuntu-snapshot="${UBUNTU_SNAPSHOT}" \
       ai.galactic.tool.playwright="playwright@${PLAYWRIGHT_VERSION}" \
       ai.galactic.tool.chrome="chrome-for-testing-beta@${CHROME_FOR_TESTING_VERSION}" \
       ai.galactic.tool.claude-code="@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
@@ -221,8 +233,18 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # The v1 developer body is deliberately broad. Tool selection is an admission,
 # audit, and future layering signal; binaries are not treated as authorities.
+# Every Ubuntu package is resolved from one signed, timestamped Canonical
+# snapshot. This makes the build repeatable and avoids live-mirror index skew.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources && \
+    snapshot_root="https://snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}" && \
+    printf '%s\n' \
+      "deb ${snapshot_root} jammy main restricted universe multiverse" \
+      "deb ${snapshot_root} jammy-updates main restricted universe multiverse" \
+      "deb ${snapshot_root} jammy-backports main restricted universe multiverse" \
+      "deb ${snapshot_root} jammy-security main restricted universe multiverse" \
+      > /etc/apt/sources.list && \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
     apt-get update && apt-get install -y --no-install-recommends \
       bash build-essential cmake pkg-config \

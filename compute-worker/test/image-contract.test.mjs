@@ -83,6 +83,43 @@ describe("developer-v1 image contract", () => {
     expect(smoke).toContain("/node_modules/playwright-core");
   });
 
+  it("pins every Ubuntu package stage to one signed archive snapshot", () => {
+    const dockerfile = fixture("Dockerfile");
+    const smoke = repositoryFile("compute-worker/scripts/smoke-image.sh");
+    expect(dockerfile).toContain("ARG UBUNTU_SNAPSHOT=20260805T110000Z");
+    expect(dockerfile).toContain(
+      'ai.galactic.security.ubuntu-snapshot="${UBUNTU_SNAPSHOT}"',
+    );
+    expect(
+      dockerfile.match(
+        /snapshot_root="https:\/\/snapshot\.ubuntu\.com\/ubuntu\/\$\{UBUNTU_SNAPSHOT\}"/gu,
+      ),
+    ).toHaveLength(2);
+    expect(
+      dockerfile.match(
+        /rm -f \/etc\/apt\/sources\.list\.d\/\*\.list \/etc\/apt\/sources\.list\.d\/\*\.sources/gu,
+      ),
+    ).toHaveLength(2);
+    for (const pocket of [
+      "jammy",
+      "jammy-updates",
+      "jammy-backports",
+      "jammy-security",
+    ]) {
+      const sourcePattern = new RegExp(
+        `\\$\\{snapshot_root\\} ${pocket} `,
+        "gu",
+      );
+      expect(dockerfile.match(sourcePattern)).toHaveLength(2);
+    }
+    expect(smoke).toContain(
+      "https://snapshot.ubuntu.com/ubuntu/20260805T110000Z",
+    );
+    expect(smoke).toContain("(archive|security)\\.ubuntu\\.com/ubuntu");
+    expect(dockerfile).not.toContain("archive.ubuntu.com/ubuntu");
+    expect(dockerfile).not.toContain("security.ubuntu.com/ubuntu");
+  });
+
   it("installs the runtime interception CA through mandatory Chrome policy", () => {
     const dockerfile = fixture("Dockerfile");
     const entrypoint = fixture("entrypoint.sh");
