@@ -30,6 +30,7 @@ export const COMPUTE_CERTIFICATION_ROUTINE_POLICY = "free";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const SAFE_BLOCKER_CODE_RE = /^[a-z][a-z0-9_]{0,63}$/u;
 const ACTIVE_ROUTINE_RUN_STATUSES = new Set(["queued", "running"]);
 const ROUTINE_RUN_STATUSES = new Set([
   ...ACTIVE_ROUTINE_RUN_STATUSES,
@@ -255,20 +256,54 @@ function validateLaunchRoutine(projection, expectedRoutineId) {
       UUID_RE.test(String(run.id ?? "")) &&
       ROUTINE_RUN_STATUSES.has(run.status)
     );
+  if (routine.name !== COMPUTE_CERTIFICATION_ROUTINE_NAME) {
+    fail("Compute certification routine projection identity drifted.");
+  }
+  if (routine.status !== "paused") {
+    fail("Compute certification routine is not paused.");
+  }
   if (
-    routine.name !== COMPUTE_CERTIFICATION_ROUTINE_NAME ||
-    routine.status !== "paused" ||
-    routine.activeRunCount !== 0 ||
-    !recentRunsValid ||
-    routine.recentRuns.some((run) =>
-      ACTIVE_ROUTINE_RUN_STATUSES.has(run?.status)
-    ) ||
-    !Array.isArray(routine.blockers) ||
-    routine.blockers.length !== 0 ||
-    !isRecord(routine.actions) ||
-    routine.actions.canActivate !== true
+    !Number.isInteger(routine.activeRunCount) ||
+    routine.activeRunCount !== 0
   ) {
-    fail("Compute certification routine is not paused, idle, and activatable.");
+    fail("Compute certification routine has an active run count.");
+  }
+  if (!recentRunsValid) {
+    fail("Compute certification routine recent run history is invalid.");
+  }
+  if (
+    routine.recentRuns.some((run) =>
+      ACTIVE_ROUTINE_RUN_STATUSES.has(run.status)
+    )
+  ) {
+    fail("Compute certification routine has a visible active run.");
+  }
+  if (!Array.isArray(routine.blockers)) {
+    fail("Compute certification routine blocker projection is invalid.");
+  }
+  if (routine.blockers.length > 0) {
+    const codes = routine.blockers.map((blocker) => blocker?.code);
+    if (
+      codes.some((code) =>
+        typeof code !== "string" || !SAFE_BLOCKER_CODE_RE.test(code)
+      )
+    ) {
+      fail("Compute certification routine blocker projection is invalid.");
+    }
+    fail(
+      `Compute certification routine has activation blockers: ${
+        [...new Set(codes)].sort().join(", ")
+      }.`,
+    );
+  }
+  if (
+    !isRecord(routine.actions) ||
+    typeof routine.actions.canActivate !== "boolean"
+  ) {
+    fail("Compute certification routine action projection is invalid.");
+  }
+  if (routine.actions.canActivate !== true) {
+    fail("Compute certification routine cannot be activated.");
   }
   return routine;
 }

@@ -966,7 +966,7 @@ jobs:
               --dir examples/compute-certification \
               --promote-reviewed \
               --reviewed-fixture compute-certification \
-              --reviewed-permission compute:exec \
+              --reviewed-permission compute:exec,notify:owner \
               --reviewed-function run_compute_certification \
               --reviewed-compute-profile developer-v1 \
               --reviewed-compute-tools browser,shell \

@@ -80,9 +80,10 @@ spec:
         type: object
         description: Raw public Compute start projection
       authority:
-        level: read
+        level: external_write
         effects:
           compute.execute: free
+          notification.owner.write: free
       spend:
         compute: free
 
