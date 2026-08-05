@@ -1742,8 +1742,11 @@ async function readFunctionPolicies(context) {
   }
   if (
     typeof policy.revision !== "string" ||
+    policy.revision.length === 0 ||
     typeof policy.declaredReleaseId !== "string" ||
+    policy.declaredReleaseId.length === 0 ||
     typeof policy.declarationHash !== "string" ||
+    policy.declarationHash.length === 0 ||
     !["off", "ask", "free"].includes(policy.policy)
   ) {
     fail("POLICY_PROBE_NOT_READY", "Policy probe projection is invalid.");

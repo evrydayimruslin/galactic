@@ -17,6 +17,77 @@ interface AppReleaseRow {
   created_at: string;
 }
 
+interface FunctionPolicyReleaseSource {
+  agentId: string;
+  deploymentState: string | null | undefined;
+  currentVersion: string | null | undefined;
+  currentVersionPromotedAt: string | null | undefined;
+  activeReleaseDigest: string | null | undefined;
+}
+
+interface FunctionPolicyReleaseAuthority {
+  id: string;
+  version: string;
+  createdAt: string;
+}
+
+const EPOCH_TIMESTAMP = new Date(0).toISOString();
+const SHA256_RE = /^[0-9a-f]{64}$/u;
+
+function canonicalTimestamp(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  const milliseconds = Date.parse(value);
+  return Number.isFinite(milliseconds)
+    ? new Date(milliseconds).toISOString()
+    : null;
+}
+
+/**
+ * Policy CAS normally binds to the immutable app_releases row. Legacy Agents
+ * predate that ledger, but still expose Policy Pillar controls. Bind those
+ * controls to an opaque server-derived token over the live version and its
+ * strongest available promotion fence. The declaration hash remains the
+ * independent function-surface fence.
+ */
+export function resolveFunctionPolicyReleaseAuthority(
+  releases: LaunchAgentReleaseSummary[],
+  source: FunctionPolicyReleaseSource,
+): FunctionPolicyReleaseAuthority | null {
+  const immutable = releases[0];
+  if (immutable) {
+    return {
+      id: immutable.id,
+      version: immutable.version,
+      createdAt: immutable.createdAt,
+    };
+  }
+  if (source.deploymentState !== "legacy") return null;
+  if (
+    typeof source.agentId !== "string" || source.agentId.length === 0 ||
+    typeof source.currentVersion !== "string" ||
+    source.currentVersion.length === 0 ||
+    source.currentVersion.trim() !== source.currentVersion
+  ) {
+    return null;
+  }
+  const promotedAt = canonicalTimestamp(source.currentVersionPromotedAt);
+  const digest = typeof source.activeReleaseDigest === "string" &&
+      SHA256_RE.test(source.activeReleaseDigest)
+    ? source.activeReleaseDigest
+    : null;
+  const promotionFence = digest ?? promotedAt ?? "version-only";
+  return {
+    id: [
+      "legacy",
+      encodeURIComponent(source.agentId),
+      encodeURIComponent(source.currentVersion),
+      encodeURIComponent(promotionFence),
+    ].join(":"),
+    version: source.currentVersion,
+    createdAt: promotedAt ?? EPOCH_TIMESTAMP,
+  };
+}
+
 function supabaseHeaders(): Record<string, string> {
   const key = getEnv("SUPABASE_SERVICE_ROLE_KEY");
   return {
