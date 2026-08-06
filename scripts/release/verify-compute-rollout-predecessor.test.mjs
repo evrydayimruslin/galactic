@@ -777,6 +777,7 @@ test('CLI emits the sanitized predecessor identity and final state', () => {
       'minimum_age_seconds',
       'predecessor',
       'dispatch',
+      'compute_release',
       'final_state',
     ]);
     assert.equal(output.predecessor.artifact_name.includes(RUN_ID), true);
