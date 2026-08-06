@@ -201,6 +201,10 @@ test("Worker refresh reuses the certified digest and fails back to this dispatch
   );
   assert.match(
     workerRefreshWorkflow,
+    /"\$COMPUTE_RELEASE_RUN_ID_INPUT"[\s\S]{0,120}"\$EVIDENCE_DIR\/source-release-verification\.json"/u,
+  );
+  assert.match(
+    workerRefreshWorkflow,
     /Live Compute does not match the verified predecessor Worker refresh/u,
   );
   assert.match(

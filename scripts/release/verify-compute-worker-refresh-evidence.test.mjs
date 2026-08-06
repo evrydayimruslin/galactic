@@ -290,6 +290,7 @@ function fixture(mutator = () => {}) {
     const values = {
       request: request(),
       source: sourceRelease(),
+      authoritativeSourceRelease: null,
       predecessor: undefined,
       beforeState: rolloutState(),
       afterState: rolloutState({ after: true }),
@@ -334,6 +335,7 @@ function fixture(mutator = () => {}) {
       target: 'staging',
       sourceComputeReleaseRunId: SOURCE_RUN_ID,
       generatedAt: GENERATED_AT,
+      authoritativeSourceRelease: values.authoritativeSourceRelease,
     });
     writeJson(directory, 'refresh.json', refresh);
     writeManifest(directory, refresh.schema_version);
@@ -546,6 +548,72 @@ test('rejects malformed source runtime provenance', () => {
       values.source.runtime_provenance.layer_count = 0;
     });
   }, /source release runtime provenance is malformed/u);
+});
+
+test('accepts a legacy predecessor source only through an authoritative match', (t) => {
+  const authoritativeDirectory = mkdtempSync(
+    join(tmpdir(), 'compute-worker-refresh-authoritative-'),
+  );
+  const authoritativePath = join(
+    authoritativeDirectory,
+    'source-release-verification.json',
+  );
+  writeJson(
+    authoritativeDirectory,
+    'source-release-verification.json',
+    sourceRelease(),
+  );
+  const directory = fixture((values) => {
+    values.authoritativeSourceRelease = sourceRelease();
+    delete values.source.runtime_provenance;
+    values.request = {
+      ...values.request,
+      schema_version: 3,
+      predecessor_worker_refresh_run_id: PREDECESSOR_REFRESH_RUN_ID,
+    };
+    values.predecessor = predecessorRefreshVerification();
+    values.beforeState = predecessorState();
+    values.beforeVersion = predecessorVersion();
+  });
+  t.after(() => {
+    rmSync(directory, { recursive: true, force: true });
+    rmSync(authoritativeDirectory, { recursive: true, force: true });
+  });
+
+  assert.throws(() => verifyComputeWorkerRefreshEvidence({
+    evidenceDirectory: directory,
+    target: 'staging',
+    workflowRunPath: join(directory, 'workflow-run.json'),
+    expectedRunId: REFRESH_RUN_ID,
+    expectedSourceComputeReleaseRunId: SOURCE_RUN_ID,
+  }), /legacy source release requires an authoritative runtime-provenance record/u);
+
+  const result = verifyComputeWorkerRefreshEvidence({
+    evidenceDirectory: directory,
+    target: 'staging',
+    workflowRunPath: join(directory, 'workflow-run.json'),
+    expectedRunId: REFRESH_RUN_ID,
+    expectedSourceComputeReleaseRunId: SOURCE_RUN_ID,
+    authoritativeSourceReleasePath: authoritativePath,
+  });
+  assert.equal(result.verified, true);
+  assert.equal(result.workflow_run_id, REFRESH_RUN_ID);
+});
+
+test('rejects a legacy source that differs from its authoritative record', () => {
+  assert.throws(() => fixture((values) => {
+    values.authoritativeSourceRelease = sourceRelease();
+    delete values.source.runtime_provenance;
+    values.source.compute_version_id = IDS.predecessorVersion;
+  }), /source release does not match the authoritative runtime-provenance record/u);
+});
+
+test('requires full runtime provenance on the authoritative source record', () => {
+  assert.throws(() => fixture((values) => {
+    values.authoritativeSourceRelease = sourceRelease();
+    delete values.authoritativeSourceRelease.runtime_provenance;
+    delete values.source.runtime_provenance;
+  }), /legacy source release requires an authoritative runtime-provenance record/u);
 });
 
 test('rejects non-code Compute configuration drift', () => {
