@@ -343,7 +343,7 @@ function nonnegativeInteger(value, label) {
 function validCalendarTimestamp(value, { utcOnly = false } = {}) {
   if (typeof value !== 'string') return false;
   const pattern = utcOnly
-    ? /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?Z$/u
+    ? /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:Z|\+00:00)$/u
     : /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:Z|([+-])(\d{2}):(\d{2}))$/u;
   const match = value.match(pattern);
   if (!match) return false;
