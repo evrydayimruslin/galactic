@@ -432,6 +432,15 @@ function clone(value) {
   return structuredClone(value);
 }
 
+function postgresUtcTimestamp(value) {
+  const match = value.match(
+    /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?Z$/u,
+  );
+  assert.ok(match, 'fixture timestamp must be UTC');
+  const fraction = (match[2] ?? '').padEnd(6, '0').slice(0, 6);
+  return `${match[1]}.${fraction}+00:00`;
+}
+
 test('strictly verifies each deployable certification profile', () => {
   for (
     const profile of [
@@ -452,6 +461,30 @@ test('strictly verifies each deployable certification profile', () => {
     assert.equal(result.compute_receipt_ids.length, 11);
     assert.equal(result.artifact_digests.deterministic_fixture, FIXED_ARTIFACT_SHA256);
   }
+});
+
+test('accepts PostgreSQL UTC timestamps with microsecond precision', () => {
+  const { args } = fixture('staging-full');
+  const suite = args.suiteEvidence;
+  suite.started_at = postgresUtcTimestamp(suite.started_at);
+  suite.generated_at = postgresUtcTimestamp(suite.generated_at);
+  args.runSetEvidence.since = suite.started_at;
+  args.runSetEvidence.generated_at = suite.generated_at;
+  for (const scenario of suite.scenarios) {
+    for (const key of ['created_at', 'started_at', 'finished_at']) {
+      scenario.timestamps[key] = postgresUtcTimestamp(
+        scenario.timestamps[key],
+      );
+    }
+    for (const artifact of scenario.artifacts) {
+      artifact.expires_at = postgresUtcTimestamp(artifact.expires_at);
+    }
+    if (scenario.cancellation) {
+      scenario.cancellation.startedAt = scenario.timestamps.started_at;
+    }
+  }
+
+  assert.equal(validateComputeCertificationEvidence(args).verified, true);
 });
 
 test('fails closed across provenance, suite, run-set, snapshot, and rollout drift', async (t) => {
@@ -525,6 +558,10 @@ test('fails closed across provenance, suite, run-set, snapshot, and rollout drif
     ['cancellation start timestamp drift', (args) => {
       args.suiteEvidence.scenarios[7].cancellation.startedAt =
         args.suiteEvidence.scenarios[7].timestamps.created_at;
+    }],
+    ['nonzero UTC offset in suite timestamp', (args) => {
+      args.suiteEvidence.scenarios[0].timestamps.created_at =
+        '2026-08-04T07:00:01.000000-05:00';
     }],
     ['policy free denied', (args) => {
       args.suiteEvidence.policy_pillar.free.status = 'failed';
