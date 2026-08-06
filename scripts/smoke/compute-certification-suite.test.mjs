@@ -882,6 +882,7 @@ test("normal cleanup never overwrites concurrently changed Compute settings", as
     maxArtifacts: 2,
   };
   let settingsWrites = 0;
+  const written = [];
   const fetchImpl = async (input, init = {}) => {
     const url = String(input);
     const method = init.method ?? "GET";
@@ -923,18 +924,26 @@ test("normal cleanup never overwrites concurrently changed Compute settings", as
   await assert.rejects(
     runComputeCertificationSuite(config(), {
       fetchImpl,
-      writeEvidence: async () => undefined,
+      writeEvidence: async (path, value) => written.push({ path, value }),
     }),
-    (error) => error.code === "CLEANUP_FAILED",
+    (error) =>
+      error.code === "HTTP_ERROR" && error.stage === "compute_start",
   );
   assert.equal(enabled, true);
   assert.equal(settingsWrites, 1);
+  assert.deepEqual(written[1].value.failure, {
+    code: "HTTP_ERROR",
+    stage: "compute_start",
+    http_status: 500,
+    cleanup_failures: ["compute_policy", "compute_policy_fence"],
+  });
 });
 
 test("normal cleanup preserves a concurrently changed function policy", async () => {
   let settingsReads = 0;
   let policyReads = 0;
   let policyWrites = 0;
+  const written = [];
   const limits = {
     maxTimeoutMs: 60_000,
     maxConcurrency: 1,
@@ -1000,12 +1009,18 @@ test("normal cleanup preserves a concurrently changed function policy", async ()
       profile: "production-canary",
     }), {
       fetchImpl,
-      writeEvidence: async () => undefined,
+      writeEvidence: async (path, value) => written.push({ path, value }),
     }),
-    (error) => error.code === "CLEANUP_FAILED",
+    (error) => error.code === "POLICY_PROBE_NOT_READY",
   );
   assert.equal(settingsReads, 3);
   assert.equal(policyWrites, 0);
+  assert.deepEqual(written[1].value.failure, {
+    code: "POLICY_PROBE_NOT_READY",
+    stage: null,
+    http_status: null,
+    cleanup_failures: ["policy_baseline"],
+  });
 });
 
 test("normal cleanup never pauses a concurrently changed routine", async () => {

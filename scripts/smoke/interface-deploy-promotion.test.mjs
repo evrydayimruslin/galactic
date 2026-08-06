@@ -9,6 +9,7 @@ import {
 import {
   computeRawSourceHash,
   fixtureRefreshPlan,
+  formatSafeHttpErrorDiagnostic,
   nextFixtureVersion,
   promotionAction,
   reviewedPromotionConfig,
@@ -48,6 +49,46 @@ const ROUTINE_AUTHORITY = {
     "notification.owner.write": "free",
   },
 };
+
+test("formats only allowlisted machine fields from HTTP failures", () => {
+  assert.equal(
+    formatSafeHttpErrorDiagnostic({
+      error: {
+        type: "CONCURRENCY_WAITING",
+        message: "must never enter release logs",
+        details: {
+          retry_at: "2026-08-06T00:15:30.000Z",
+          weekly_resets_at: "2026-08-09T20:00:00-04:00",
+          concurrency_scope: "account",
+          secret: "gx_do_not_log",
+        },
+      },
+    }),
+    "; code=CONCURRENCY_WAITING; retry_at=2026-08-06T00:15:30.000Z; " +
+      "weekly_resets_at=2026-08-10T00:00:00.000Z; concurrency_scope=account",
+  );
+  assert.equal(
+    formatSafeHttpErrorDiagnostic({ code: "burst_waiting" }),
+    "; code=burst_waiting",
+  );
+});
+
+test("drops malformed or sensitive HTTP failure fields", () => {
+  const diagnostic = formatSafeHttpErrorDiagnostic({
+    code: "BAD CODE gx_secret",
+    error: {
+      type: "CAPACITY\nsecret",
+      message: "gx_message_secret",
+      details: {
+        retry_at: "tomorrow gx_retry_secret",
+        weekly_resets_at: "2026-08-10T00:00:00Z gx_reset_secret",
+        concurrency_scope: "account;gx_scope_secret",
+      },
+    },
+  });
+  assert.equal(diagnostic, "");
+  assert.equal(diagnostic.includes("secret"), false);
+});
 
 test("reviewed Compute certification collection includes its V2 YAML contract", () => {
   const directory = fileURLToPath(
