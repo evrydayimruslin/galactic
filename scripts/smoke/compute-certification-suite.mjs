@@ -2653,11 +2653,16 @@ export async function runComputeCertificationSuite(
       cleanupFailures.push("compute_policy_fence");
     }
     if (cleanupFailures.length > 0) {
-      primaryError = new ComputeCertificationSuiteError(
-        "CLEANUP_FAILED",
-        "Compute certification cleanup failed.",
-      );
-      state.failure = publicFailure(primaryError);
+      if (!primaryError) {
+        primaryError = new ComputeCertificationSuiteError(
+          "CLEANUP_FAILED",
+          "Compute certification cleanup failed.",
+        );
+      }
+      state.failure = {
+        ...publicFailure(primaryError),
+        cleanup_failures: [...new Set(cleanupFailures)],
+      };
       state.success = false;
     }
 

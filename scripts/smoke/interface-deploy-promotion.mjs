@@ -4,6 +4,10 @@ const CANONICAL_VERSION_RE =
   /^(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/u;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const SAFE_HTTP_ERROR_CODE_RE = /^[A-Za-z][A-Za-z0-9_:-]{0,63}$/u;
+const SAFE_HTTP_ERROR_SCOPE_RE = /^[a-z][a-z0-9_-]{0,31}$/u;
+const ISO_TIMESTAMP_RE =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/u;
 const COMPUTE_CERTIFICATION_DOCUMENT_SHA256 =
   "a8fe2a94b2dd90f6627ea0301d3efeaa1bef5507e1ecdda65649fe57d55e209d";
 const COMPUTE_CERTIFICATION_MANIFEST_SHA256 =
@@ -76,6 +80,54 @@ const REVIEWED_FIXTURES = Object.freeze({
 
 // Kept as the default/exported compatibility contract for existing callers.
 export const REVIEWED_COMPUTE_FIXTURE = INTERFACE_DEMO_FIXTURE;
+
+function plainRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value
+    : null;
+}
+
+function canonicalUtcTimestamp(value) {
+  if (
+    typeof value !== "string" ||
+    !ISO_TIMESTAMP_RE.test(value)
+  ) {
+    return null;
+  }
+  try {
+    return new Date(value).toISOString();
+  } catch {
+    return null;
+  }
+}
+
+// Promotion failures may contain developer-controlled messages or request
+// details. Surface only the bounded machine fields needed to act on a capacity
+// denial; never echo the raw response body into release logs.
+export function formatSafeHttpErrorDiagnostic(value) {
+  const body = plainRecord(value);
+  if (!body) return "";
+  const error = plainRecord(body.error);
+  const details = plainRecord(error?.details);
+  const codeCandidates = [error?.type, body.code];
+  const code = codeCandidates.find((candidate) =>
+    typeof candidate === "string" && SAFE_HTTP_ERROR_CODE_RE.test(candidate)
+  );
+  const retryAt = canonicalUtcTimestamp(details?.retry_at);
+  const weeklyResetsAt = canonicalUtcTimestamp(details?.weekly_resets_at);
+  const concurrencyScope =
+    typeof details?.concurrency_scope === "string" &&
+      SAFE_HTTP_ERROR_SCOPE_RE.test(details.concurrency_scope)
+      ? details.concurrency_scope
+      : null;
+  const fields = [
+    ...(code ? [`code=${code}`] : []),
+    ...(retryAt ? [`retry_at=${retryAt}`] : []),
+    ...(weeklyResetsAt ? [`weekly_resets_at=${weeklyResetsAt}`] : []),
+    ...(concurrencyScope ? [`concurrency_scope=${concurrencyScope}`] : []),
+  ];
+  return fields.length > 0 ? `; ${fields.join("; ")}` : "";
+}
 
 export function reviewedFixtureProfile(name = INTERFACE_DEMO_FIXTURE.name) {
   const fixture = REVIEWED_FIXTURES[name];

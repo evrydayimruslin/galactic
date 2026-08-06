@@ -50,6 +50,7 @@ import { collectInterfaceDeploySourceFiles } from './interface-deploy-source-fil
 import {
   computeRawSourceHash,
   fixtureRefreshPlan,
+  formatSafeHttpErrorDiagnostic,
   nextFixtureVersion,
   promotionAction,
   reviewedPromotionConfig,
@@ -202,7 +203,11 @@ async function requestJson(path, {
   });
   const responseBody = await res.json().catch(() => null);
   if (!res.ok) {
-    throw new Error(`${label || 'Fixture request'} failed (HTTP ${res.status}).`);
+    throw new Error(
+      `${label || 'Fixture request'} failed (HTTP ${res.status}${
+        formatSafeHttpErrorDiagnostic(responseBody)
+      }).`,
+    );
   }
   if (!responseBody || typeof responseBody !== 'object') {
     throw new Error(`${label || 'Fixture request'} returned invalid JSON.`);
