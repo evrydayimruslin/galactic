@@ -20,6 +20,13 @@ const REFRESH_SHA = 'a'.repeat(40);
 const RELEASE_SHA = 'b'.repeat(40);
 const PREDECESSOR_REFRESH_SHA = 'd'.repeat(40);
 const DIGEST = `sha256:${'c'.repeat(64)}`;
+const RUNTIME_PROVENANCE = {
+  schema_version: 1,
+  base_image: `docker.io/cloudflare/sandbox:0.12.3-python@sha256:${'4'.repeat(64)}`,
+  build_inputs_sha256: `sha256:${'5'.repeat(64)}`,
+  layer_manifest_sha256: `sha256:${'6'.repeat(64)}`,
+  layer_count: 45,
+};
 const SOURCE_RUN_ID = '30646319201';
 const PREDECESSOR_REFRESH_RUN_ID = '30984313869';
 const REFRESH_RUN_ID = '30990000001';
@@ -188,6 +195,7 @@ function sourceRelease() {
     environment_digest: DIGEST,
     deployed_image:
       `registry.cloudflare.com/${'1'.repeat(32)}/galactic-compute-staging@${DIGEST}`,
+    runtime_provenance: { ...RUNTIME_PROVENANCE },
     compute_version_id: IDS.beforeVersion,
     compute_version_tag: `compute-${RELEASE_SHA}`,
   };
@@ -530,6 +538,14 @@ test('rejects a predecessor chained to a different source release', () => {
       values.beforeVersion = predecessorVersion();
     });
   }, /predecessor Worker refresh does not chain to the source release/u);
+});
+
+test('rejects malformed source runtime provenance', () => {
+  assert.throws(() => {
+    fixture((values) => {
+      values.source.runtime_provenance.layer_count = 0;
+    });
+  }, /source release runtime provenance is malformed/u);
 });
 
 test('rejects non-code Compute configuration drift', () => {
