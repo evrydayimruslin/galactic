@@ -19,6 +19,14 @@ const TAG = 'v0.4.99';
 const DIGEST = `sha256:${'b'.repeat(64)}`;
 const PREVIOUS_DIGEST = `sha256:${'c'.repeat(64)}`;
 const BASE_IMAGE = `docker.io/cloudflare/sandbox:0.12.3-python@sha256:${'d'.repeat(64)}`;
+const CONFIG_DIGEST = `sha256:${'6'.repeat(64)}`;
+const LAYER_DIGEST = `sha256:${'7'.repeat(64)}`;
+const BUILD_INPUTS = `${'8'.repeat(64)}  compute-worker/images/standard/Dockerfile\n`;
+const MANIFEST_LAYERS = [{
+  digest: LAYER_DIGEST,
+  mediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip',
+  size: 1234,
+}];
 const RETENTION_MIGRATION = 'supabase/migrations/20260720124000_compute_artifact_retention.sql';
 const RETENTION_SHA = 'e'.repeat(64);
 const OTHER_MIGRATION_SHA = 'f'.repeat(64);
@@ -61,6 +69,18 @@ function bytes(value) {
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
 }
+
+const RUNTIME_PROVENANCE = {
+  schema_version: 1,
+  base_image: BASE_IMAGE,
+  build_inputs_sha256: `sha256:${sha256(BUILD_INPUTS)}`,
+  layer_manifest_sha256: `sha256:${sha256(bytes(MANIFEST_LAYERS.map((layer) => ({
+    digest: layer.digest,
+    media_type: layer.mediaType,
+    size: layer.size,
+  }))))}`,
+  layer_count: MANIFEST_LAYERS.length,
+};
 
 function writeJson(directory, file, value) {
   const content = bytes(value);
@@ -188,6 +208,29 @@ function createFixture(targetName = 'production') {
   const migrationManifestSha = sha256(migrationManifest);
 
   writeFileSync(join(directory, 'base-image.txt'), `${BASE_IMAGE}\n`);
+  writeFileSync(join(directory, 'build-inputs.sha256'), BUILD_INPUTS);
+  writeFileSync(join(directory, 'remote-config-digest.txt'), `${CONFIG_DIGEST}\n`);
+  writeFileSync(join(directory, 'local-image-id.txt'), `${CONFIG_DIGEST}\n`);
+  const remoteManifest = {
+    Ref: `registry.cloudflare.com/${'1'.repeat(32)}/${target.computeWorker}:${SHA}`,
+    Descriptor: {
+      mediaType: 'application/vnd.docker.distribution.manifest.v2+json',
+      digest: DIGEST,
+      size: 2048,
+      platform: { architecture: 'amd64', os: 'linux' },
+    },
+    SchemaV2Manifest: {
+      schemaVersion: 2,
+      mediaType: 'application/vnd.docker.distribution.manifest.v2+json',
+      config: {
+        mediaType: 'application/vnd.docker.container.image.v1+json',
+        size: 512,
+        digest: CONFIG_DIGEST,
+      },
+      layers: MANIFEST_LAYERS,
+    },
+  };
+  writeJson(directory, 'remote-manifest.json', remoteManifest);
   writeFileSync(
     join(directory, 'compute-migrations.sha256'),
     migrationManifest,
@@ -346,6 +389,7 @@ function createFixture(targetName = 'production') {
     policyBefore,
     policyAfter,
     computeEvidence,
+    remoteManifest,
     preflight,
   };
   persist(fixture);
@@ -393,6 +437,7 @@ test('accepts exact schema-6 evidence with Cloudflare nanosecond timestamps', ()
         deployed_image: `registry.cloudflare.com/${
           '1'.repeat(32)
         }/${fixture.target.computeWorker}@${DIGEST}`,
+        runtime_provenance: RUNTIME_PROVENANCE,
         compute_version_id: COMPUTE_ID,
         compute_version_tag: `compute-${SHA}`,
       });
@@ -444,6 +489,7 @@ test('never returns or derives rollback state from the historical OFF API', () =
       'workflow_run_id',
       'environment_digest',
       'deployed_image',
+      'runtime_provenance',
       'compute_version_id',
       'compute_version_tag',
     ]);
@@ -643,6 +689,38 @@ test('rejects hash, digest, image, binding, and policy tampering', () => {
         fixture.release.deployed_image = `registry.cloudflare.com/${
           '1'.repeat(32)
         }/galactic-compute@${PREVIOUS_DIGEST}`;
+      },
+    },
+    {
+      name: 'wrong remote manifest digest',
+      mutate(fixture) {
+        fixture.remoteManifest.Descriptor.digest = PREVIOUS_DIGEST;
+        writeJson(
+          fixture.directory,
+          'remote-manifest.json',
+          fixture.remoteManifest,
+        );
+      },
+    },
+    {
+      name: 'malformed remote runtime layer',
+      mutate(fixture) {
+        fixture.remoteManifest.SchemaV2Manifest.layers[0].digest =
+          'sha256:not-a-digest';
+        writeJson(
+          fixture.directory,
+          'remote-manifest.json',
+          fixture.remoteManifest,
+        );
+      },
+    },
+    {
+      name: 'malformed image build-input manifest',
+      mutate(fixture) {
+        writeFileSync(
+          join(fixture.directory, 'build-inputs.sha256'),
+          'not a canonical build input\n',
+        );
       },
     },
     {

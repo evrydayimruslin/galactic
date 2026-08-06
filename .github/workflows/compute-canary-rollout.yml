@@ -854,12 +854,15 @@ jobs:
           elif [ "$REQUESTED_STAGE" = "production_canary" ]; then
             jq -ne \
               --slurpfile current "$baseline" \
-              --slurpfile prior "$EVIDENCE_DIR/predecessor-final-state.json" '
-                ($current[0].environment_digest == $prior[0].environment_digest) and
+              --slurpfile prior "$EVIDENCE_DIR/predecessor-final-state.json" \
+              --slurpfile current_release "$EVIDENCE_DIR/compute-release-verification.json" \
+              --slurpfile prior_verification "$EVIDENCE_DIR/predecessor-verification.json" '
+                ($current_release[0].runtime_provenance ==
+                  $prior_verification[0].compute_release.runtime_provenance) and
                 ($current[0].api.code_etag == $prior[0].api.code_etag) and
                 ($current[0].compute.code_etag == $prior[0].compute.code_etag)
               ' </dev/null >/dev/null || {
-              echo "Production canary is not the staging-certified code/digest." >&2
+              echo "Production canary is not the staging-certified runtime and Worker code." >&2
               exit 1
             }
           fi
