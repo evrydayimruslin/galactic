@@ -15,6 +15,8 @@ const POSITIVE_INTEGER = /^[1-9][0-9]*$/u;
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const VERSION_TAG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+const BASE_IMAGE = /^docker\.io\/cloudflare\/sandbox:0\.12\.3-python@sha256:[0-9a-f]{64}$/u;
+const ZERO_DIGEST = `sha256:${'0'.repeat(64)}`;
 const UTC_TIMESTAMP =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/u;
 const WORKFLOW_PATH = '.github/workflows/compute-worker-refresh.yml';
@@ -75,6 +77,36 @@ function exactKeys(value, expected, label) {
     actual.some((key, index) => key !== wanted[index])
   ) {
     fail(`${label} has an unexpected shape`);
+  }
+  return row;
+}
+
+function validateRuntimeProvenance(value) {
+  const row = exactKeys(
+    value,
+    [
+      'base_image',
+      'build_inputs_sha256',
+      'layer_count',
+      'layer_manifest_sha256',
+      'schema_version',
+    ],
+    'source release runtime provenance',
+  );
+  if (
+    row.schema_version !== 1 ||
+    typeof row.base_image !== 'string' ||
+    !BASE_IMAGE.test(row.base_image) ||
+    typeof row.build_inputs_sha256 !== 'string' ||
+    !DIGEST.test(row.build_inputs_sha256) ||
+    row.build_inputs_sha256 === ZERO_DIGEST ||
+    typeof row.layer_manifest_sha256 !== 'string' ||
+    !DIGEST.test(row.layer_manifest_sha256) ||
+    row.layer_manifest_sha256 === ZERO_DIGEST ||
+    !Number.isSafeInteger(row.layer_count) ||
+    row.layer_count <= 0
+  ) {
+    fail('source release runtime provenance is malformed');
   }
   return row;
 }
@@ -256,6 +288,7 @@ function validateSourceRelease(value, target, sourceRunId) {
       'deployed_image',
       'environment_digest',
       'release_sha',
+      'runtime_provenance',
       'schema_version',
       'target',
       'verified',
@@ -264,6 +297,7 @@ function validateSourceRelease(value, target, sourceRunId) {
     'source-release-verification.json',
   );
   const contract = targetContract(target);
+  validateRuntimeProvenance(row.runtime_provenance);
   const digest = typeof row.environment_digest === 'string' &&
       DIGEST.test(row.environment_digest)
     ? row.environment_digest

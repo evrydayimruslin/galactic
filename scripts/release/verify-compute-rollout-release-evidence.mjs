@@ -15,6 +15,11 @@ const REVISION = /^(0|[1-9][0-9]*)$/u;
 const RELEASE_TAG = /^v[0-9A-Za-z][0-9A-Za-z._-]*$/u;
 const BASE_IMAGE = /^docker\.io\/cloudflare\/sandbox:0\.12\.3-python@sha256:[0-9a-f]{64}$/u;
 const MIGRATION_LINE = /^([0-9a-f]{64})\x20{2}(supabase\/migrations\/[0-9A-Za-z._-]+\.sql)$/u;
+const BUILD_INPUT_LINE = /^([0-9a-f]{64})\x20{2}([0-9A-Za-z._\/-]+)$/u;
+const IMAGE_LAYER_MEDIA_TYPES = new Set([
+  'application/vnd.docker.image.rootfs.diff.tar.gzip',
+  'application/vnd.oci.image.layer.v1.tar+gzip',
+]);
 const RETENTION_MIGRATION = 'supabase/migrations/20260720124000_compute_artifact_retention.sql';
 const UTC_TIMESTAMP =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/u;
@@ -107,6 +112,10 @@ function readJson(path, label) {
 
 function hashBytes(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
+}
+
+function prefixedHash(bytes) {
+  return `sha256:${hashBytes(bytes)}`;
 }
 
 function isCanonicalUtcTimestamp(value) {
@@ -863,6 +872,101 @@ function verifyImageEvidence({ evidenceDirectory, release, target }) {
     fail('deployed image path and environment digest do not match');
   }
 
+  const manifest = exactObject(
+    readJson(
+      resolve(evidenceDirectory, 'remote-manifest.json'),
+      'remote-manifest.json',
+    ),
+    'remote-manifest.json',
+  );
+  const imageManifest = manifest.OCIManifest ?? manifest.SchemaV2Manifest;
+  const descriptor = exactObject(manifest.Descriptor, 'remote manifest descriptor');
+  exactKeys(
+    imageManifest,
+    ['config', 'layers', 'mediaType', 'schemaVersion'],
+    'remote image manifest',
+  );
+  exactKeys(
+    imageManifest.config,
+    ['digest', 'mediaType', 'size'],
+    'remote image config descriptor',
+  );
+  if (
+    (manifest.OCIManifest === undefined) ===
+      (manifest.SchemaV2Manifest === undefined) ||
+    descriptor.digest !== release.environment_digest ||
+    descriptor.mediaType !== imageManifest.mediaType ||
+    descriptor.platform?.architecture !== 'amd64' ||
+    descriptor.platform?.os !== 'linux' ||
+    imageManifest.schemaVersion !== 2 ||
+    typeof imageManifest.config.digest !== 'string' ||
+    !SHA256.test(imageManifest.config.digest) ||
+    !Number.isSafeInteger(imageManifest.config.size) ||
+    imageManifest.config.size <= 0
+  ) {
+    fail('remote manifest does not bind the exact linux/amd64 release image');
+  }
+  const configDigest = `${imageManifest.config.digest}\n`;
+  if (
+    readBytes(
+      resolve(evidenceDirectory, 'remote-config-digest.txt'),
+      'remote-config-digest.txt',
+    ).toString('utf8') !== configDigest ||
+    readBytes(
+      resolve(evidenceDirectory, 'local-image-id.txt'),
+      'local-image-id.txt',
+    ).toString('utf8') !== configDigest
+  ) {
+    fail('remote manifest config does not match the exact local image');
+  }
+
+  if (!Array.isArray(imageManifest.layers) || imageManifest.layers.length === 0) {
+    fail('remote image manifest does not contain runtime layers');
+  }
+  const runtimeLayers = imageManifest.layers.map((layer, index) => {
+    exactKeys(layer, ['digest', 'mediaType', 'size'], `remote image layer ${index}`);
+    if (
+      typeof layer.digest !== 'string' ||
+      !SHA256.test(layer.digest) ||
+      !IMAGE_LAYER_MEDIA_TYPES.has(layer.mediaType) ||
+      !Number.isSafeInteger(layer.size) ||
+      layer.size < 0
+    ) {
+      fail(`remote image layer ${index} is malformed`);
+    }
+    return {
+      digest: layer.digest,
+      media_type: layer.mediaType,
+      size: layer.size,
+    };
+  });
+
+  const buildInputs = readBytes(
+    resolve(evidenceDirectory, 'build-inputs.sha256'),
+    'build-inputs.sha256',
+  );
+  const buildInputText = buildInputs.toString('utf8');
+  const buildInputLines = buildInputText.endsWith('\n')
+    ? buildInputText.slice(0, -1).split('\n')
+    : [];
+  const buildInputPaths = new Set();
+  if (buildInputLines.length === 0) {
+    fail('image build-input manifest is empty or noncanonical');
+  }
+  for (const line of buildInputLines) {
+    const match = line.match(BUILD_INPUT_LINE);
+    const inputPath = match?.[2];
+    if (
+      !match ||
+      inputPath.startsWith('/') ||
+      inputPath.split('/').includes('..') ||
+      buildInputPaths.has(inputPath)
+    ) {
+      fail('image build-input manifest is malformed or ambiguous');
+    }
+    buildInputPaths.add(inputPath);
+  }
+
   const container = exactObject(
     readJson(
       resolve(evidenceDirectory, 'container-readiness.json'),
@@ -905,6 +1009,16 @@ function verifyImageEvidence({ evidenceDirectory, release, target }) {
   ) {
     fail('container readiness does not prove the exact deployed image');
   }
+
+  return {
+    schema_version: 1,
+    base_image: release.base_image,
+    build_inputs_sha256: prefixedHash(buildInputs),
+    layer_manifest_sha256: prefixedHash(
+      Buffer.from(`${JSON.stringify(runtimeLayers)}\n`, 'utf8'),
+    ),
+    layer_count: runtimeLayers.length,
+  };
 }
 
 function verifyHistoricalOffState(release, target) {
@@ -1001,7 +1115,11 @@ export function verifyComputeRolloutReleaseEvidence({
     target,
     workflowRun,
   });
-  verifyImageEvidence({ evidenceDirectory, release, target });
+  const runtimeProvenance = verifyImageEvidence({
+    evidenceDirectory,
+    release,
+    target,
+  });
   verifyMigrationAndRetentionEvidence({
     evidenceDirectory,
     release,
@@ -1042,6 +1160,7 @@ export function verifyComputeRolloutReleaseEvidence({
     workflow_run_id: expectedRunId,
     environment_digest: release.environment_digest,
     deployed_image: release.deployed_image,
+    runtime_provenance: runtimeProvenance,
     compute_version_id: activeCompute.version_id,
     compute_version_tag: activeCompute.version_tag,
   };

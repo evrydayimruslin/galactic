@@ -16,6 +16,7 @@ const NONNEGATIVE_INTEGER = /^(0|[1-9][0-9]*)$/u;
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const VERSION_TAG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+const BASE_IMAGE = /^docker\.io\/cloudflare\/sandbox:0\.12\.3-python@sha256:[0-9a-f]{64}$/u;
 const ZERO_DIGEST = `sha256:${'0'.repeat(64)}`;
 const WORKFLOW_PATH = '.github/workflows/compute-canary-rollout.yml';
 const ROLLOUT_KIND = 'galactic_compute_canary_rollout';
@@ -100,6 +101,7 @@ const ROLLOUT_KEYS = [
   'verified',
 ];
 const VERIFICATION_KEYS = [
+  'compute_release',
   'dispatch',
   'final_state',
   'kind',
@@ -108,6 +110,13 @@ const VERIFICATION_KEYS = [
   'schema_version',
   'verified',
   'verified_at',
+];
+const RUNTIME_PROVENANCE_KEYS = [
+  'base_image',
+  'build_inputs_sha256',
+  'layer_count',
+  'layer_manifest_sha256',
+  'schema_version',
 ];
 const PREDECESSOR_KEYS = [
   'artifact_created_at',
@@ -291,6 +300,22 @@ function canonicalDigest(value, label) {
     fail(`${label} is not a nonzero immutable digest`);
   }
   return value;
+}
+
+function validateRuntimeProvenance(value, label) {
+  const row = exactKeys(value, RUNTIME_PROVENANCE_KEYS, label);
+  canonicalDigest(row.build_inputs_sha256, `${label} build-input digest`);
+  canonicalDigest(row.layer_manifest_sha256, `${label} layer-manifest digest`);
+  if (
+    row.schema_version !== 1 ||
+    typeof row.base_image !== 'string' ||
+    !BASE_IMAGE.test(row.base_image) ||
+    !Number.isSafeInteger(row.layer_count) ||
+    row.layer_count <= 0
+  ) {
+    fail(`${label} is malformed`);
+  }
+  return row;
 }
 
 function stageContract(stage, target) {
@@ -670,6 +695,7 @@ function validateComputeReleaseVerification({ verification, target, finalState }
       'deployed_image',
       'environment_digest',
       'release_sha',
+      'runtime_provenance',
       'schema_version',
       'target',
       'verified',
@@ -680,6 +706,10 @@ function validateComputeReleaseVerification({ verification, target, finalState }
   const digest = canonicalDigest(
     row.environment_digest,
     'compute release environment digest',
+  );
+  validateRuntimeProvenance(
+    row.runtime_provenance,
+    'compute release runtime provenance',
   );
   canonicalUuid(row.compute_version_id, 'compute release version id');
   const imageMatch = typeof row.deployed_image === 'string'
@@ -999,11 +1029,17 @@ function validateVerificationOutput(value, label) {
     dispatch,
     `${label} final state`,
   );
+  const computeRelease = validateComputeReleaseVerification({
+    verification: row.compute_release,
+    target: predecessor.target,
+    finalState,
+  });
   return {
     row,
     predecessor,
     dispatch,
     finalState,
+    computeRelease,
     verifiedAt,
   };
 }
@@ -1406,6 +1442,7 @@ export function verifyComputeRolloutPredecessor({
       workflow_completed_at: workflowRun.updated_at,
     },
     dispatch,
+    compute_release: computeReleaseVerification,
     final_state: finalState,
   };
 }

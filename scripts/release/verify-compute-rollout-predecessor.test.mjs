@@ -22,6 +22,14 @@ const ARTIFACT_ID = '41000000000';
 const REPOSITORY_ID = '51000000000';
 const REPOSITORY = 'evrydayimruslin/galactic';
 const DIGEST = `sha256:${'c'.repeat(64)}`;
+const OTHER_DIGEST = `sha256:${'4'.repeat(64)}`;
+const RUNTIME_PROVENANCE = {
+  schema_version: 1,
+  base_image: `docker.io/cloudflare/sandbox:0.12.3-python@sha256:${'5'.repeat(64)}`,
+  build_inputs_sha256: `sha256:${'6'.repeat(64)}`,
+  layer_manifest_sha256: `sha256:${'7'.repeat(64)}`,
+  layer_count: 45,
+};
 const OWNER_ID = '11111111-1111-4111-8111-111111111111';
 const AGENT_ID = '22222222-2222-4222-8222-222222222222';
 const ALLOWLIST_ENTRY = `${OWNER_ID}/${AGENT_ID}`;
@@ -187,6 +195,11 @@ function predecessorVerification(stage, target, {
     ? '2020-01-01T08:00:00.000Z'
     : '2020-01-01T10:00:00.000Z';
   const soakEligibleAt = stage === 'production_canary' ? '2020-01-02T08:00:00.000Z' : null;
+  const finalState = rolloutState({
+    stage,
+    target: priorTarget,
+    stateDispatch: priorDispatch,
+  });
   return {
     schema_version: 1,
     kind: 'galactic_compute_rollout_predecessor_verification',
@@ -210,11 +223,8 @@ function predecessorVerification(stage, target, {
         : '2020-01-01T10:02:00.000Z',
     },
     dispatch: priorDispatch,
-    final_state: rolloutState({
-      stage,
-      target: priorTarget,
-      stateDispatch: priorDispatch,
-    }),
+    compute_release: computeReleaseVerification(priorTarget, finalState),
+    final_state: finalState,
   };
 }
 
@@ -324,6 +334,7 @@ function computeReleaseVerification(target, finalState) {
     workflow_run_id: '29000000000',
     environment_digest: DIGEST,
     deployed_image: `registry.cloudflare.com/${'1'.repeat(32)}/${names.computeWorker}@${DIGEST}`,
+    runtime_provenance: RUNTIME_PROVENANCE,
     compute_version_id: finalState.compute.version_id,
     compute_version_tag: finalState.compute.version_tag,
   };
@@ -547,10 +558,40 @@ test('accepts the complete stage lineage and both revert targets', () => {
       assert.equal(result.predecessor.target, target);
       assert.equal(result.predecessor.artifact_id, ARTIFACT_ID);
       assert.equal(result.dispatch.workflow_run_id, RUN_ID);
+      assert.deepEqual(
+        result.compute_release.runtime_provenance,
+        RUNTIME_PROVENANCE,
+      );
       assert.deepEqual(result.final_state, fixture.finalState);
     } finally {
       dispose(fixture);
     }
+  }
+});
+
+test('accepts target-specific image digests when runtime provenance is identical', () => {
+  const fixture = createFixture('production_canary');
+  try {
+    fixture.prior.final_state.environment_digest = OTHER_DIGEST;
+    fixture.prior.compute_release.environment_digest = OTHER_DIGEST;
+    fixture.prior.compute_release.deployed_image =
+      `registry.cloudflare.com/${'1'.repeat(32)}/galactic-compute-staging@${OTHER_DIGEST}`;
+    rebind(
+      fixture,
+      'predecessor',
+      'predecessor-verification.json',
+      fixture.prior,
+    );
+    persist(fixture);
+
+    const result = verify(fixture);
+    assert.equal(result.final_state.environment_digest, DIGEST);
+    assert.equal(
+      result.compute_release.runtime_provenance.layer_manifest_sha256,
+      RUNTIME_PROVENANCE.layer_manifest_sha256,
+    );
+  } finally {
+    dispose(fixture);
   }
 });
 
@@ -736,6 +777,7 @@ test('CLI emits the sanitized predecessor identity and final state', () => {
       'minimum_age_seconds',
       'predecessor',
       'dispatch',
+      'compute_release',
       'final_state',
     ]);
     assert.equal(output.predecessor.artifact_name.includes(RUN_ID), true);

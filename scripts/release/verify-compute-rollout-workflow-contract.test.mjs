@@ -134,6 +134,29 @@ test("certification and final read fences stay pinned to the promoted candidate"
   }
 });
 
+test("production canary compares runtime provenance across target-specific image manifests", () => {
+  const [step] = namedStepBlocks(workflow).filter((candidate) =>
+    candidate.includes("name: Inspect and bind the exact live API/Compute pair")
+  );
+  assert.ok(step, "rollback-baseline step is missing");
+  assert.match(
+    step,
+    /--slurpfile current_release "\$EVIDENCE_DIR\/compute-release-verification\.json"/u,
+  );
+  assert.match(
+    step,
+    /--slurpfile prior_verification "\$EVIDENCE_DIR\/predecessor-verification\.json"/u,
+  );
+  assert.match(
+    step,
+    /\$current_release\[0\]\.runtime_provenance ==\s*\$prior_verification\[0\]\.compute_release\.runtime_provenance/u,
+  );
+  assert.doesNotMatch(
+    step,
+    /\$current\[0\]\.environment_digest == \$prior\[0\]\.environment_digest/u,
+  );
+});
+
 test("every OFF transition waits only for the exact enabled predecessor", () => {
   for (const name of [
     "Verify the emergency-stop latch after promotion",
