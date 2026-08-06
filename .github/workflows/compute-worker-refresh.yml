@@ -241,6 +241,7 @@ jobs:
             verify "$predecessor_artifact_dir" "$REQUESTED_TARGET" \
             "$predecessor_run_json" "$PREDECESSOR_WORKER_REFRESH_RUN_ID_INPUT" \
             "$COMPUTE_RELEASE_RUN_ID_INPUT" \
+            "$EVIDENCE_DIR/source-release-verification.json" \
             > "$verification"
           jq -e \
             --arg target "$REQUESTED_TARGET" \

@@ -25,6 +25,21 @@ const REQUEST_KIND = 'galactic_compute_worker_refresh_request';
 const FINGERPRINT_KIND = 'galactic_compute_worker_version_fingerprint';
 const CODE_UPDATE = 'code_update';
 const SOURCE_ATTESTATION = 'source_attestation';
+const SOURCE_RELEASE_KEYS = Object.freeze([
+  'compute_version_id',
+  'compute_version_tag',
+  'deployed_image',
+  'environment_digest',
+  'release_sha',
+  'runtime_provenance',
+  'schema_version',
+  'target',
+  'verified',
+  'workflow_run_id',
+]);
+const LEGACY_SOURCE_RELEASE_KEYS = Object.freeze(
+  SOURCE_RELEASE_KEYS.filter((key) => key !== 'runtime_provenance'),
+);
 
 const TARGETS = Object.freeze({
   staging: Object.freeze({
@@ -279,25 +294,28 @@ function validateRequest(value, target, sourceRunId) {
   };
 }
 
-function validateSourceRelease(value, target, sourceRunId) {
+function validateSourceRelease(
+  value,
+  target,
+  sourceRunId,
+  authoritativeSourceRelease = null,
+) {
+  const candidate = record(value, 'source-release-verification.json');
+  const hasRuntimeProvenance = Object.hasOwn(
+    candidate,
+    'runtime_provenance',
+  );
   const row = exactKeys(
-    value,
-    [
-      'compute_version_id',
-      'compute_version_tag',
-      'deployed_image',
-      'environment_digest',
-      'release_sha',
-      'runtime_provenance',
-      'schema_version',
-      'target',
-      'verified',
-      'workflow_run_id',
-    ],
+    candidate,
+    hasRuntimeProvenance
+      ? SOURCE_RELEASE_KEYS
+      : LEGACY_SOURCE_RELEASE_KEYS,
     'source-release-verification.json',
   );
   const contract = targetContract(target);
-  validateRuntimeProvenance(row.runtime_provenance);
+  if (hasRuntimeProvenance) {
+    validateRuntimeProvenance(row.runtime_provenance);
+  }
   const digest = typeof row.environment_digest === 'string' &&
       DIGEST.test(row.environment_digest)
     ? row.environment_digest
@@ -318,6 +336,28 @@ function validateSourceRelease(value, target, sourceRunId) {
     imageMatch[3] !== digest
   ) {
     fail('source release does not certify the selected Compute image');
+  }
+  if (!hasRuntimeProvenance && authoritativeSourceRelease === null) {
+    fail(
+      'legacy source release requires an authoritative runtime-provenance record',
+    );
+  }
+  if (authoritativeSourceRelease !== null) {
+    const authoritative = validateSourceRelease(
+      authoritativeSourceRelease,
+      target,
+      sourceRunId,
+    );
+    const comparableKeys = hasRuntimeProvenance
+      ? SOURCE_RELEASE_KEYS
+      : LEGACY_SOURCE_RELEASE_KEYS;
+    if (comparableKeys.some((key) =>
+      JSON.stringify(row[key]) !== JSON.stringify(authoritative[key])
+    )) {
+      fail(
+        'source release does not match the authoritative runtime-provenance record',
+      );
+    }
   }
   return row;
 }
@@ -540,6 +580,7 @@ export function buildComputeWorkerRefreshEvidence({
   target,
   sourceComputeReleaseRunId,
   generatedAt,
+  authoritativeSourceRelease = null,
 }) {
   const directory = resolve(evidenceDirectory);
   targetContract(target);
@@ -558,6 +599,7 @@ export function buildComputeWorkerRefreshEvidence({
     ),
     target,
     sourceComputeReleaseRunId,
+    authoritativeSourceRelease,
   );
   const predecessor = request.schema_version >= 2
     ? validatePredecessorRefresh(
@@ -782,6 +824,7 @@ export function verifyComputeWorkerRefreshEvidence({
   workflowRunPath,
   expectedRunId,
   expectedSourceComputeReleaseRunId,
+  authoritativeSourceReleasePath = null,
 }) {
   const directory = resolve(evidenceDirectory);
   positiveRunId(expectedRunId, 'expected refresh workflow run ID');
@@ -793,6 +836,12 @@ export function verifyComputeWorkerRefreshEvidence({
     readJson(resolve(directory, 'refresh.json'), 'refresh.json'),
     'refresh.json',
   );
+  const authoritativeSourceRelease = authoritativeSourceReleasePath === null
+    ? null
+    : readJson(
+      authoritativeSourceReleasePath,
+      'authoritative source-release verification JSON',
+    );
   if (![1, 2, 3].includes(refreshInput.schema_version)) {
     fail('refresh.json schema version is unsupported');
   }
@@ -829,6 +878,7 @@ export function verifyComputeWorkerRefreshEvidence({
     target,
     sourceComputeReleaseRunId: expectedSourceComputeReleaseRunId,
     generatedAt: refresh.generated_at,
+    authoritativeSourceRelease,
   });
   if (JSON.stringify(refresh) !== JSON.stringify(rebuilt)) {
     fail('refresh.json does not match its bound evidence files');
@@ -896,13 +946,14 @@ function main(argv) {
     }));
     return;
   }
-  if (argv[0] === 'verify' && argv.length === 6) {
+  if (argv[0] === 'verify' && [6, 7].includes(argv.length)) {
     print(verifyComputeWorkerRefreshEvidence({
       evidenceDirectory: argv[1],
       target: argv[2],
       workflowRunPath: argv[3],
       expectedRunId: argv[4],
       expectedSourceComputeReleaseRunId: argv[5],
+      authoritativeSourceReleasePath: argv[6] ?? null,
     }));
     return;
   }
@@ -910,7 +961,7 @@ function main(argv) {
     'usage: fingerprint <target> <version-json> | build <evidence-dir> ' +
       '<target> <source-release-run-id> <generated-at> | verify ' +
       '<evidence-dir> <target> <workflow-run-json> <refresh-run-id> ' +
-      '<source-release-run-id>',
+      '<source-release-run-id> [authoritative-source-release-json]',
   );
 }
 
